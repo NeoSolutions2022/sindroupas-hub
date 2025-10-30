@@ -6,15 +6,26 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import logo from "@/assets/logo.jpeg";
 
+const MOCK_USER = {
+  email: "sindroupas@email.com",
+  password: "senha123",
+} as const;
+
 const Login = () => {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    // Mock login - redirect to dashboard
-    navigate("/dashboard");
+    if (email === MOCK_USER.email && password === MOCK_USER.password) {
+      setError("");
+      navigate("/dashboard");
+      return;
+    }
+
+    setError("Credenciais inválidas. Verifique seu e-mail e senha.");
   };
 
   return (
@@ -54,6 +65,7 @@ const Login = () => {
             <Button type="submit" className="w-full">
               Entrar
             </Button>
+            {error && <p className="text-sm text-destructive text-center">{error}</p>}
             <div className="text-center">
               <a href="#" className="text-sm text-muted-foreground hover:text-accent">
                 Esqueci minha senha
