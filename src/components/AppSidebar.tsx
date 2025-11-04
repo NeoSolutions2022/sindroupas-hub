@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, MessageSquare, UserCog, DollarSign } from "lucide-react";
+import { LayoutDashboard, UserCog, Users, Handshake, Package, Building2, DollarSign, MessageSquare } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import {
   Sidebar,
@@ -13,10 +13,13 @@ import {
 
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Cadastros", url: "/dashboard/cadastros", icon: Users },
-  { title: "Comunicação", url: "/dashboard/comunicacao", icon: MessageSquare },
   { title: "CRM", url: "/dashboard/crm", icon: UserCog },
+  { title: "Associados", url: "/dashboard/associados", icon: Users },
+  { title: "Parceiros", url: "/dashboard/parceiros", icon: Handshake },
+  { title: "Fornecedores", url: "/dashboard/fornecedores", icon: Package },
+  { title: "Mantenedores", url: "/dashboard/mantenedores", icon: Building2 },
   { title: "Financeiro", url: "/dashboard/financeiro", icon: DollarSign },
+  { title: "Comunicação", url: "/dashboard/comunicacao", icon: MessageSquare },
 ];
 
 export function AppSidebar() {

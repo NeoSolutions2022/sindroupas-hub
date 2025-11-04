@@ -13,6 +13,9 @@ import CRM from "./pages/CRM";
 import CRMDetalhe from "./pages/CRMDetalhe";
 import Financeiro from "./pages/Financeiro";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
+import Parceiros from "./pages/Parceiros";
+import Fornecedores from "./pages/Fornecedores";
+import Mantenedores from "./pages/Mantenedores";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -27,13 +30,16 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/login" element={<Login />} />
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/dashboard/cadastros" element={<Cadastros />} />
-          <Route path="/dashboard/cadastros/:id" element={<CadastroDetalhe />} />
-          <Route path="/dashboard/comunicacao" element={<Comunicacao />} />
           <Route path="/dashboard/crm" element={<CRM />} />
           <Route path="/dashboard/crm/:id" element={<CRMDetalhe />} />
+          <Route path="/dashboard/associados" element={<Cadastros />} />
+          <Route path="/dashboard/associados/:id" element={<CadastroDetalhe />} />
+          <Route path="/dashboard/parceiros" element={<Parceiros />} />
+          <Route path="/dashboard/fornecedores" element={<Fornecedores />} />
+          <Route path="/dashboard/mantenedores" element={<Mantenedores />} />
           <Route path="/dashboard/financeiro" element={<Financeiro />} />
           <Route path="/dashboard/financeiro/:id" element={<FinanceiroDetalhe />} />
+          <Route path="/dashboard/comunicacao" element={<Comunicacao />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
