@@ -6,8 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Cadastros from "./pages/Cadastros";
-import CadastroDetalhe from "./pages/CadastroDetalhe";
+import Empresas from "./pages/Empresas";
 import Comunicacao from "./pages/Comunicacao";
 import CRM from "./pages/CRM";
 import CRMDetalhe from "./pages/CRMDetalhe";
@@ -32,8 +31,7 @@ const App = () => (
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/dashboard/crm" element={<CRM />} />
           <Route path="/dashboard/crm/:id" element={<CRMDetalhe />} />
-          <Route path="/dashboard/associados" element={<Cadastros />} />
-          <Route path="/dashboard/associados/:id" element={<CadastroDetalhe />} />
+          <Route path="/dashboard/empresas" element={<Empresas />} />
           <Route path="/dashboard/parceiros" element={<Parceiros />} />
           <Route path="/dashboard/fornecedores" element={<Fornecedores />} />
           <Route path="/dashboard/mantenedores" element={<Mantenedores />} />

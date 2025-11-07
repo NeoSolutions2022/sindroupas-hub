@@ -14,7 +14,7 @@ import {
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "CRM", url: "/dashboard/crm", icon: UserCog },
-  { title: "Associados", url: "/dashboard/associados", icon: Users },
+  { title: "Empresas", url: "/dashboard/empresas", icon: Users },
   { title: "Parceiros", url: "/dashboard/parceiros", icon: Handshake },
   { title: "Fornecedores", url: "/dashboard/fornecedores", icon: Package },
   { title: "Mantenedores", url: "/dashboard/mantenedores", icon: Building2 },
