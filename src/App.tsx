@@ -12,9 +12,7 @@ import CRM from "./pages/CRM";
 import CRMDetalhe from "./pages/CRMDetalhe";
 import Financeiro from "./pages/Financeiro";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
-import Parceiros from "./pages/Parceiros";
-import Fornecedores from "./pages/Fornecedores";
-import Mantenedores from "./pages/Mantenedores";
+import Entidades from "./pages/Entidades";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,9 +30,7 @@ const App = () => (
           <Route path="/dashboard/crm" element={<CRM />} />
           <Route path="/dashboard/crm/:id" element={<CRMDetalhe />} />
           <Route path="/dashboard/empresas" element={<Empresas />} />
-          <Route path="/dashboard/parceiros" element={<Parceiros />} />
-          <Route path="/dashboard/fornecedores" element={<Fornecedores />} />
-          <Route path="/dashboard/mantenedores" element={<Mantenedores />} />
+          <Route path="/dashboard/entidades" element={<Entidades />} />
           <Route path="/dashboard/financeiro" element={<Financeiro />} />
           <Route path="/dashboard/financeiro/:id" element={<FinanceiroDetalhe />} />
           <Route path="/dashboard/comunicacao" element={<Comunicacao />} />
