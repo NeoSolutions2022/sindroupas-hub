@@ -14,7 +14,10 @@ import {
 const items = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "CRM", url: "/dashboard/crm", icon: UserCog },
-  { title: "Entidades", url: "/dashboard/entidades", icon: Building2 },
+  { title: "Empresas", url: "/dashboard/empresas", icon: Users },
+  { title: "Parceiros", url: "/dashboard/parceiros", icon: Handshake },
+  { title: "Fornecedores", url: "/dashboard/fornecedores", icon: Package },
+  { title: "Mantenedores", url: "/dashboard/mantenedores", icon: Building2 },
   { title: "Financeiro", url: "/dashboard/financeiro", icon: DollarSign },
   { title: "Comunicação", url: "/dashboard/comunicacao", icon: MessageSquare },
 ];
