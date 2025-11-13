@@ -156,8 +156,8 @@ export default function Relacionamentos() {
       r.cnpj?.includes(searchTerm) ||
       false;
     const matchTipo = tipoFilter.length === 0 || tipoFilter.includes(r.tipo);
-    const matchCategoria = !categoriaFilter || r.categoria === categoriaFilter;
-    const matchStatus = !statusFilter || r.status === statusFilter;
+    const matchCategoria = !categoriaFilter || categoriaFilter === "all" || r.categoria === categoriaFilter;
+    const matchStatus = !statusFilter || statusFilter === "all" || r.status === statusFilter;
 
     return matchSearch && matchTipo && matchCategoria && matchStatus;
   });
@@ -299,7 +299,7 @@ export default function Relacionamentos() {
                           <SelectValue placeholder="Todas" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Todas</SelectItem>
+                          <SelectItem value="all">Todas</SelectItem>
                           {[...categoriasParceiro, ...categoriasFornecedor].map((cat) => (
                             <SelectItem key={cat} value={cat}>
                               {cat}
@@ -316,7 +316,7 @@ export default function Relacionamentos() {
                           <SelectValue placeholder="Todos" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Todos</SelectItem>
+                          <SelectItem value="all">Todos</SelectItem>
                           <SelectItem value="Ativo">Ativo</SelectItem>
                           <SelectItem value="Em avaliação">Em avaliação</SelectItem>
                           <SelectItem value="Em análise">Em análise</SelectItem>
