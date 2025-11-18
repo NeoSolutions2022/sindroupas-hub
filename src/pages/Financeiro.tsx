@@ -41,8 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { DollarSign, TrendingDown, FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
+import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -60,27 +59,6 @@ const mockEmpresas = [
   { id: "emp3", nome: "Confecções Aurora", cnpj: "11.222.333/0001-44" },
   { id: "emp4", nome: "Costura Viva", cnpj: "55.666.777/0001-88" },
   { id: "emp5", nome: "Têxtil Nordeste", cnpj: "99.888.777/0001-66" },
-];
-
-const mockFinanceiro = {
-  receitas: [
-    { mes: "Janeiro", valor: 2100 },
-    { mes: "Fevereiro", valor: 2800 },
-    { mes: "Março", valor: 3200 },
-  ],
-  inadimplencia: 12,
-  boletos: [
-    { id: 1, empresa: "Estilo Nordeste", valor: 450, vencimento: "10/03/2025", status: "Pago" },
-    { id: 2, empresa: "Costura Viva", valor: 450, vencimento: "15/03/2025", status: "Atrasado" },
-    { id: 3, empresa: "Confecções Aurora", valor: 450, vencimento: "20/03/2025", status: "Pago" },
-    { id: 4, empresa: "ModaSul Ltda", valor: 450, vencimento: "25/03/2025", status: "Atrasado" },
-    { id: 5, empresa: "Têxtil Nordeste", valor: 450, vencimento: "30/03/2025", status: "Pago" },
-  ],
-};
-
-const dadosInadimplencia = [
-  { name: "Em dia", value: 88, color: "hsl(var(--accent))" },
-  { name: "Inadimplentes", value: 12, color: "hsl(var(--destructive))" },
 ];
 
 // Tipos
@@ -223,8 +201,6 @@ const Financeiro = () => {
         return <Badge variant="secondary">{situacao}</Badge>;
     }
   };
-
-  const totalReceita = mockFinanceiro.receitas.reduce((acc, curr) => acc + curr.valor, 0);
 
   // Funções para Faixas
   const handleOpenFaixaDialog = (faixa?: Faixa) => {
@@ -607,86 +583,12 @@ const Financeiro = () => {
               </div>
             </div>
 
-            <Tabs defaultValue="visao-geral" className="w-full">
-              <TabsList className="grid w-full grid-cols-2 lg:grid-cols-4 mb-6">
-                <TabsTrigger value="visao-geral">Visão Geral</TabsTrigger>
+            <Tabs defaultValue="boletos" className="w-full">
+              <TabsList className="grid w-full grid-cols-2 lg:grid-cols-3 mb-6">
                 <TabsTrigger value="boletos">Controle de Boletos</TabsTrigger>
                 <TabsTrigger value="faixas">Faixas</TabsTrigger>
                 <TabsTrigger value="contribuicao">Contribuição Assistencial</TabsTrigger>
               </TabsList>
-
-              <TabsContent value="visao-geral" className="space-y-6">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Card>
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-sm font-medium">Receita Total (Trimestre)</CardTitle>
-                      <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">R$ {totalReceita.toLocaleString("pt-BR")}</div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-sm font-medium">Taxa de Inadimplência</CardTitle>
-                      <TrendingDown className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold text-destructive">
-                        {mockFinanceiro.inadimplencia}%
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="grid gap-6 md:grid-cols-2">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Receita Mensal</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={mockFinanceiro.receitas}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="mes" />
-                          <YAxis />
-                          <Tooltip />
-                          <Bar dataKey="valor" fill="hsl(var(--primary))" />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Inadimplência</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <PieChart>
-                          <Pie
-                            data={dadosInadimplencia}
-                            cx="50%"
-                            cy="50%"
-                            labelLine={false}
-                            label={({ name, value }) => `${name}: ${value}%`}
-                            outerRadius={80}
-                            fill="hsl(var(--accent))"
-                            dataKey="value"
-                          >
-                            {dadosInadimplencia.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                          <Legend />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
 
               <TabsContent value="boletos">
                 <Card>
