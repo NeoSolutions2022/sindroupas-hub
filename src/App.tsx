@@ -11,6 +11,7 @@ import Comunicacao from "./pages/Comunicacao";
 import CRM from "./pages/CRM";
 import CRMDetalhe from "./pages/CRMDetalhe";
 import Financeiro from "./pages/Financeiro";
+import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
 import Relacionamentos from "./pages/Relacionamentos";
 import NotFound from "./pages/NotFound";
@@ -32,6 +33,7 @@ const App = () => (
           <Route path="/dashboard/empresas" element={<Empresas />} />
           <Route path="/dashboard/relacionamentos" element={<Relacionamentos />} />
           <Route path="/dashboard/financeiro" element={<Financeiro />} />
+          <Route path="/dashboard/financeiro/contribuicao" element={<FinanceiroContribuicao />} />
           <Route path="/dashboard/financeiro/:id" element={<FinanceiroDetalhe />} />
           <Route path="/dashboard/comunicacao" element={<Comunicacao />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
