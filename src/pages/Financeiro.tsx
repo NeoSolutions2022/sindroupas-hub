@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -41,12 +41,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { DollarSign, TrendingDown, FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
+import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Checkbox } from "@/components/ui/checkbox";
+import {
+  BoletoRegistro,
+  HistoricoContribuicao,
+  getFinanceiroData,
+  saveFinanceiroData,
+} from "@/lib/financeiro-data";
 
 // Mock de empresas para autocomplete
 const mockEmpresas = [
@@ -55,57 +59,6 @@ const mockEmpresas = [
   { id: "emp3", nome: "Confecções Aurora", cnpj: "11.222.333/0001-44" },
   { id: "emp4", nome: "Costura Viva", cnpj: "55.666.777/0001-88" },
   { id: "emp5", nome: "Têxtil Nordeste", cnpj: "99.888.777/0001-66" },
-];
-
-const mockFinanceiro = {
-  receitas: [
-    { mes: "Janeiro", valor: 2100 },
-    { mes: "Fevereiro", valor: 2800 },
-    { mes: "Março", valor: 3200 },
-  ],
-  inadimplencia: 12,
-  boletos: [
-    { id: 1, empresa: "Estilo Nordeste", valor: 450, vencimento: "10/03/2025", status: "Pago" },
-    { id: 2, empresa: "Costura Viva", valor: 450, vencimento: "15/03/2025", status: "Atrasado" },
-    { id: 3, empresa: "Confecções Aurora", valor: 450, vencimento: "20/03/2025", status: "Pago" },
-    { id: 4, empresa: "ModaSul Ltda", valor: 450, vencimento: "25/03/2025", status: "Atrasado" },
-    { id: 5, empresa: "Têxtil Nordeste", valor: 450, vencimento: "30/03/2025", status: "Pago" },
-  ],
-};
-
-const mockContribuicoes = [
-  {
-    id: 1,
-    data: "2025-11-05",
-    empresa: "Estilo Nordeste Ltda",
-    percentual: 1.5,
-    baseCalculo: 20000,
-    valor: 300,
-    situacao: "Paga"
-  },
-  {
-    id: 2,
-    data: "2025-10-10",
-    empresa: "ModaSul Indústria e Comércio S.A.",
-    percentual: 1.0,
-    baseCalculo: 15000,
-    valor: 150,
-    situacao: "Emitida"
-  },
-  {
-    id: 3,
-    data: "2025-10-05",
-    empresa: "Confecções Aurora",
-    percentual: 2.0,
-    baseCalculo: 12000,
-    valor: 240,
-    situacao: "Pendente"
-  }
-];
-
-const dadosInadimplencia = [
-  { name: "Em dia", value: 88, color: "hsl(var(--accent))" },
-  { name: "Inadimplentes", value: 12, color: "hsl(var(--destructive))" },
 ];
 
 // Tipos
@@ -126,18 +79,30 @@ interface BoletoForm {
   faixaId: string;
   unificarCompetencias: string;
   mensagemPersonalizada: string;
+  anoContribuicao: string;
+  periodicidade: string;
+  parcelas: string;
+  baseCalculo: string;
+  percentual: string;
+  descontos: string;
+  valorCalculado: number;
+  pesquisaContribuicaoFeita: boolean;
 }
 
 const Financeiro = () => {
   const [mesFilter, setMesFilter] = useState("Todos");
-  const [baseCalculo, setBaseCalculo] = useState("");
-  const [percentual, setPercentual] = useState("");
-  const [descontos, setDescontos] = useState("");
-  const [valorCalculado, setValorCalculado] = useState(0);
-  const [filterPeriodo, setFilterPeriodo] = useState("Todos");
-  const [filterSituacao, setFilterSituacao] = useState("Todas");
   const navigate = useNavigate();
   const { toast } = useToast();
+  const initialData = useMemo(() => getFinanceiroData(), []);
+
+  const [boletos, setBoletos] = useState<BoletoRegistro[]>(initialData.boletos);
+  const [historicoContribuicao, setHistoricoContribuicao] = useState<HistoricoContribuicao[]>(
+    initialData.historico,
+  );
+
+  useEffect(() => {
+    saveFinanceiroData({ boletos, historico: historicoContribuicao });
+  }, [boletos, historicoContribuicao]);
 
   // Estado para Faixas
   const [faixas, setFaixas] = useState<Faixa[]>([
@@ -162,22 +127,46 @@ const Financeiro = () => {
     faixaId: "",
     unificarCompetencias: "Não",
     mensagemPersonalizada: "",
+    anoContribuicao: "",
+    periodicidade: "",
+    parcelas: "",
+    baseCalculo: "",
+    percentual: "",
+    descontos: "",
+    valorCalculado: 0,
+    pesquisaContribuicaoFeita: false,
   });
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
-  const [boletos, setBoletos] = useState(mockFinanceiro.boletos);
+  const [contribuicaoPreview, setContribuicaoPreview] = useState("");
 
-  const filteredBoletos = mockFinanceiro.boletos.filter((boleto) => {
-    if (mesFilter === "Todos") return true;
-    return boleto.vencimento.includes(`/${mesFilter}/`);
-  });
+  const filteredBoletos = useMemo(() => {
+    return boletos.filter((boleto) => {
+      if (mesFilter === "Todos") return true;
+      return boleto.vencimento.includes(`/${mesFilter}/`);
+    });
+  }, [boletos, mesFilter]);
 
-  const filteredContribuicoes = mockContribuicoes.filter((contrib) => {
-    const matchesPeriodo = filterPeriodo === "Todos" || contrib.data.includes(filterPeriodo);
-    const matchesSituacao = filterSituacao === "Todas" || contrib.situacao === filterSituacao;
-    return matchesPeriodo && matchesSituacao;
-  });
+  const ultimasContribuicoes = useMemo(() => {
+    return [...historicoContribuicao].slice(-5).reverse();
+  }, [historicoContribuicao]);
+
+  const canProceed = useMemo(() => {
+    if (wizardStep === 1) {
+      return !!(boletoForm.tipo && boletoForm.empresaId);
+    }
+
+    if (wizardStep === 2) {
+      if (boletoForm.tipo === "mensalidade") {
+        return previaBoleto !== null;
+      }
+
+      return boletoForm.pesquisaContribuicaoFeita && boletoForm.valorCalculado > 0;
+    }
+
+    return true;
+  }, [boletoForm, previaBoleto, wizardStep]);
 
   const handleExport = (formato: "PDF" | "Excel" | "CSV") => {
     toast({
@@ -186,39 +175,18 @@ const Financeiro = () => {
     });
   };
 
-  const handleCalcular = () => {
-    const base = parseFloat(baseCalculo) || 0;
-    const perc = parseFloat(percentual) || 0;
-    const desc = parseFloat(descontos) || 0;
-    const resultado = (base * perc / 100) - desc;
-    setValorCalculado(resultado > 0 ? resultado : 0);
-  };
-
-  const handleGerarContribuicao = () => {
-    if (valorCalculado > 0) {
-      toast({
-        title: "Contribuição gerada",
-        description: "Contribuição salva no histórico com sucesso.",
-      });
-      setBaseCalculo("");
-      setPercentual("");
-      setDescontos("");
-      setValorCalculado(0);
-    } else {
-      toast({
-        title: "Erro",
-        description: "Calcule o valor antes de gerar a contribuição.",
-        variant: "destructive"
-      });
-    }
-  };
-
   const getStatusBadge = (status: string) => {
-    return status === "Pago" ? (
-      <Badge variant="default">Pago</Badge>
-    ) : (
-      <Badge variant="destructive">Atrasado</Badge>
-    );
+    switch (status) {
+      case "Pago":
+        return <Badge variant="default">Pago</Badge>;
+      case "Atrasado":
+        return <Badge variant="destructive">Atrasado</Badge>;
+      case "Emitida":
+      case "Pendente":
+        return <Badge className="bg-blue-100 text-blue-800">{status}</Badge>;
+      default:
+        return <Badge variant="secondary">{status}</Badge>;
+    }
   };
 
   const getSituacaoBadge = (situacao: string) => {
@@ -233,8 +201,6 @@ const Financeiro = () => {
         return <Badge variant="secondary">{situacao}</Badge>;
     }
   };
-
-  const totalReceita = mockFinanceiro.receitas.reduce((acc, curr) => acc + curr.valor, 0);
 
   // Funções para Faixas
   const handleOpenFaixaDialog = (faixa?: Faixa) => {
@@ -339,9 +305,18 @@ const Financeiro = () => {
       faixaId: "",
       unificarCompetencias: "Não",
       mensagemPersonalizada: "",
+      anoContribuicao: "",
+      periodicidade: "",
+      parcelas: "",
+      baseCalculo: "",
+      percentual: "",
+      descontos: "",
+      valorCalculado: 0,
+      pesquisaContribuicaoFeita: false,
     });
     setEmpresaSearch("");
     setPreviaBoleto(null);
+    setContribuicaoPreview("");
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
@@ -360,24 +335,75 @@ const Financeiro = () => {
       emp.cnpj.includes(empresaSearch)
   );
 
+  const parseCurrencyInput = (value: string) => {
+    if (!value) return 0;
+    return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
+  };
+
+  const calcularValorContribuicao = () => {
+    const base = parseCurrencyInput(boletoForm.baseCalculo);
+    const perc = parseFloat(boletoForm.percentual.replace(",", ".") || "0");
+    const desc = parseCurrencyInput(boletoForm.descontos);
+    const resultado = Math.max((base * perc) / 100 - desc, 0);
+    setBoletoForm((prev) => ({ ...prev, valorCalculado: resultado }));
+    return resultado;
+  };
+
+  useEffect(() => {
+    if (boletoForm.tipo === "contribuicao") {
+      calcularValorContribuicao();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boletoForm.baseCalculo, boletoForm.percentual, boletoForm.descontos, boletoForm.tipo]);
+
   const handleNextStep = () => {
     if (wizardStep === 1) {
-      if (boletoForm.tipo !== "mensalidade" || !boletoForm.empresaId) {
+      if (!boletoForm.tipo || !boletoForm.empresaId) {
         toast({
           title: "Campos obrigatórios",
-          description: "Selecione o tipo Mensalidade e uma empresa.",
+          description: "Selecione o tipo de boleto e uma empresa.",
           variant: "destructive",
         });
         return;
       }
     } else if (wizardStep === 2) {
-      if (previaBoleto === null) {
-        toast({
-          title: "Pesquisa obrigatória",
-          description: "Clique em 'Pesquisar' antes de avançar.",
-          variant: "destructive",
-        });
-        return;
+      if (boletoForm.tipo === "mensalidade") {
+        if (previaBoleto === null) {
+          toast({
+            title: "Pesquisa obrigatória",
+            description: "Clique em 'Pesquisar' antes de avançar.",
+            variant: "destructive",
+          });
+          return;
+        }
+      } else {
+        const parcelasNumber = parseInt(boletoForm.parcelas, 10);
+        const camposObrigatorios =
+          boletoForm.anoContribuicao.length === 4 &&
+          boletoForm.periodicidade &&
+          boletoForm.parcelas &&
+          !Number.isNaN(parcelasNumber) &&
+          boletoForm.dataVencimento &&
+          boletoForm.percentual &&
+          boletoForm.baseCalculo;
+
+        if (!camposObrigatorios || !boletoForm.pesquisaContribuicaoFeita) {
+          toast({
+            title: "Campos obrigatórios",
+            description: "Pesquise e valide os dados antes de avançar.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        if (boletoForm.valorCalculado <= 0) {
+          toast({
+            title: "Valor obrigatório",
+            description: "O valor calculado deve ser maior que zero.",
+            variant: "destructive",
+          });
+          return;
+        }
       }
     }
     setWizardStep(wizardStep + 1);
@@ -418,21 +444,121 @@ const Financeiro = () => {
     setPreviaBoleto(null);
   };
 
-  const handleEmitirBoleto = () => {
-    const faixaSelecionada = faixas.find((f) => f.id === boletoForm.faixaId);
-    const novoBoleto = {
-      id: boletos.length + 1,
-      empresa: boletoForm.empresaNome,
-      valor: faixaSelecionada?.valor || 0,
-      vencimento: boletoForm.dataVencimento,
-      status: "Pendente",
-    };
+  const handlePesquisarContribuicao = () => {
+    const parcelasNumber = parseInt(boletoForm.parcelas, 10);
+    const camposValidos =
+      boletoForm.anoContribuicao.length === 4 &&
+      boletoForm.periodicidade &&
+      boletoForm.parcelas &&
+      !Number.isNaN(parcelasNumber) &&
+      boletoForm.dataVencimento &&
+      boletoForm.percentual &&
+      boletoForm.baseCalculo;
 
-    setBoletos([...boletos, novoBoleto]);
+    if (!camposValidos) {
+      toast({
+        title: "Campos obrigatórios",
+        description: "Preencha todos os campos obrigatórios para calcular.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const valor = calcularValorContribuicao();
+    const baseValor = parseCurrencyInput(boletoForm.baseCalculo);
+    const descontoValor = parseCurrencyInput(boletoForm.descontos);
+    const descontoTexto =
+      descontoValor > 0
+        ? `, com descontos de R$ ${descontoValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+        : ", sem descontos";
+
+    setContribuicaoPreview(
+      `Prévia: Contribuição Assistencial de R$ ${valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} (${boletoForm.percentual}% sobre R$ ${baseValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}${descontoTexto}).`
+    );
+    setBoletoForm((prev) => ({ ...prev, pesquisaContribuicaoFeita: true }));
+
     toast({
-      title: "Boleto emitido com sucesso (mock)",
-      description: `Boleto para ${boletoForm.empresaNome} criado.`,
+      title: "Pesquisa concluída",
+      description: "Prévia calculada com sucesso.",
     });
+  };
+
+  const handleLimparContribuicao = () => {
+    setBoletoForm((prev) => ({
+      ...prev,
+      anoContribuicao: "",
+      periodicidade: "",
+      parcelas: "",
+      dataVencimento: "",
+      baseCalculo: "",
+      percentual: "",
+      descontos: "",
+      valorCalculado: 0,
+      pesquisaContribuicaoFeita: false,
+    }));
+    setContribuicaoPreview("");
+  };
+
+  const handleEmitirBoleto = () => {
+    if (boletoForm.tipo === "contribuicao") {
+      const parcelasNumber = parseInt(boletoForm.parcelas, 10) || 1;
+      const novoBoleto: BoletoRegistro = {
+        id: `b${Date.now()}`,
+        tipo: "Contribuição Assistencial",
+        empresa: boletoForm.empresaNome,
+        valor: boletoForm.valorCalculado,
+        vencimento: boletoForm.dataVencimento,
+        status: "Emitida",
+        ano: boletoForm.anoContribuicao,
+        periodicidade: boletoForm.periodicidade,
+        parcelas: parcelasNumber,
+        base: parseCurrencyInput(boletoForm.baseCalculo),
+        percentual: parseFloat(boletoForm.percentual.replace(",", ".") || "0"),
+        descontos: parseCurrencyInput(boletoForm.descontos),
+      };
+
+      const novoHistorico: HistoricoContribuicao = {
+        id: `h${Date.now()}`,
+        ano: boletoForm.anoContribuicao,
+        empresa: boletoForm.empresaNome,
+        periodicidade: boletoForm.periodicidade,
+        parcelas: parcelasNumber,
+        base: novoBoleto.base || 0,
+        percentual: novoBoleto.percentual || 0,
+        descontos: novoBoleto.descontos || 0,
+        valor: novoBoleto.valor,
+        vencimento: boletoForm.dataVencimento,
+        situacao: "Emitida",
+      };
+
+      setBoletos([...boletos, novoBoleto]);
+      setHistoricoContribuicao([...historicoContribuicao, novoHistorico]);
+      toast({
+        title: "Boleto de Contribuição Assistencial emitido com sucesso (mock)",
+        description: `Boleto para ${boletoForm.empresaNome} criado.`,
+      });
+    } else {
+      const faixaSelecionada = faixas.find((f) => f.id === boletoForm.faixaId);
+      const novoBoleto: BoletoRegistro = {
+        id: `b${Date.now()}`,
+        tipo: "Mensalidade (por Faixa)",
+        empresa: boletoForm.empresaNome,
+        valor: faixaSelecionada?.valor || 0,
+        vencimento: boletoForm.dataVencimento,
+        status: "Pendente",
+        competenciaInicial: boletoForm.competenciaInicial,
+        competenciaFinal: boletoForm.competenciaFinal,
+        faixa: faixaSelecionada
+          ? `${faixaSelecionada.min}-${faixaSelecionada.max}`
+          : "",
+      };
+
+      setBoletos([...boletos, novoBoleto]);
+      toast({
+        title: "Boleto emitido com sucesso (mock)",
+        description: `Boleto para ${boletoForm.empresaNome} criado.`,
+      });
+    }
     resetWizard();
   };
 
@@ -457,86 +583,12 @@ const Financeiro = () => {
               </div>
             </div>
 
-            <Tabs defaultValue="visao-geral" className="w-full">
-              <TabsList className="grid w-full grid-cols-2 lg:grid-cols-4 mb-6">
-                <TabsTrigger value="visao-geral">Visão Geral</TabsTrigger>
+            <Tabs defaultValue="boletos" className="w-full">
+              <TabsList className="grid w-full grid-cols-2 lg:grid-cols-3 mb-6">
                 <TabsTrigger value="boletos">Controle de Boletos</TabsTrigger>
                 <TabsTrigger value="faixas">Faixas</TabsTrigger>
                 <TabsTrigger value="contribuicao">Contribuição Assistencial</TabsTrigger>
               </TabsList>
-
-              <TabsContent value="visao-geral" className="space-y-6">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Card>
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-sm font-medium">Receita Total (Trimestre)</CardTitle>
-                      <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">R$ {totalReceita.toLocaleString("pt-BR")}</div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="flex flex-row items-center justify-between pb-2">
-                      <CardTitle className="text-sm font-medium">Taxa de Inadimplência</CardTitle>
-                      <TrendingDown className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold text-destructive">
-                        {mockFinanceiro.inadimplencia}%
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="grid gap-6 md:grid-cols-2">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Receita Mensal</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={mockFinanceiro.receitas}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="mes" />
-                          <YAxis />
-                          <Tooltip />
-                          <Bar dataKey="valor" fill="hsl(var(--primary))" />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Inadimplência</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <PieChart>
-                          <Pie
-                            data={dadosInadimplencia}
-                            cx="50%"
-                            cy="50%"
-                            labelLine={false}
-                            label={({ name, value }) => `${name}: ${value}%`}
-                            outerRadius={80}
-                            fill="hsl(var(--accent))"
-                            dataKey="value"
-                          >
-                            {dadosInadimplencia.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
-                          <Legend />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
 
               <TabsContent value="boletos">
                 <Card>
@@ -571,6 +623,7 @@ const Financeiro = () => {
                         <TableHeader>
                           <TableRow>
                             <TableHead>Empresa</TableHead>
+                            <TableHead>Tipo</TableHead>
                             <TableHead>Valor</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
@@ -581,6 +634,7 @@ const Financeiro = () => {
                           {filteredBoletos.map((boleto) => (
                             <TableRow key={boleto.id}>
                               <TableCell className="font-medium">{boleto.empresa}</TableCell>
+                              <TableCell>{boleto.tipo}</TableCell>
                               <TableCell>R$ {boleto.valor.toLocaleString("pt-BR")}</TableCell>
                               <TableCell>{boleto.vencimento}</TableCell>
                               <TableCell>{getStatusBadge(boleto.status)}</TableCell>
@@ -605,103 +659,24 @@ const Financeiro = () => {
 
               <TabsContent value="contribuicao" className="space-y-6">
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Calculator className="h-5 w-5" />
-                      Simulador de Cálculo
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="baseCalculo">Base de Cálculo (R$)</Label>
-                        <Input
-                          id="baseCalculo"
-                          type="number"
-                          placeholder="10000"
-                          value={baseCalculo}
-                          onChange={(e) => {
-                            setBaseCalculo(e.target.value);
-                            handleCalcular();
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="percentual">Percentual (%)</Label>
-                        <Input
-                          id="percentual"
-                          type="number"
-                          placeholder="2.5"
-                          value={percentual}
-                          onChange={(e) => {
-                            setPercentual(e.target.value);
-                            handleCalcular();
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="descontos">Descontos/Isenções (R$)</Label>
-                        <Input
-                          id="descontos"
-                          type="number"
-                          placeholder="0"
-                          value={descontos}
-                          onChange={(e) => {
-                            setDescontos(e.target.value);
-                            handleCalcular();
-                          }}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Valor Calculado</Label>
-                        <div className="text-2xl font-bold text-primary pt-2">
-                          R$ {valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                        </div>
-                      </div>
+                  <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Calculator className="h-5 w-5" />
+                        Contribuição Assistencial
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Pré-visualize as últimas emissões e acesse a página dedicada de histórico.
+                      </p>
                     </div>
-                    <div className="mt-4">
-                      <Button onClick={handleGerarContribuicao}>
-                        Gerar Contribuição
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={() => navigate("/dashboard/financeiro/contribuicao") }>
+                        Ver histórico completo
                       </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                      <CardTitle>Histórico por Empresa</CardTitle>
-                      <div className="flex gap-2">
-                        <Select value={filterPeriodo} onValueChange={setFilterPeriodo}>
-                          <SelectTrigger className="w-[150px]">
-                            <SelectValue placeholder="Período" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Todos">Todos</SelectItem>
-                            <SelectItem value="2025-11">Nov/2025</SelectItem>
-                            <SelectItem value="2025-10">Out/2025</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Select value={filterSituacao} onValueChange={setFilterSituacao}>
-                          <SelectTrigger className="w-[150px]">
-                            <SelectValue placeholder="Situação" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Todas">Todas</SelectItem>
-                            <SelectItem value="Paga">Paga</SelectItem>
-                            <SelectItem value="Emitida">Emitida</SelectItem>
-                            <SelectItem value="Pendente">Pendente</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Button variant="outline" onClick={() => handleExport("CSV")}>
-                          <FileText className="h-4 w-4 mr-2" />
-                          CSV
-                        </Button>
-                        <Button variant="outline" onClick={() => handleExport("PDF")}>
-                          <FileDown className="h-4 w-4 mr-2" />
-                          PDF
-                        </Button>
-                      </div>
+                      <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => setWizardOpen(true)}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Criar boleto
+                      </Button>
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -709,28 +684,55 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Data</TableHead>
+                            <TableHead>Ano</TableHead>
                             <TableHead>Empresa</TableHead>
-                            <TableHead>Percentual</TableHead>
-                            <TableHead>Base</TableHead>
-                            <TableHead>Valor</TableHead>
+                            <TableHead>Periodicidade</TableHead>
+                            <TableHead>Parcelas</TableHead>
+                            <TableHead>Valor (R$)</TableHead>
+                            <TableHead>Vencimento</TableHead>
                             <TableHead>Situação</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {filteredContribuicoes.map((contrib) => (
-                            <TableRow key={contrib.id}>
-                              <TableCell>{new Date(contrib.data).toLocaleDateString("pt-BR")}</TableCell>
-                              <TableCell className="font-medium">{contrib.empresa}</TableCell>
-                              <TableCell>{contrib.percentual}%</TableCell>
-                              <TableCell>R$ {contrib.baseCalculo.toLocaleString("pt-BR")}</TableCell>
-                              <TableCell>R$ {contrib.valor.toLocaleString("pt-BR")}</TableCell>
-                              <TableCell>{getSituacaoBadge(contrib.situacao)}</TableCell>
+                          {ultimasContribuicoes.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={7} className="text-center text-muted-foreground">
+                                Nenhuma contribuição cadastrada ainda.
+                              </TableCell>
                             </TableRow>
-                          ))}
+                          ) : (
+                            ultimasContribuicoes.map((contrib) => (
+                              <TableRow key={contrib.id}>
+                                <TableCell>{contrib.ano}</TableCell>
+                                <TableCell className="font-medium">{contrib.empresa}</TableCell>
+                                <TableCell>{contrib.periodicidade}</TableCell>
+                                <TableCell>{contrib.parcelas}</TableCell>
+                                <TableCell>
+                                  R$ {contrib.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </TableCell>
+                                <TableCell>{contrib.vencimento}</TableCell>
+                                <TableCell>{getSituacaoBadge(contrib.situacao)}</TableCell>
+                              </TableRow>
+                            ))
+                          )}
                         </TableBody>
                       </Table>
                     </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-[#F7F8F4] border-secondary/40">
+                  <CardHeader>
+                    <CardTitle className="text-lg">Calculadora disponível no wizard</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Utilize o fluxo de criação de boletos para calcular automaticamente o valor de Contribuição
+                      Assistencial. A fórmula aplicada é: (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      A cada emissão, o histórico é atualizado e pode ser exportado na página dedicada.
+                    </p>
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -898,19 +900,32 @@ const Financeiro = () => {
                   <div className="space-y-6">
                     <div className="space-y-3">
                       <Label className="text-base font-semibold">Tipo do Boleto*</Label>
-                      <RadioGroup value={boletoForm.tipo} onValueChange={(value) => setBoletoForm({ ...boletoForm, tipo: value as any })}>
+                      <RadioGroup
+                        value={boletoForm.tipo}
+                        onValueChange={(value) => {
+                          const tipoSelecionado = value as "mensalidade" | "contribuicao";
+                          setBoletoForm({
+                            ...boletoForm,
+                            tipo: tipoSelecionado,
+                            pesquisaContribuicaoFeita: false,
+                            valorCalculado: 0,
+                          });
+                          setPreviaBoleto(null);
+                          setContribuicaoPreview("");
+                        }}
+                      >
                         <div className="flex items-center space-x-2 border p-3 rounded-lg">
                           <RadioGroupItem value="mensalidade" id="mensalidade" />
                           <Label htmlFor="mensalidade" className="cursor-pointer flex-1">
                             Mensalidade (por Faixa)
                           </Label>
                         </div>
-                        <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-50 bg-muted cursor-not-allowed">
-                          <RadioGroupItem value="contribuicao" id="contribuicao" disabled />
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg">
+                          <RadioGroupItem value="contribuicao" id="contribuicao" />
                           <Label htmlFor="contribuicao" className="flex-1">
-                            Contribuição Assistencial 🔒
+                            Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Fluxo será ativado em atualização futura
+                              Calculadora de alíquota integrada na etapa seguinte
                             </span>
                           </Label>
                         </div>
@@ -957,8 +972,8 @@ const Financeiro = () => {
                   </div>
                 )}
 
-                {/* Etapa 2: Detalhes (Mensalidade) */}
-                {wizardStep === 2 && (
+                {/* Etapa 2: Detalhes por tipo */}
+                {wizardStep === 2 && boletoForm.tipo === "mensalidade" && (
                   <div className="space-y-6">
                     <Card>
                       <CardHeader>
@@ -998,7 +1013,10 @@ const Financeiro = () => {
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="faixa">Faixa*</Label>
-                            <Select value={boletoForm.faixaId} onValueChange={(value) => setBoletoForm({ ...boletoForm, faixaId: value })}>
+                            <Select
+                              value={boletoForm.faixaId}
+                              onValueChange={(value) => setBoletoForm({ ...boletoForm, faixaId: value })}
+                            >
                               <SelectTrigger id="faixa">
                                 <SelectValue placeholder="Selecione uma faixa" />
                               </SelectTrigger>
@@ -1015,7 +1033,10 @@ const Financeiro = () => {
 
                         <div className="space-y-2">
                           <Label htmlFor="unificar">Unificar Competências*</Label>
-                          <Select value={boletoForm.unificarCompetencias} onValueChange={(value) => setBoletoForm({ ...boletoForm, unificarCompetencias: value })}>
+                          <Select
+                            value={boletoForm.unificarCompetencias}
+                            onValueChange={(value) => setBoletoForm({ ...boletoForm, unificarCompetencias: value })}
+                          >
                             <SelectTrigger id="unificar">
                               <SelectValue />
                             </SelectTrigger>
@@ -1057,9 +1078,167 @@ const Financeiro = () => {
                             <RotateCcw className="h-4 w-4 mr-2" />
                             Limpar
                           </Button>
-                          <Button variant="outline" onClick={() => {
-                            toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
-                          }}>
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
+                            }}
+                          >
+                            <Save className="h-4 w-4 mr-2" />
+                            Salvar Filtro
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+
+                {wizardStep === 2 && boletoForm.tipo === "contribuicao" && (
+                  <div className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg">Detalhes do Boleto - Contribuição Assistencial</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="anoContribuicao">Ano da Contribuição*</Label>
+                            <Input
+                              id="anoContribuicao"
+                              inputMode="numeric"
+                              maxLength={4}
+                              placeholder="2025"
+                              value={boletoForm.anoContribuicao}
+                              onChange={(e) =>
+                                setBoletoForm({ ...boletoForm, anoContribuicao: e.target.value.replace(/[^0-9]/g, "").slice(0, 4) })
+                              }
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="periodicidade">Periodicidade do Boleto*</Label>
+                            <Select
+                              value={boletoForm.periodicidade}
+                              onValueChange={(value) => setBoletoForm({ ...boletoForm, periodicidade: value })}
+                            >
+                              <SelectTrigger id="periodicidade">
+                                <SelectValue placeholder="Selecione" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="Mensal">Mensal</SelectItem>
+                                <SelectItem value="Trimestral">Trimestral</SelectItem>
+                                <SelectItem value="Semestral">Semestral</SelectItem>
+                                <SelectItem value="Anual">Anual</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="parcelas">Qtde. Parcelas*</Label>
+                            <Select
+                              value={boletoForm.parcelas}
+                              onValueChange={(value) => setBoletoForm({ ...boletoForm, parcelas: value })}
+                            >
+                              <SelectTrigger id="parcelas">
+                                <SelectValue placeholder="Selecione" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {[...Array(12)].map((_, index) => {
+                                  const value = (index + 1).toString();
+                                  return (
+                                    <SelectItem key={value} value={value}>
+                                      {value}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="vencimentoContrib">Data Vencimento* (dd/mm/aaaa)</Label>
+                            <Input
+                              id="vencimentoContrib"
+                              placeholder="30/11/2025"
+                              value={boletoForm.dataVencimento}
+                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="baseCalculoContrib">Base de Cálculo (R$)*</Label>
+                              <Input
+                                id="baseCalculoContrib"
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="20000"
+                                value={boletoForm.baseCalculo}
+                                onChange={(e) => setBoletoForm({ ...boletoForm, baseCalculo: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="percentualContrib">Percentual (%)*</Label>
+                              <Input
+                                id="percentualContrib"
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="1.5"
+                                value={boletoForm.percentual}
+                                onChange={(e) => setBoletoForm({ ...boletoForm, percentual: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="descontosContrib">Descontos/Isenções (R$)</Label>
+                              <Input
+                                id="descontosContrib"
+                                type="number"
+                                inputMode="decimal"
+                                placeholder="0"
+                                value={boletoForm.descontos}
+                                onChange={(e) => setBoletoForm({ ...boletoForm, descontos: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-3 rounded-lg border p-4 bg-neutral-100">
+                            <div className="flex items-center justify-between">
+                              <p className="font-semibold">Valor Calculado (R$)</p>
+                              <Button size="sm" variant="outline" onClick={calcularValorContribuicao}>
+                                Calcular
+                              </Button>
+                            </div>
+                            <p className="text-3xl font-bold text-primary">
+                              R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Valor Calculado = (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
+                            </p>
+                          </div>
+                        </div>
+
+                        {contribuicaoPreview && (
+                          <div className="bg-accent/20 p-4 rounded-lg">
+                            <p className="text-sm font-medium">{contribuicaoPreview}</p>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 pt-4 border-t">
+                          <Button onClick={handlePesquisarContribuicao} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                            <Search className="h-4 w-4 mr-2" />
+                            Pesquisar
+                          </Button>
+                          <Button variant="outline" onClick={handleLimparContribuicao}>
+                            <RotateCcw className="h-4 w-4 mr-2" />
+                            Limpar
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
+                            }}
+                          >
                             <Save className="h-4 w-4 mr-2" />
                             Salvar Filtro
                           </Button>
@@ -1084,39 +1263,91 @@ const Financeiro = () => {
                           </div>
                           <div>
                             <p className="font-semibold text-muted-foreground">Tipo:</p>
-                            <p className="font-medium">Mensalidade por Faixa</p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-muted-foreground">Faixa selecionada:</p>
                             <p className="font-medium">
-                              {faixas.find((f) => f.id === boletoForm.faixaId)
-                                ? `${faixas.find((f) => f.id === boletoForm.faixaId)!.min}–${faixas.find((f) => f.id === boletoForm.faixaId)!.max} • R$ ${faixas.find((f) => f.id === boletoForm.faixaId)!.valor.toFixed(2)}`
-                                : "-"}
+                              {boletoForm.tipo === "contribuicao"
+                                ? "Contribuição Assistencial"
+                                : "Mensalidade (por Faixa)"}
                             </p>
                           </div>
-                          <div>
-                            <p className="font-semibold text-muted-foreground">Competências:</p>
-                            <p className="font-medium">{boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}</p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-muted-foreground">Unificar Competências:</p>
-                            <p className="font-medium">{boletoForm.unificarCompetencias}</p>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                            <p className="font-medium">{boletoForm.dataVencimento}</p>
-                          </div>
-                          {boletoForm.mensagemPersonalizada && (
-                            <div className="col-span-2">
-                              <p className="font-semibold text-muted-foreground">Mensagem Personalizada:</p>
-                              <p className="font-medium">{boletoForm.mensagemPersonalizada}</p>
-                            </div>
+
+                          {boletoForm.tipo === "mensalidade" ? (
+                            <>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Faixa selecionada:</p>
+                                <p className="font-medium">
+                                  {faixas.find((f) => f.id === boletoForm.faixaId)
+                                    ? `${faixas.find((f) => f.id === boletoForm.faixaId)!.min}–${faixas.find((f) => f.id === boletoForm.faixaId)!.max} • R$ ${faixas.find((f) => f.id === boletoForm.faixaId)!.valor.toFixed(2)}`
+                                    : "-"}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Competências:</p>
+                                <p className="font-medium">{boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Unificar Competências:</p>
+                                <p className="font-medium">{boletoForm.unificarCompetencias}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
+                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                              </div>
+                              {boletoForm.mensagemPersonalizada && (
+                                <div className="col-span-2">
+                                  <p className="font-semibold text-muted-foreground">Mensagem Personalizada:</p>
+                                  <p className="font-medium">{boletoForm.mensagemPersonalizada}</p>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Ano da Contribuição:</p>
+                                <p className="font-medium">{boletoForm.anoContribuicao}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Periodicidade:</p>
+                                <p className="font-medium">{boletoForm.periodicidade}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Qtde. Parcelas:</p>
+                                <p className="font-medium">{boletoForm.parcelas}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
+                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Base de Cálculo (R$):</p>
+                                <p className="font-medium">
+                                  R$ {parseCurrencyInput(boletoForm.baseCalculo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Percentual (%):</p>
+                                <p className="font-medium">{boletoForm.percentual}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Descontos/Isenções (R$):</p>
+                                <p className="font-medium">
+                                  R$ {parseCurrencyInput(boletoForm.descontos).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Valor Calculado (R$):</p>
+                                <p className="font-medium text-primary">
+                                  R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                            </>
                           )}
                         </div>
                         <div className="bg-primary/10 p-4 rounded-lg border-2 border-primary/20 mt-4">
                           <p className="text-sm font-semibold text-muted-foreground">Valor estimado:</p>
                           <p className="text-3xl font-bold text-primary">
-                            R$ {(previaBoleto || 0).toFixed(2)}
+                            {boletoForm.tipo === "contribuicao"
+                              ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                              : `R$ ${(previaBoleto || 0).toFixed(2)}`}
                           </p>
                         </div>
                       </CardContent>
@@ -1137,7 +1368,7 @@ const Financeiro = () => {
                       Cancelar
                     </Button>
                     {wizardStep < 3 ? (
-                      <Button onClick={handleNextStep}>
+                      <Button onClick={handleNextStep} disabled={!canProceed}>
                         Próximo
                       </Button>
                     ) : (
