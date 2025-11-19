@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
@@ -92,6 +92,7 @@ interface BoletoForm {
 const Financeiro = () => {
   const [mesFilter, setMesFilter] = useState("Todos");
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const initialData = useMemo(() => getFinanceiroData(), []);
 
@@ -140,6 +141,16 @@ const Financeiro = () => {
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
+
+  useEffect(() => {
+    if (searchParams.get("wizard") === "novo-boleto") {
+      setWizardOpen(true);
+      setWizardStep(1);
+      const updatedParams = new URLSearchParams(searchParams);
+      updatedParams.delete("wizard");
+      setSearchParams(updatedParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const filteredBoletos = useMemo(() => {
     return boletos.filter((boleto) => {
