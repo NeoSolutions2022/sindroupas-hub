@@ -389,7 +389,7 @@ const Empresas = () => {
   };
 
   const handleFaixaChange = (value: string) => {
-    if (!value) {
+    if (!value || value === "none") {
       setFormData((prev) => ({ ...prev, faixaId: undefined, faixaLabel: undefined }));
       return;
     }
@@ -535,12 +535,15 @@ const Empresas = () => {
                     </SelectContent>
                   </Select>
 
-                  <Select value={porteFilter} onValueChange={(value) => setPorteFilter(value)}>
+                  <Select
+                    value={porteFilter || "all"}
+                    onValueChange={(value) => setPorteFilter(value === "all" ? "" : value)}
+                  >
                     <SelectTrigger aria-label="Filtrar por porte">
                       <SelectValue placeholder="Porte" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Todos os portes</SelectItem>
+                      <SelectItem value="all">Todos os portes</SelectItem>
                       {portes.map((porte) => (
                         <SelectItem key={porte} value={porte}>
                           {porte}
@@ -549,12 +552,15 @@ const Empresas = () => {
                     </SelectContent>
                   </Select>
 
-                  <Select value={faixaFilter} onValueChange={(value) => setFaixaFilter(value)}>
+                  <Select
+                    value={faixaFilter || "all"}
+                    onValueChange={(value) => setFaixaFilter(value === "all" ? "" : value)}
+                  >
                     <SelectTrigger aria-label="Filtrar por faixa">
                       <SelectValue placeholder="Faixa" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Todas as faixas</SelectItem>
+                      <SelectItem value="all">Todas as faixas</SelectItem>
                       {faixas.map((faixa) => (
                         <SelectItem key={faixa.id} value={faixa.id}>
                           {faixa.label}
@@ -845,11 +851,17 @@ const Empresas = () => {
                     <div className="space-y-2">
                       <Label>Associado*</Label>
                       <Select
-                        value={formData.associado ? "sim" : formData.associado === false ? "nao" : ""}
+                        value={
+                          formData.associado === undefined
+                            ? "unset"
+                            : formData.associado
+                              ? "sim"
+                              : "nao"
+                        }
                         onValueChange={(value) =>
                           setFormData((prev) => ({
                             ...prev,
-                            associado: value === "" ? undefined : value === "sim",
+                            associado: value === "unset" ? undefined : value === "sim",
                           }))
                         }
                         disabled={isViewMode}
@@ -858,7 +870,7 @@ const Empresas = () => {
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Selecione</SelectItem>
+                          <SelectItem value="unset">Selecione</SelectItem>
                           <SelectItem value="sim">Sim</SelectItem>
                           <SelectItem value="nao">Não</SelectItem>
                         </SelectContent>
@@ -867,13 +879,14 @@ const Empresas = () => {
                     <div className="space-y-2">
                       <Label>Situação Financeira*</Label>
                       <Select
-                        value={formData.situacaoFinanceira || ""}
+                        value={formData.situacaoFinanceira || "unset"}
                         onValueChange={(value) =>
                           setFormData((prev) => ({
                             ...prev,
-                            situacaoFinanceira: value
-                              ? (value as Empresa["situacaoFinanceira"])
-                              : undefined,
+                            situacaoFinanceira:
+                              value === "unset"
+                                ? undefined
+                                : (value as Empresa["situacaoFinanceira"]),
                           }))
                         }
                         disabled={isViewMode}
@@ -882,7 +895,7 @@ const Empresas = () => {
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Selecione</SelectItem>
+                          <SelectItem value="unset">Selecione</SelectItem>
                           <SelectItem value="Regular">Regular</SelectItem>
                           <SelectItem value="Inadimplente">Inadimplente</SelectItem>
                         </SelectContent>
@@ -891,11 +904,11 @@ const Empresas = () => {
                     <div className="space-y-2">
                       <Label>Porte*</Label>
                       <Select
-                        value={formData.porte || ""}
+                        value={formData.porte || "unset"}
                         onValueChange={(value) =>
                           setFormData((prev) => ({
                             ...prev,
-                            porte: value ? (value as Empresa["porte"]) : undefined,
+                            porte: value === "unset" ? undefined : (value as Empresa["porte"]),
                           }))
                         }
                         disabled={isViewMode}
@@ -904,7 +917,7 @@ const Empresas = () => {
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Selecione</SelectItem>
+                          <SelectItem value="unset">Selecione</SelectItem>
                           {portes.map((porte) => (
                             <SelectItem key={porte} value={porte}>
                               {porte}
@@ -967,7 +980,7 @@ const Empresas = () => {
                   <div className="space-y-2">
                     <Label>Faixa</Label>
                     <Select
-                      value={formData.faixaId || ""}
+                      value={formData.faixaId || "none"}
                       onValueChange={handleFaixaChange}
                       disabled={isViewMode}
                     >
@@ -975,7 +988,7 @@ const Empresas = () => {
                         <SelectValue placeholder="Selecione a faixa" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">Sem faixa</SelectItem>
+                        <SelectItem value="none">Sem faixa</SelectItem>
                         {faixas.map((faixa) => (
                           <SelectItem key={faixa.id} value={faixa.id}>
                             {faixa.label}
