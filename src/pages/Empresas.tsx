@@ -1,23 +1,63 @@
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { useMemo, useRef, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AppSidebar } from "@/components/AppSidebar";
-import { DashboardNavbar } from "@/components/DashboardNavbar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Search, Eye, Edit, Trash2, Plus, Upload, Download, X } from "lucide-react";
-import { useState } from "react";
-import { useToast } from "@/hooks/use-toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DashboardNavbar } from "@/components/DashboardNavbar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import {
+  Calendar,
+  Download,
+  Edit,
+  Eye,
+  Filter,
+  MessageCircle,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+} from "lucide-react";
+
+const portes = ["MEI", "ME", "EPP", "LTDA", "SA"] as const;
+const periodoOptions = [
+  { value: "fundacao", label: "Fundação" },
+  { value: "associacao", label: "Associação" },
+  { value: "desassociacao", label: "Desassociação" },
+] as const;
+
+type Responsavel = {
+  nome?: string;
+  whatsapp?: string;
+};
 
 type Colaborador = {
   nome: string;
   cpf: string;
-  telefone: string;
+  whatsapp: string;
   cargo: string;
   email: string;
   observacoes?: string;
@@ -29,112 +69,246 @@ type Empresa = {
   razaoSocial: string;
   nomeFantasia: string;
   cnpj: string;
-  email: string;
-  telefone: string;
-  endereco: string;
-  situacao: "Associada" | "Não associada" | "Inadimplente";
-  ultimaAtualizacao: string;
+  email?: string;
+  whatsapp?: string;
+  endereco?: string;
+  associado: boolean;
+  situacaoFinanceira: "Regular" | "Inadimplente";
+  porte: typeof portes[number];
+  capitalSocial?: number;
+  faixaId?: string;
+  faixaLabel?: string;
+  dataFundacao: string;
+  dataAssociacao?: string | null;
+  dataDesassociacao?: string | null;
+  responsavel?: Responsavel | null;
   colaboradores: Colaborador[];
 };
 
-const mockEmpresas: Empresa[] = [
+type Faixa = {
+  id: string;
+  min: number;
+  max: number;
+  valor: number;
+  label: string;
+};
+
+const faixas: Faixa[] = [
+  { id: "fx1", min: 1, max: 20, valor: 600, label: "1–20 • R$600" },
+  { id: "fx2", min: 21, max: 50, valor: 850, label: "21–50 • R$850" },
+];
+
+const initialEmpresas: Empresa[] = [
   {
     id: "e1",
-    logoUrl: "",
+    logoUrl: "/logos/estilo.png",
     razaoSocial: "Estilo Nordeste Ltda",
     nomeFantasia: "Estilo Nordeste",
     cnpj: "11.222.333/0001-44",
+    associado: true,
+    situacaoFinanceira: "Regular",
+    porte: "ME",
+    capitalSocial: 200000,
+    faixaId: "fx1",
+    faixaLabel: "1–20 • R$600",
+    dataFundacao: "2015-03-10",
+    dataAssociacao: "2020-06-01",
+    dataDesassociacao: null,
     email: "contato@estilonordeste.com",
-    telefone: "(85) 3333-4444",
+    whatsapp: "(85) 3333-4444",
     endereco: "Rua das Flores, 123, Centro, Fortaleza/CE",
-    situacao: "Associada",
-    ultimaAtualizacao: "2025-11-02",
+    responsavel: { nome: "Marina Costa", whatsapp: "(85) 99999-1234" },
     colaboradores: [
-      { nome: "João Silva", cpf: "123.456.789-00", telefone: "(85) 99999-0000", cargo: "Compras", email: "joao@estilonordeste.com" },
-      { nome: "Maria Souza", cpf: "987.654.321-00", telefone: "(85) 98888-1111", cargo: "Financeiro", email: "maria@estilonordeste.com" }
-    ]
+      {
+        nome: "João Silva",
+        cpf: "123.456.789-00",
+        whatsapp: "(85) 99999-0000",
+        cargo: "Compras",
+        email: "joao@estilo.com",
+      },
+      {
+        nome: "Maria Souza",
+        cpf: "987.654.321-00",
+        whatsapp: "(85) 98888-1111",
+        cargo: "Financeiro",
+        email: "maria@estilo.com",
+      },
+    ],
   },
   {
     id: "e2",
-    logoUrl: "",
+    logoUrl: "/logos/modasul.png",
     razaoSocial: "ModaSul Indústria e Comércio S.A.",
     nomeFantasia: "ModaSul",
     cnpj: "22.333.444/0001-55",
+    associado: false,
+    situacaoFinanceira: "Inadimplente",
+    porte: "EPP",
+    capitalSocial: 500000,
+    faixaId: "fx2",
+    faixaLabel: "21–50 • R$850",
+    dataFundacao: "2012-08-20",
+    dataAssociacao: null,
+    dataDesassociacao: null,
     email: "contato@modasul.com",
-    telefone: "(85) 3555-6666",
+    whatsapp: "(85) 3555-6666",
     endereco: "Av. Principal, 456, Aldeota, Fortaleza/CE",
-    situacao: "Não associada",
-    ultimaAtualizacao: "2025-10-20",
+    responsavel: null,
     colaboradores: [
-      { nome: "Bruno Lima", cpf: "222.333.444-55", telefone: "(85) 97777-2222", cargo: "Diretor", email: "bruno@modasul.com" }
-    ]
+      {
+        nome: "Bruno Lima",
+        cpf: "222.333.444-55",
+        whatsapp: "(85) 97777-2222",
+        cargo: "Diretor",
+        email: "bruno@modasul.com",
+      },
+    ],
   },
-  {
-    id: "e3",
-    logoUrl: "",
-    razaoSocial: "Confecções Aurora LTDA",
-    nomeFantasia: "Aurora",
-    cnpj: "12.345.678/0001-90",
-    email: "contato@aurora.com",
-    telefone: "(85) 3222-3333",
-    endereco: "Rua do Comércio, 789, Messejana, Fortaleza/CE",
-    situacao: "Inadimplente",
-    ultimaAtualizacao: "2025-09-15",
-    colaboradores: [
-      { nome: "Ana Souza", cpf: "111.222.333-44", telefone: "(85) 96666-5555", cargo: "Gerente", email: "ana@aurora.com" }
-    ]
-  }
 ];
 
+const formatCurrency = (value?: number) => {
+  if (value === undefined || value === null) return "-";
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+  }).format(value);
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("pt-BR").format(new Date(value));
+};
+
+const formatCnpj = (value: string) => {
+  return value
+    .replace(/\D/g, "")
+    .replace(/(\d{2})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2")
+    .slice(0, 18);
+};
+
+const formatCpf = (value: string) => {
+  return value
+    .replace(/\D/g, "")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{2})$/, "$1-$2")
+    .slice(0, 14);
+};
+
+const formatPhone = (value: string) => {
+  return value
+    .replace(/\D/g, "")
+    .replace(/(\d{2})(\d)/, "($1) $2")
+    .replace(/(\d{5})(\d{4})$/, "$1-$2")
+    .slice(0, 15);
+};
+
 const Empresas = () => {
+  const [empresas] = useState<Empresa[]>(initialEmpresas);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
-  const [empresas] = useState<Empresa[]>(mockEmpresas);
+  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
+  const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
+  const [porteFilter, setPorteFilter] = useState<string>("");
+  const [faixaFilter, setFaixaFilter] = useState<string>("");
+  const [periodoTipo, setPeriodoTipo] = useState<typeof periodoOptions[number]["value"]>("fundacao");
+  const [periodoInicio, setPeriodoInicio] = useState("");
+  const [periodoFim, setPeriodoFim] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
-  const [formData, setFormData] = useState<Partial<Empresa>>({
-    colaboradores: []
-  });
+  const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>("");
+  const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
-  const filteredEmpresas = empresas.filter((empresa) => {
-    // Search logic: search by company name, CNPJ, or collaborator name
-    const matchesSearch =
-      empresa.razaoSocial.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      empresa.nomeFantasia.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      empresa.cnpj.includes(searchTerm) ||
-      empresa.colaboradores.some(col => col.nome.toLowerCase().includes(searchTerm.toLowerCase()));
-
-    const matchesFilter = 
-      filterStatus === "Todas" || 
-      (filterStatus === "Associadas" && empresa.situacao === "Associada") ||
-      (filterStatus === "Não associadas" && empresa.situacao === "Não associada");
-
-    return matchesSearch && matchesFilter;
-  });
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "Associada":
-        return "default";
-      case "Não associada":
-        return "secondary";
-      case "Inadimplente":
-        return "destructive";
-      default:
-        return "secondary";
+  const colaboradorMatch = useMemo(() => {
+    if (!searchTerm.trim()) return null;
+    const lower = searchTerm.trim().toLowerCase();
+    for (const empresa of empresas) {
+      for (const colaborador of empresa.colaboradores) {
+        if (colaborador.nome.toLowerCase().includes(lower)) {
+          return {
+            colaboradorNome: colaborador.nome,
+            empresaId: empresa.id,
+            empresaNome: empresa.nomeFantasia,
+          };
+        }
+      }
     }
-  };
+    return null;
+  }, [empresas, searchTerm]);
 
-  const handleOpenDialog = (empresa?: Empresa) => {
+  const filteredEmpresas = useMemo(() => {
+    return empresas.filter((empresa) => {
+      const search = searchTerm.trim().toLowerCase();
+      const matchesSearch =
+        !search ||
+        empresa.razaoSocial.toLowerCase().includes(search) ||
+        empresa.nomeFantasia.toLowerCase().includes(search) ||
+        empresa.cnpj.replace(/\D/g, "").includes(search.replace(/\D/g, "")) ||
+        empresa.colaboradores.some((colaborador) => colaborador.nome.toLowerCase().includes(search));
+
+      const matchesAssociacao =
+        associationFilter === "Todas" ||
+        (associationFilter === "Associadas" && empresa.associado) ||
+        (associationFilter === "Não associadas" && !empresa.associado);
+
+      const matchesSituacao = situacaoFilter === "Todas" || empresa.situacaoFinanceira === situacaoFilter;
+      const matchesPorte = !porteFilter || empresa.porte === porteFilter;
+      const matchesFaixa = !faixaFilter || empresa.faixaId === faixaFilter;
+
+      const dateField =
+        periodoTipo === "fundacao"
+          ? empresa.dataFundacao
+          : periodoTipo === "associacao"
+            ? empresa.dataAssociacao
+            : empresa.dataDesassociacao;
+
+      const matchesPeriodo = (() => {
+        if (!periodoInicio && !periodoFim) return true;
+        if (!dateField) return false;
+        const value = new Date(dateField).getTime();
+        const inicioTime = periodoInicio ? new Date(periodoInicio).getTime() : undefined;
+        const fimTime = periodoFim ? new Date(periodoFim).getTime() : undefined;
+        if (inicioTime && value < inicioTime) return false;
+        if (fimTime && value > fimTime) return false;
+        return true;
+      })();
+
+      return matchesSearch && matchesAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
+    });
+  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
+
+  const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
+
+  const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
+    setIsViewMode(viewMode);
     if (empresa) {
       setEditingEmpresa(empresa);
-      setFormData(empresa);
+      setFormData({
+        ...empresa,
+        colaboradores: empresa.colaboradores.length
+          ? empresa.colaboradores.map((colaborador) => ({ ...colaborador }))
+          : [
+              { nome: "", cpf: "", whatsapp: "", cargo: "", email: "" },
+            ],
+        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", whatsapp: "" },
+      });
       setLogoPreview(empresa.logoUrl);
     } else {
       setEditingEmpresa(null);
-      setFormData({ colaboradores: [{ nome: "", cpf: "", telefone: "", cargo: "", email: "" }] });
+      setFormData({
+        associado: true,
+        situacaoFinanceira: "Regular",
+        porte: "ME",
+        colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
+        responsavel: { nome: "", whatsapp: "" },
+      });
       setLogoPreview("");
     }
     setIsDialogOpen(true);
@@ -143,8 +317,12 @@ const Empresas = () => {
   const handleCloseDialog = () => {
     setIsDialogOpen(false);
     setEditingEmpresa(null);
+    setIsViewMode(false);
     setFormData({ colaboradores: [] });
     setLogoPreview("");
+    if (logoInputRef.current) {
+      logoInputRef.current.value = "";
+    }
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -153,7 +331,7 @@ const Empresas = () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         setLogoPreview(reader.result as string);
-        setFormData({ ...formData, logoUrl: reader.result as string });
+        setFormData((prev) => ({ ...prev, logoUrl: reader.result as string }));
       };
       reader.readAsDataURL(file);
     }
@@ -161,6 +339,10 @@ const Empresas = () => {
 
   const handleLogoDownload = () => {
     if (formData.logoUrl) {
+      const link = document.createElement("a");
+      link.href = formData.logoUrl;
+      link.download = `${formData.nomeFantasia || "logo-empresa"}.png`;
+      link.click();
       toast({
         title: "Download iniciado",
         description: "Logo da empresa está sendo baixada.",
@@ -169,192 +351,425 @@ const Empresas = () => {
   };
 
   const addColaborador = () => {
-    setFormData({
-      ...formData,
+    setFormData((prev) => ({
+      ...prev,
       colaboradores: [
-        ...(formData.colaboradores || []),
-        { nome: "", cpf: "", telefone: "", cargo: "", email: "" }
-      ]
-    });
+        ...(prev.colaboradores || []),
+        { nome: "", cpf: "", whatsapp: "", cargo: "", email: "" },
+      ],
+    }));
   };
 
   const removeColaborador = (index: number) => {
-    const newColaboradores = [...(formData.colaboradores || [])];
-    newColaboradores.splice(index, 1);
-    setFormData({ ...formData, colaboradores: newColaboradores });
+    setFormData((prev) => {
+      const colaboradores = [...(prev.colaboradores || [])];
+      colaboradores.splice(index, 1);
+      return { ...prev, colaboradores };
+    });
   };
 
   const updateColaborador = (index: number, field: keyof Colaborador, value: string) => {
-    const newColaboradores = [...(formData.colaboradores || [])];
-    newColaboradores[index] = { ...newColaboradores[index], [field]: value };
-    setFormData({ ...formData, colaboradores: newColaboradores });
+    setFormData((prev) => {
+      const colaboradores = [...(prev.colaboradores || [])];
+      const formattedValue =
+        field === "cpf" ? formatCpf(value) : field === "whatsapp" ? formatPhone(value) : value;
+      colaboradores[index] = { ...colaboradores[index], [field]: formattedValue };
+      return { ...prev, colaboradores };
+    });
+  };
+
+  const handleResponsavelChange = (field: keyof Responsavel, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      responsavel: {
+        ...(prev.responsavel || {}),
+        [field]: field === "whatsapp" ? formatPhone(value) : value,
+      },
+    }));
+  };
+
+  const handleFaixaChange = (value: string) => {
+    if (!value) {
+      setFormData((prev) => ({ ...prev, faixaId: undefined, faixaLabel: undefined }));
+      return;
+    }
+    const faixaSelecionada = faixas.find((faixa) => faixa.id === value);
+    setFormData((prev) => ({ ...prev, faixaId: value, faixaLabel: faixaSelecionada?.label }));
   };
 
   const handleSave = () => {
+    const requiredFields = [
+      formData.razaoSocial,
+      formData.cnpj,
+      typeof formData.associado === "boolean" ? "ok" : "",
+      formData.situacaoFinanceira,
+      formData.porte,
+      formData.dataFundacao,
+    ];
+    const hasEmpty = requiredFields.some((field) => field === undefined || field === "");
+
+    if (hasEmpty) {
+      toast({
+        title: "Preencha os campos obrigatórios",
+        description: "Campos marcados com * são necessários para salvar.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     toast({
-      title: editingEmpresa ? "Empresa atualizada" : "Empresa cadastrada",
-      description: "Dados salvos com sucesso.",
+      title: "Empresas atualizado com sucesso",
+      description: "As informações foram registradas corretamente.",
     });
+
     handleCloseDialog();
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = (empresa: Empresa) => {
+    setEmpresaToDelete(empresa);
+  };
+
+  const confirmDelete = () => {
     toast({
       title: "Empresa excluída",
       description: "Registro removido com sucesso.",
-      variant: "destructive"
+      variant: "destructive",
     });
+    setEmpresaToDelete(null);
+  };
+
+  const getContatoPrincipal = (empresa: Empresa) => {
+    const responsavelTemWhats = Boolean(empresa.responsavel?.whatsapp);
+    if (empresa.responsavel?.nome && responsavelTemWhats) {
+      return { nome: empresa.responsavel.nome, whatsapp: empresa.responsavel.whatsapp };
+    }
+
+    if ((!empresa.responsavel || !responsavelTemWhats) && empresa.colaboradores.length) {
+      const colaboradorComWhats = empresa.colaboradores.find((colaborador) => colaborador.whatsapp);
+      if (colaboradorComWhats) {
+        return { nome: colaboradorComWhats.nome, whatsapp: colaboradorComWhats.whatsapp };
+      }
+    }
+
+    if (empresa.responsavel?.nome) {
+      return { nome: empresa.responsavel.nome, whatsapp: "—" };
+    }
+
+    return null;
   };
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-background">
+      <div className="min-h-screen flex w-full bg-neutral-50">
         <AppSidebar />
         <div className="flex-1 flex flex-col">
           <DashboardNavbar />
-          <main className="flex-1 p-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+          <main className="flex-1 p-6 space-y-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-primary">Empresas</h1>
-                <p className="text-muted-foreground">Gestão completa de empresas associadas e não associadas</p>
+                <h1 className="text-3xl font-bold text-[#1C1C1C]">Empresas</h1>
+                <p className="text-muted-foreground">Gestão de associadas, status financeiro e equipes</p>
               </div>
-              <Button onClick={() => handleOpenDialog()}>
-                <Plus className="h-4 w-4 mr-2" />
+              <Button onClick={() => handleOpenDialog()} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" aria-label="Cadastrar nova empresa">
+                <Plus className="mr-2 h-4 w-4" />
                 Cadastrar Empresa
               </Button>
             </div>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Lista de Empresas</CardTitle>
+            <Card className="border-none shadow-lg">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-lg text-[#1C1C1C]">Filtros e busca</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="flex flex-col md:flex-row gap-4 mb-6">
+              <CardContent className="space-y-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                      placeholder="Buscar por empresa, CNPJ ou colaborador..."
+                      aria-label="Buscar empresa ou colaborador"
+                      placeholder="Buscar por empresa, CNPJ ou colaborador"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       className="pl-10"
                     />
+                    {colaboradorMatch && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {colaboradorMatch.colaboradorNome} • Colaborador — {colaboradorMatch.empresaNome}
+                      </p>
+                    )}
                   </div>
-                  <div className="flex gap-2">
-                    {(["Todas", "Associadas", "Não associadas"] as const).map((status) => (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Filter className="h-4 w-4" />
+                    Ajuste os filtros para refinar a lista
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="flex gap-2 rounded-lg bg-neutral-100 p-2">
+                    {["Todas", "Associadas", "Não associadas"].map((status) => (
                       <Button
                         key={status}
-                        variant={filterStatus === status ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setFilterStatus(status)}
+                        type="button"
+                        variant={associationFilter === status ? "default" : "ghost"}
+                        className={cn(
+                          "flex-1 border",
+                          associationFilter === status
+                            ? "bg-[#1C1C1C] text-white"
+                            : "bg-white text-[#1C1C1C]"
+                        )}
+                        onClick={() => setAssociationFilter(status as typeof associationFilter)}
+                        aria-label={`Filtrar por ${status}`}
                       >
                         {status}
                       </Button>
                     ))}
                   </div>
+
+                  <Select value={situacaoFilter} onValueChange={(value) => setSituacaoFilter(value as typeof situacaoFilter)}>
+                    <SelectTrigger aria-label="Filtrar por situação financeira">
+                      <SelectValue placeholder="Situação Financeira" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Todas">Situação Financeira: Todas</SelectItem>
+                      <SelectItem value="Regular">Regular</SelectItem>
+                      <SelectItem value="Inadimplente">Inadimplente</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Select value={porteFilter} onValueChange={(value) => setPorteFilter(value)}>
+                    <SelectTrigger aria-label="Filtrar por porte">
+                      <SelectValue placeholder="Porte" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Todos os portes</SelectItem>
+                      {portes.map((porte) => (
+                        <SelectItem key={porte} value={porte}>
+                          {porte}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Select value={faixaFilter} onValueChange={(value) => setFaixaFilter(value)}>
+                    <SelectTrigger aria-label="Filtrar por faixa">
+                      <SelectValue placeholder="Faixa" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Todas as faixas</SelectItem>
+                      {faixas.map((faixa) => (
+                        <SelectItem key={faixa.id} value={faixa.id}>
+                          {faixa.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Logo</TableHead>
-                        <TableHead>Empresa</TableHead>
-                        <TableHead>CNPJ</TableHead>
-                        <TableHead>Situação</TableHead>
-                        <TableHead>Última Atualização</TableHead>
-                        <TableHead>Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredEmpresas.map((empresa) => (
-                        <TableRow key={empresa.id}>
-                          <TableCell>
-                            <Avatar className="h-8 w-8">
-                              <AvatarImage src={empresa.logoUrl} />
-                              <AvatarFallback>{empresa.nomeFantasia.substring(0, 2).toUpperCase()}</AvatarFallback>
-                            </Avatar>
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium">{empresa.razaoSocial}</div>
-                            <div className="text-sm text-muted-foreground">{empresa.nomeFantasia}</div>
-                          </TableCell>
-                          <TableCell>{empresa.cnpj}</TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusColor(empresa.situacao)}>
-                              {empresa.situacao}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{empresa.ultimaAtualizacao}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleOpenDialog(empresa)}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleOpenDialog(empresa)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDelete(empresa.id)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <Select
+                    value={periodoTipo}
+                    onValueChange={(value) =>
+                      setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
+                    }
+                  >
+                    <SelectTrigger aria-label="Selecionar período para filtro">
+                      <SelectValue placeholder="Período" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {periodoOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
                       ))}
-                    </TableBody>
-                  </Table>
+                    </SelectContent>
+                  </Select>
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={periodoInicio}
+                      onChange={(e) => setPeriodoInicio(e.target.value)}
+                      aria-label="Data inicial do período"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={periodoFim}
+                      onChange={(e) => setPeriodoFim(e.target.value)}
+                      aria-label="Data final do período"
+                    />
+                  </div>
                 </div>
               </CardContent>
             </Card>
 
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+            <Card className="border-none shadow-lg">
+              <CardHeader>
+                <CardTitle className="text-lg text-[#1C1C1C]">Empresas</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead scope="col">Logo</TableHead>
+                        <TableHead scope="col">Empresa</TableHead>
+                        <TableHead scope="col">CNPJ</TableHead>
+                        <TableHead scope="col">Associado</TableHead>
+                        <TableHead scope="col">Situação Financeira</TableHead>
+                        <TableHead scope="col">Porte</TableHead>
+                        <TableHead scope="col">Capital Social</TableHead>
+                        <TableHead scope="col">Faixa</TableHead>
+                        <TableHead scope="col">Datas</TableHead>
+                        <TableHead scope="col">Responsável p/ contato</TableHead>
+                        <TableHead scope="col">Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredEmpresas.map((empresa) => {
+                        const contato = getContatoPrincipal(empresa);
+                        return (
+                          <TableRow
+                            key={empresa.id}
+                            className={cn(
+                              highlightedEmpresaId === empresa.id && "bg-[#DCE7CB]/60"
+                            )}
+                          >
+                            <TableCell>
+                              <Avatar className="h-10 w-10 border">
+                                <AvatarImage src={empresa.logoUrl} alt={`Logo ${empresa.nomeFantasia}`} />
+                                <AvatarFallback>{empresa.nomeFantasia.substring(0, 2).toUpperCase()}</AvatarFallback>
+                              </Avatar>
+                            </TableCell>
+                            <TableCell>
+                              <p className="font-semibold text-[#1C1C1C]">{empresa.razaoSocial}</p>
+                              <p className="text-sm text-muted-foreground">{empresa.nomeFantasia}</p>
+                            </TableCell>
+                            <TableCell>{empresa.cnpj}</TableCell>
+                            <TableCell>
+                              <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white" : "bg-secondary text-[#1C1C1C]"}>
+                                {empresa.associado ? "Sim" : "Não"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={empresa.situacaoFinanceira === "Regular" ? "bg-[#DCE7CB] text-[#1C1C1C]" : "bg-red-500 text-white"}>
+                                {empresa.situacaoFinanceira}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{empresa.porte}</TableCell>
+                            <TableCell>{formatCurrency(empresa.capitalSocial)}</TableCell>
+                            <TableCell>{empresa.faixaLabel || "—"}</TableCell>
+                            <TableCell className="text-sm">
+                              <span className="font-semibold">Fundação:</span> {formatDate(empresa.dataFundacao)}
+                              <br />
+                              <span className="font-semibold">Associação:</span> {formatDate(empresa.dataAssociacao)}
+                              <br />
+                              <span className="font-semibold">Desassociação:</span> {formatDate(empresa.dataDesassociacao)}
+                            </TableCell>
+                            <TableCell>
+                              {contato ? (
+                                <div>
+                                  <p className="font-medium">{contato.nome}</p>
+                                  <p className="flex items-center gap-1 text-sm text-muted-foreground">
+                                    <MessageCircle className="h-3.5 w-3.5" /> {contato.whatsapp}
+                                  </p>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleOpenDialog(empresa, true)}
+                                  aria-label={`Visualizar ${empresa.nomeFantasia}`}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleOpenDialog(empresa, false)}
+                                  aria-label={`Editar ${empresa.nomeFantasia}`}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleDelete(empresa)}
+                                  aria-label={`Excluir ${empresa.nomeFantasia}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                  {filteredEmpresas.length === 0 && (
+                    <p className="py-6 text-center text-muted-foreground">Nenhuma empresa encontrada com os filtros selecionados.</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Dialog
+              open={isDialogOpen}
+              onOpenChange={(open) => {
+                if (!open) {
+                  handleCloseDialog();
+                } else {
+                  setIsDialogOpen(true);
+                }
+              }}
+            >
+              <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>{editingEmpresa ? "Editar Empresa" : "Cadastrar Empresa"}</DialogTitle>
+                  <DialogTitle>{editingEmpresa ? (isViewMode ? "Visualizar Empresa" : "Editar Empresa") : "Cadastrar Empresa"}</DialogTitle>
                   <DialogDescription>
-                    Preencha os dados da empresa e seus colaboradores
+                    Preencha os campos obrigatórios para manter os dados atualizados.
                   </DialogDescription>
                 </DialogHeader>
 
                 <div className="space-y-6">
-                  {/* Logo Upload */}
                   <div className="space-y-2">
                     <Label>Logo da Empresa</Label>
-                    <div className="flex gap-4 items-center">
+                    <div className="flex flex-wrap items-center gap-4">
                       {logoPreview && (
-                        <Avatar className="h-16 w-16">
-                          <AvatarImage src={logoPreview} />
+                        <Avatar className="h-16 w-16 border">
+                          <AvatarImage src={logoPreview} alt="Logo da empresa" />
                           <AvatarFallback>Logo</AvatarFallback>
                         </Avatar>
                       )}
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" asChild>
-                          <label htmlFor="logo-upload" className="cursor-pointer">
-                            <Upload className="h-4 w-4 mr-2" />
-                            Upload
-                            <input
-                              id="logo-upload"
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={handleLogoUpload}
-                            />
-                          </label>
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          id="logo-upload"
+                          ref={logoInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleLogoUpload}
+                          disabled={isViewMode}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          disabled={isViewMode}
+                          onClick={() => !isViewMode && logoInputRef.current?.click()}
+                        >
+                          <Upload className="mr-2 h-4 w-4" />
+                          Upload
                         </Button>
-                        {logoPreview && (
+                        {logoPreview && editingEmpresa && (
                           <Button variant="outline" size="sm" onClick={handleLogoDownload}>
-                            <Download className="h-4 w-4 mr-2" />
+                            <Download className="mr-2 h-4 w-4" />
                             Baixar logo
                           </Button>
                         )}
@@ -362,33 +777,35 @@ const Empresas = () => {
                     </div>
                   </div>
 
-                  {/* Company Data */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <Label htmlFor="razaoSocial">Razão Social</Label>
+                      <Label htmlFor="razaoSocial">Razão Social*</Label>
                       <Input
                         id="razaoSocial"
-                        value={formData.razaoSocial || ""}
-                        onChange={(e) => setFormData({ ...formData, razaoSocial: e.target.value })}
                         placeholder="Digite a razão social"
+                        value={formData.razaoSocial || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, razaoSocial: e.target.value }))}
+                        disabled={isViewMode}
                       />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="nomeFantasia">Nome Fantasia</Label>
                       <Input
                         id="nomeFantasia"
-                        value={formData.nomeFantasia || ""}
-                        onChange={(e) => setFormData({ ...formData, nomeFantasia: e.target.value })}
                         placeholder="Digite o nome fantasia"
+                        value={formData.nomeFantasia || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, nomeFantasia: e.target.value }))}
+                        disabled={isViewMode}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="cnpj">CNPJ</Label>
+                      <Label htmlFor="cnpj">CNPJ*</Label>
                       <Input
                         id="cnpj"
-                        value={formData.cnpj || ""}
-                        onChange={(e) => setFormData({ ...formData, cnpj: e.target.value })}
                         placeholder="00.000.000/0000-00"
+                        value={formData.cnpj || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }))}
+                        disabled={isViewMode}
                       />
                     </div>
                     <div className="space-y-2">
@@ -396,103 +813,290 @@ const Empresas = () => {
                       <Input
                         id="email"
                         type="email"
-                        value={formData.email || ""}
-                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                         placeholder="email@empresa.com"
+                        value={formData.email || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
+                        disabled={isViewMode}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="telefone">Telefone/WhatsApp</Label>
+                      <Label htmlFor="whatsapp">WhatsApp (geral)</Label>
                       <Input
-                        id="telefone"
-                        value={formData.telefone || ""}
-                        onChange={(e) => setFormData({ ...formData, telefone: e.target.value })}
+                        id="whatsapp"
                         placeholder="(00) 00000-0000"
+                        value={formData.whatsapp || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, whatsapp: formatPhone(e.target.value) }))}
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="endereco">Endereço</Label>
+                      <Input
+                        id="endereco"
+                        placeholder="Rua, número, bairro, cidade"
+                        value={formData.endereco || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, endereco: e.target.value }))}
+                        disabled={isViewMode}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Associado*</Label>
+                      <Select
+                        value={formData.associado ? "sim" : formData.associado === false ? "nao" : ""}
+                        onValueChange={(value) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            associado: value === "" ? undefined : value === "sim",
+                          }))
+                        }
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Selecione</SelectItem>
+                          <SelectItem value="sim">Sim</SelectItem>
+                          <SelectItem value="nao">Não</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Situação Financeira*</Label>
+                      <Select
+                        value={formData.situacaoFinanceira || ""}
+                        onValueChange={(value) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            situacaoFinanceira: value
+                              ? (value as Empresa["situacaoFinanceira"])
+                              : undefined,
+                          }))
+                        }
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Selecione</SelectItem>
+                          <SelectItem value="Regular">Regular</SelectItem>
+                          <SelectItem value="Inadimplente">Inadimplente</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Porte*</Label>
+                      <Select
+                        value={formData.porte || ""}
+                        onValueChange={(value) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            porte: value ? (value as Empresa["porte"]) : undefined,
+                          }))
+                        }
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Selecione</SelectItem>
+                          {portes.map((porte) => (
+                            <SelectItem key={porte} value={porte}>
+                              {porte}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Capital Social (R$)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        placeholder="0,00"
+                        value={formData.capitalSocial !== undefined ? String(formData.capitalSocial) : ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            capitalSocial: e.target.value ? Number(e.target.value) : undefined,
+                          }))
+                        }
+                        disabled={isViewMode}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="fundacao">Fundação*</Label>
+                      <Input
+                        id="fundacao"
+                        type="date"
+                        value={formData.dataFundacao || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, dataFundacao: e.target.value }))}
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="associacao">Associação</Label>
+                      <Input
+                        id="associacao"
+                        type="date"
+                        value={formData.dataAssociacao || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, dataAssociacao: e.target.value }))}
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="desassociacao">Desassociação</Label>
+                      <Input
+                        id="desassociacao"
+                        type="date"
+                        value={formData.dataDesassociacao || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, dataDesassociacao: e.target.value }))}
+                        disabled={isViewMode}
                       />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="endereco">Endereço Completo</Label>
-                    <Textarea
-                      id="endereco"
-                      value={formData.endereco || ""}
-                      onChange={(e) => setFormData({ ...formData, endereco: e.target.value })}
-                      placeholder="Rua, Número, Bairro, Cidade, Estado, CEP"
-                    />
+                    <Label>Faixa</Label>
+                    <Select
+                      value={formData.faixaId || ""}
+                      onValueChange={handleFaixaChange}
+                      disabled={isViewMode}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione a faixa" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Sem faixa</SelectItem>
+                        {faixas.map((faixa) => (
+                          <SelectItem key={faixa.id} value={faixa.id}>
+                            {faixa.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
-                  {/* Colaboradores */}
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div>
+                      <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsável (opcional)</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Usado como contato principal se houver WhatsApp informado.
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Nome</Label>
+                        <Input
+                          placeholder="Nome do responsável"
+                          value={formData.responsavel?.nome || ""}
+                          onChange={(e) => handleResponsavelChange("nome", e.target.value)}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>WhatsApp</Label>
+                        <Input
+                          placeholder="(00) 00000-0000"
+                          value={formData.responsavel?.whatsapp || ""}
+                          onChange={(e) => handleResponsavelChange("whatsapp", e.target.value)}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-lg">Colaboradores</Label>
-                      <Button variant="outline" size="sm" onClick={addColaborador}>
-                        <Plus className="h-4 w-4 mr-2" />
-                        Adicionar colaborador
-                      </Button>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Colaboradores</h3>
+                        <p className="text-sm text-muted-foreground">Cadastre quantos colaboradores forem necessários.</p>
+                      </div>
+                      {!isViewMode && (
+                        <Button variant="outline" size="sm" onClick={addColaborador} aria-label="Adicionar colaborador">
+                          <Plus className="mr-2 h-4 w-4" /> Adicionar colaborador
+                        </Button>
+                      )}
                     </div>
 
-                    {formData.colaboradores?.map((colaborador, index) => (
-                      <Card key={index}>
-                        <CardContent className="pt-6">
-                          <div className="flex justify-between items-start mb-4">
-                            <h4 className="font-semibold">Colaborador {index + 1}</h4>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeColaborador(index)}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
+                    {(formData.colaboradores || []).map((colaborador, index) => (
+                      <Card key={`colaborador-${index}`} className="border border-dashed">
+                        <CardContent className="space-y-4 pt-6">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-semibold text-[#1C1C1C]">Colaborador {index + 1}</h4>
+                            {!isViewMode && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeColaborador(index)}
+                                aria-label={`Remover colaborador ${index + 1}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="grid gap-4 md:grid-cols-2">
                             <div className="space-y-2">
-                              <Label>Nome</Label>
+                              <Label>Nome*</Label>
                               <Input
+                                placeholder="Nome completo"
                                 value={colaborador.nome}
                                 onChange={(e) => updateColaborador(index, "nome", e.target.value)}
-                                placeholder="Nome completo"
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label>CPF</Label>
+                              <Label>CPF*</Label>
                               <Input
+                                placeholder="000.000.000-00"
                                 value={colaborador.cpf}
                                 onChange={(e) => updateColaborador(index, "cpf", e.target.value)}
-                                placeholder="000.000.000-00"
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label>Telefone/WhatsApp</Label>
+                              <Label>WhatsApp</Label>
                               <Input
-                                value={colaborador.telefone}
-                                onChange={(e) => updateColaborador(index, "telefone", e.target.value)}
                                 placeholder="(00) 00000-0000"
+                                value={colaborador.whatsapp}
+                                onChange={(e) => updateColaborador(index, "whatsapp", e.target.value)}
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label>Cargo/Função</Label>
+                              <Label>Cargo</Label>
                               <Input
+                                placeholder="Cargo ou função"
                                 value={colaborador.cargo}
                                 onChange={(e) => updateColaborador(index, "cargo", e.target.value)}
-                                placeholder="Cargo"
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="space-y-2">
                               <Label>E-mail</Label>
                               <Input
                                 type="email"
+                                placeholder="email@exemplo.com"
                                 value={colaborador.email}
                                 onChange={(e) => updateColaborador(index, "email", e.target.value)}
-                                placeholder="email@exemplo.com"
+                                disabled={isViewMode}
                               />
                             </div>
                             <div className="space-y-2">
                               <Label>Observações</Label>
                               <Input
+                                placeholder="Observações adicionais"
                                 value={colaborador.observacoes || ""}
                                 onChange={(e) => updateColaborador(index, "observacoes", e.target.value)}
-                                placeholder="Observações (opcional)"
+                                disabled={isViewMode}
                               />
                             </div>
                           </div>
@@ -505,13 +1109,37 @@ const Empresas = () => {
                     <Button variant="outline" onClick={handleCloseDialog}>
                       Cancelar
                     </Button>
-                    <Button onClick={handleSave}>
-                      Salvar
-                    </Button>
+                    {!isViewMode && (
+                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90">
+                        Salvar
+                      </Button>
+                    )}
                   </div>
                 </div>
               </DialogContent>
             </Dialog>
+
+            <AlertDialog
+              open={!!empresaToDelete}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setEmpresaToDelete(null);
+                }
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                  <AlertDialogDescription>Esta ação é irreversível.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
+                    Excluir
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </main>
         </div>
       </div>
