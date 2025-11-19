@@ -1,14 +1,12 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { AlertCircle, Cake, Calendar, Flame, PhoneOff, Settings2, Building2 } from "lucide-react";
+import { AlertCircle, Cake, Flame, PhoneOff, Settings2, Building2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -16,18 +14,28 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 
 const crmHighlights = {
-  aniversarios: [
-    { nome: "Estilo Nordeste", data: "2025-04-15", tipo: "empresa" },
-    { nome: "Bruno Lima", empresa: "Moda Sul", data: "2025-04-22", tipo: "responsavel" },
-    { nome: "Juliana Costa", empresa: "Costura Viva", data: "2025-04-03", tipo: "responsavel" }
+  aniversariosMes: [
+    { tipo: "empresa", nome: "Estilo Nordeste", data: "2025-04-15" },
+    { tipo: "responsavel", nome: "Bruno Lima", empresa: "Moda Sul", data: "2025-04-22" },
+    { tipo: "responsavel", nome: "Juliana Costa", empresa: "Costura Viva", data: "2025-04-03" }
   ],
   fundacoes: [
     { empresa: "Confecções Aurora", anos: 12, data: "2025-04-22" },
     { empresa: "Trama Nobre", anos: 5, data: "2025-05-02" }
   ],
-  inadimplentesRecentes: 7
+  casosCriticos60d: 2
 };
 
 const empresas = [
@@ -37,7 +45,6 @@ const empresas = [
     logo: "",
     situacao: "Inadimplente",
     engajamento: 42,
-    beneficios: ["Parceria Unifor", "Convênio Sebrae"],
     beneficiosNaoUtilizados: ["Mentoria ESG"],
     proximoAniversario: "2025-04-15",
     proximoBoleto: {
@@ -45,15 +52,21 @@ const empresas = [
       status: "Em atraso",
       descricao: "Boleto março/25"
     },
-    responsavel: { nome: "Lúcia Costa", whatsapp: "" },
+    responsavel: { nome: "Lúcia Costa", whatsapp: "5585992763253" },
     colaboradores: [{ nome: "Marcelo Dias", whatsapp: "55999887766" }],
+    whatsapp: "5585992763253",
     faixa: "Premium",
     porte: "Médio",
     associada: true,
     multiplosAtrasos: 3,
     diasInadimplente: 70,
     capitalSocial: 500000,
-    dataFundacao: "2013-04-15"
+    dataFundacao: "2013-04-15",
+    aniversarioEmpresa: "2025-04-15",
+    aniversarioResponsavel: "2025-04-22",
+    tags: ["2 meses de atraso, contatar!", "Atualizar cadastro!"],
+    historico: ["2 boletos em atraso", "Associação desde 2014"],
+    observacaoPadrao: "Contato pendente com financeiro."
   },
   {
     id: 2,
@@ -61,7 +74,6 @@ const empresas = [
     logo: "",
     situacao: "Regular",
     engajamento: 58,
-    beneficios: ["Curso Moda Sustentável"],
     beneficiosNaoUtilizados: [],
     proximoAniversario: "2025-04-03",
     proximoBoleto: {
@@ -71,13 +83,19 @@ const empresas = [
     },
     responsavel: { nome: "Ana Pires", whatsapp: "" },
     colaboradores: [],
+    whatsapp: "5585987654321",
     faixa: "Essencial",
     porte: "Pequeno",
     associada: true,
     multiplosAtrasos: 2,
     diasInadimplente: 0,
     capitalSocial: 150000,
-    dataFundacao: "2019-02-10"
+    dataFundacao: "2019-02-10",
+    aniversarioEmpresa: "2025-04-03",
+    aniversarioResponsavel: "2025-06-12",
+    tags: ["Responsável sem WhatsApp", "Completar dados da empresa"],
+    historico: ["Sem atrasos recentes", "Participou do Fórum 2024"],
+    observacaoPadrao: "Enviar guia de benefícios digitais."
   },
   {
     id: 3,
@@ -85,7 +103,6 @@ const empresas = [
     logo: "",
     situacao: "Regular",
     engajamento: 91,
-    beneficios: ["Convênio Sebrae", "Desconto em Insumos", "Mentoria Comercial"],
     beneficiosNaoUtilizados: ["Programa de Exportação"],
     proximoAniversario: "2025-06-18",
     proximoBoleto: {
@@ -95,13 +112,19 @@ const empresas = [
     },
     responsavel: { nome: "Renato Souza", whatsapp: "558899772211" },
     colaboradores: [{ nome: "Paula Sanches", whatsapp: "558899221177" }],
+    whatsapp: "558899772211",
     faixa: "Premium",
     porte: "Grande",
     associada: true,
     multiplosAtrasos: 0,
     diasInadimplente: 0,
     capitalSocial: 1200000,
-    dataFundacao: "2012-04-22"
+    dataFundacao: "2012-04-22",
+    aniversarioEmpresa: "2025-04-22",
+    aniversarioResponsavel: "2025-01-10",
+    tags: ["Atualizar cadastro!"],
+    historico: ["Associação desde 2010"],
+    observacaoPadrao: "Enviar convite para missão empresarial."
   },
   {
     id: 4,
@@ -109,7 +132,6 @@ const empresas = [
     logo: "",
     situacao: "Inadimplente",
     engajamento: 47,
-    beneficios: ["Programa de Mentoria", "Convênio SindRoupas"],
     beneficiosNaoUtilizados: ["Hub de Inovação"],
     proximoAniversario: "2025-04-22",
     proximoBoleto: {
@@ -119,13 +141,19 @@ const empresas = [
     },
     responsavel: { nome: "Bruno Lima", whatsapp: "" },
     colaboradores: [{ nome: "Sara Nunes", whatsapp: "55988123000" }],
+    whatsapp: "55988123000",
     faixa: "Essencial",
     porte: "Médio",
     associada: false,
     multiplosAtrasos: 1,
     diasInadimplente: 35,
     capitalSocial: 230000,
-    dataFundacao: "2015-04-22"
+    dataFundacao: "2015-04-22",
+    aniversarioEmpresa: "2025-04-22",
+    aniversarioResponsavel: "2025-04-22",
+    tags: ["2 meses de atraso, contatar!", "Responsável sem WhatsApp"],
+    historico: ["1 boleto em atraso", "Associação cancelada em 2023"],
+    observacaoPadrao: "Confirmar retomada de associação."
   },
   {
     id: 5,
@@ -133,7 +161,6 @@ const empresas = [
     logo: "",
     situacao: "Regular",
     engajamento: 76,
-    beneficios: ["Convênio SindRoupas"],
     beneficiosNaoUtilizados: [],
     proximoAniversario: "2025-05-02",
     proximoBoleto: {
@@ -143,13 +170,19 @@ const empresas = [
     },
     responsavel: null,
     colaboradores: [{ nome: "Felipe Duarte", whatsapp: "" }],
+    whatsapp: "",
     faixa: "Expansão",
     porte: "Pequeno",
     associada: false,
     multiplosAtrasos: 0,
     diasInadimplente: 0,
     capitalSocial: 0,
-    dataFundacao: ""
+    dataFundacao: "",
+    aniversarioEmpresa: "2025-05-02",
+    aniversarioResponsavel: undefined,
+    tags: ["Completar dados da empresa"],
+    historico: ["Sem histórico crítico"],
+    observacaoPadrao: "Solicitar envio de logomarca."
   }
 ];
 
@@ -203,12 +236,59 @@ const getResponsavel = (empresa: (typeof empresas)[number]) => {
   return empresa.colaboradores[0] ?? null;
 };
 
+const formatWhatsappDisplay = (value?: string) => {
+  if (!value) return "Sem WhatsApp";
+  const digits = value.replace(/\D/g, "");
+  if (digits.length < 10) {
+    return value;
+  }
+  const sanitized = digits.startsWith("55") ? digits.slice(2) : digits;
+  const ddd = sanitized.slice(0, 2);
+  const numberPart = sanitized.slice(2);
+  if (numberPart.length === 9) {
+    return `(${ddd}) ${numberPart.slice(0, 5)}-${numberPart.slice(5)}`;
+  }
+  if (numberPart.length === 8) {
+    return `(${ddd}) ${numberPart.slice(0, 4)}-${numberPart.slice(4)}`;
+  }
+  return `+${digits}`;
+};
+
+const getWhatsappLink = (value?: string) => {
+  if (!value) return undefined;
+  return `https://wa.me/${value}`;
+};
+
 const CRM = () => {
-  const navigate = useNavigate();
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   const [associacaoFilter, setAssociacaoFilter] = useState<string | undefined>();
   const [porteFilter, setPorteFilter] = useState<string | undefined>();
   const [faixaFilter, setFaixaFilter] = useState<string | undefined>();
+  const [selectedCompany, setSelectedCompany] = useState<(typeof empresas)[number] | null>(null);
+  const [notesCompany, setNotesCompany] = useState<(typeof empresas)[number] | null>(null);
+  const [notes, setNotes] = useState<Record<number, string>>(() => {
+    const initial: Record<number, string> = {};
+    empresas.forEach((empresa) => {
+      initial[empresa.id] = empresa.observacaoPadrao ?? "";
+    });
+    return initial;
+  });
+  const [notesDraft, setNotesDraft] = useState("");
+  const openDetailModal = (empresa: (typeof empresas)[number]) => setSelectedCompany(empresa);
+  const closeDetailModal = () => setSelectedCompany(null);
+  const openNotesModal = (empresa: (typeof empresas)[number]) => {
+    setNotesCompany(empresa);
+    setNotesDraft(notes[empresa.id] ?? "");
+  };
+  const closeNotesModal = () => {
+    setNotesCompany(null);
+    setNotesDraft("");
+  };
+  const handleSaveNotes = () => {
+    if (!notesCompany) return;
+    setNotes((prev) => ({ ...prev, [notesCompany.id]: notesDraft }));
+    closeNotesModal();
+  };
 
   const empresasSemWhatsapp = useMemo(() => {
     return empresas
@@ -258,11 +338,11 @@ const CRM = () => {
   }, []);
 
   const { cells: calendarCells, highlightedDays } = useMemo(() => {
-    return getMonthCalendar(crmHighlights.aniversarios);
+    return getMonthCalendar(crmHighlights.aniversariosMes);
   }, []);
 
   const proximosAniversariosSemana = useMemo(() => {
-    return crmHighlights.aniversarios
+    return crmHighlights.aniversariosMes
       .filter((evento) => isWithinNextDays(evento.data, 7))
       .sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
   }, []);
@@ -376,20 +456,25 @@ const CRM = () => {
             <section className="grid gap-4 md:grid-cols-2">
               {/* Card 1 */}
               <Card className="border-[#E1E8D3] shadow-sm bg-white">
-                <CardHeader className="flex flex-row items-center justify-between gap-2">
-                  <div>
+                <CardHeader className="space-y-3">
+                  <div className="flex flex-col gap-1">
                     <CardTitle className="text-lg flex items-center gap-2">
                       <Cake className="h-4 w-4 text-[#7E8C5E]" />
                       Aniversariantes do mês
                     </CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      Destaque automático para empresas, responsáveis e colaboradores.
+                      Aniversários de empresas e responsáveis (mês atual).
                     </p>
                   </div>
                   {aniversariosHoje.length > 0 && (
-                    <Badge className="bg-[#DCE7CB] text-[#1C1C1C]">
-                      🎉 Hoje: {aniversariosHoje[0].nome}
-                    </Badge>
+                    <div className="flex flex-wrap gap-2">
+                      {aniversariosHoje.map((evento) => (
+                        <Badge key={`${evento.nome}-${evento.data}`} className="bg-[#DCE7CB] text-[#1C1C1C]">
+                          🎉 Hoje: {evento.nome}
+                          {evento.empresa && ` / ${evento.empresa}`}
+                        </Badge>
+                      ))}
+                    </div>
                   )}
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -422,24 +507,30 @@ const CRM = () => {
                   </div>
                   <div className="space-y-2">
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Próximos 7 dias
+                      Próximos aniversários
                     </p>
-                    {proximosAniversariosSemana.length === 0 && (
-                      <p className="text-sm text-muted-foreground">Sem aniversários próximos.</p>
+                    {crmHighlights.aniversariosMes.length === 0 && (
+                      <p className="text-sm text-muted-foreground">Sem aniversários para este mês.</p>
                     )}
-                    {proximosAniversariosSemana.map((evento) => (
+                    {crmHighlights.aniversariosMes.map((evento) => (
                       <div
                         key={`${evento.nome}-${evento.data}`}
                         className="flex items-center justify-between text-sm"
                       >
-                        <span>
-                          {evento.nome}
-                          {evento.empresa && <span className="text-muted-foreground"> — {evento.empresa}</span>}
-                        </span>
-                        <span className="font-medium text-[#7E8C5E]">{formatDate(evento.data)}</span>
+                        <div>
+                          <span className="font-medium text-[#1C1C1C]">{evento.nome}</span>
+                          <p className="text-xs text-muted-foreground">
+                            {evento.tipo === "responsavel" ? "Responsável" : "Empresa"}
+                            {evento.empresa ? ` • ${evento.empresa}` : ""}
+                          </p>
+                        </div>
+                        <span className="font-semibold text-[#7E8C5E]">{formatDate(evento.data)}</span>
                       </div>
                     ))}
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Informações combinadas para empresas e responsáveis sem necessidade de cadastros extras.
+                  </p>
                 </CardContent>
               </Card>
 
@@ -484,19 +575,25 @@ const CRM = () => {
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div>
-                    <p className="text-4xl font-bold">{crmHighlights.inadimplentesRecentes}</p>
-                    <p className="text-sm text-muted-foreground">entraram em inadimplência</p>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg bg-[#FDECEC] p-3">
+                  <div className="flex items-center justify-between rounded-lg border border-[#F5C1C1] bg-[#FDECEC] p-4">
                     <div>
-                      <p className="text-sm font-medium">Casos &gt; 60 dias</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-base font-semibold text-[#1C1C1C]">Casos &gt; 60 dias</p>
+                      <p className="text-xs text-[#8A3A3A]">
                         Ação imediata sugerida pela régua financeira.
                       </p>
                     </div>
-                    <Badge className="bg-[#E57373] text-white">{inadimplentesCriticos}</Badge>
+                    <Badge className="bg-[#E57373] text-white text-lg px-4 py-2">{inadimplentesCriticos}</Badge>
                   </div>
+                  <Button
+                    variant="link"
+                    className="px-0 text-[#7E8C5E]"
+                    asChild
+                    aria-label="Ver detalhes no Financeiro"
+                  >
+                    <a href="/financeiro" className="font-semibold">
+                      Ver detalhes no Financeiro
+                    </a>
+                  </Button>
                 </CardContent>
               </Card>
 
@@ -646,131 +743,273 @@ const CRM = () => {
               </div>
             </section>
 
-            <section className="grid gap-4">
-              {sortedCompanies.map((empresa) => {
-                const responsavel = getResponsavel(empresa);
-                const isInadimplente = empresa.situacao === "Inadimplente";
-                const boletoCritico = empresa.proximoBoleto.status === "Em atraso";
-                return (
-                  <Card key={empresa.id} className="border-[#E1E8D3] shadow-sm bg-white">
-                    <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="flex items-center gap-4">
-                        <Avatar className="h-14 w-14 border border-[#E1E8D3]">
-                          <AvatarImage src={empresa.logo} alt={empresa.nome} />
-                          <AvatarFallback className="bg-[#DCE7CB] text-[#1C1C1C] font-semibold">
-                            {empresa.nome
-                              .split(" ")
-                              .slice(0, 2)
-                              .map((parte) => parte[0])
-                              .join("")}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <CardTitle className="text-xl">{empresa.nome}</CardTitle>
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            <Badge
-                              className={
-                                isInadimplente
-                                  ? "bg-[#E57373] text-white"
-                                  : "bg-[#DCE7CB] text-[#1C1C1C]"
-                              }
-                            >
-                              Situação financeira: {empresa.situacao}
-                            </Badge>
-                            <Badge variant="outline" className="border-[#7E8C5E] text-[#7E8C5E]">
-                              Faixa: {empresa.faixa}
-                            </Badge>
-                            <Badge variant="outline" className="border-[#1C1C1C] text-[#1C1C1C]">
-                              Porte: {empresa.porte || "—"}
-                            </Badge>
-                          </div>
-                        </div>
-                      </div>
-                      <Button
-                        variant="outline"
-                        className="border-[#7E8C5E] text-[#1C1C1C]"
-                        onClick={() => navigate(`/dashboard/crm/${empresa.id}`)}
-                        aria-label={`Ver detalhes de ${empresa.nome}`}
-                      >
-                        Ver detalhes
-                      </Button>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">Engajamento</p>
-                          <div className="flex items-center gap-2">
-                            <span className="text-3xl font-semibold">{empresa.engajamento}%</span>
-                          </div>
-                          <Progress value={empresa.engajamento} className="h-2" />
-                        </div>
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">Benefícios ativos</p>
-                          <div className="flex flex-wrap gap-2">
-                            {empresa.beneficios.map((beneficio) => (
-                              <Badge key={beneficio} variant="secondary" className="bg-[#F7F8F4] text-[#1C1C1C]">
-                                {beneficio}
+            <section className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {sortedCompanies.map((empresa) => {
+                  const responsavel = getResponsavel(empresa);
+                  const isInadimplente = empresa.situacao === "Inadimplente";
+                  const boletoCritico = empresa.proximoBoleto.status === "Em atraso";
+                  const whatsappLink = getWhatsappLink(empresa.whatsapp);
+                  return (
+                    <Card key={empresa.id} className="border-[#E1E8D3] shadow-sm bg-white flex flex-col">
+                      <CardHeader className="space-y-4">
+                        <div className="flex items-start gap-4">
+                          <Avatar className="h-14 w-14 border border-[#E1E8D3]">
+                            <AvatarImage src={empresa.logo} alt={empresa.nome} />
+                            <AvatarFallback className="bg-[#DCE7CB] text-[#1C1C1C] font-semibold">
+                              {empresa.nome
+                                .split(" ")
+                                .slice(0, 2)
+                                .map((parte) => parte[0])
+                                .join("")}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1">
+                            <CardTitle className="text-xl">{empresa.nome}</CardTitle>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <Badge
+                                className={
+                                  isInadimplente
+                                    ? "bg-[#E57373] text-white"
+                                    : "bg-[#DCE7CB] text-[#1C1C1C]"
+                                }
+                              >
+                                Situação financeira: {empresa.situacao}
                               </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2 text-sm">
-                          <p className="text-muted-foreground">Próximo aniversário</p>
-                          <div className="flex items-center gap-2">
-                            <Calendar className="h-4 w-4 text-[#7E8C5E]" />
-                            <span>{formatDate(empresa.proximoAniversario ?? undefined)}</span>
-                          </div>
-                          {empresa.beneficiosNaoUtilizados && empresa.beneficiosNaoUtilizados.length > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              Benefícios a ativar: {empresa.beneficiosNaoUtilizados.join(", ")}
-                            </p>
-                          )}
-                        </div>
-                        <div className="space-y-2 text-sm">
-                          <p className="text-muted-foreground">Próximo boleto / pendências</p>
-                          <div className="flex items-center gap-2">
-                            <AlertCircle className={`h-4 w-4 ${boletoCritico ? "text-[#E57373]" : "text-[#7E8C5E]"}`} />
-                            <div>
-                              <p className="font-medium">{empresa.proximoBoleto.descricao}</p>
-                              <p className={boletoCritico ? "text-[#E57373]" : "text-muted-foreground"}>
-                                {empresa.proximoBoleto.status} • {formatDate(empresa.proximoBoleto.data)}
-                              </p>
+                              {empresa.faixa && (
+                                <Badge variant="outline" className="border-[#7E8C5E] text-[#7E8C5E]">
+                                  Faixa: {empresa.faixa}
+                                </Badge>
+                              )}
+                              {empresa.porte && (
+                                <Badge variant="outline" className="border-[#1C1C1C] text-[#1C1C1C]">
+                                  Porte: {empresa.porte}
+                                </Badge>
+                              )}
                             </div>
                           </div>
                         </div>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-3 text-sm">
-                        <div>
-                          <p className="text-muted-foreground">Responsável</p>
-                          <p className="font-medium">{responsavel?.nome ?? "—"}</p>
-                          <p className="text-muted-foreground">
-                            {responsavel?.whatsapp ? `WhatsApp: ${responsavel.whatsapp}` : "Sem WhatsApp"}
-                          </p>
+                        {empresa.tags && empresa.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {empresa.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="rounded-full bg-[#EEF4E0] px-3 py-1 text-xs font-medium text-[#4F5B3A]"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4 text-sm flex-1">
+                        <div className="space-y-1">
+                          <p className="text-muted-foreground">WhatsApp de contato</p>
+                          <div className="flex flex-wrap items-center gap-3 justify-between">
+                            <span className="text-base font-semibold text-[#1C1C1C]">
+                              {formatWhatsappDisplay(empresa.whatsapp)}
+                            </span>
+                            {whatsappLink ? (
+                              <Button
+                                variant="outline"
+                                className="border-[#7E8C5E] text-[#1C1C1C]"
+                                asChild
+                                aria-label={`Abrir WhatsApp de ${empresa.nome}`}
+                              >
+                                <a href={whatsappLink} target="_blank" rel="noreferrer">
+                                  Abrir WhatsApp
+                                </a>
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                className="border-[#E1E8D3] text-muted-foreground"
+                                disabled
+                                aria-label={`Abrir WhatsApp de ${empresa.nome}`}
+                              >
+                                Abrir WhatsApp
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-muted-foreground">Associação</p>
-                          <p className="font-medium">{empresa.associada ? "Sim" : "Não"}</p>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <p className="text-muted-foreground">Próximo boleto / pendências</p>
+                            <div className="flex items-start gap-2">
+                              <AlertCircle
+                                className={`h-4 w-4 ${boletoCritico ? "text-[#E57373]" : "text-[#7E8C5E]"}`}
+                              />
+                              <div>
+                                <p className="font-medium">{empresa.proximoBoleto.descricao}</p>
+                                <p className={boletoCritico ? "text-[#E57373]" : "text-muted-foreground"}>
+                                  {empresa.proximoBoleto.status} • {formatDate(empresa.proximoBoleto.data)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-muted-foreground">Responsável</p>
+                            <p className="font-medium">{responsavel?.nome ?? "—"}</p>
+                            <p className="text-muted-foreground">
+                              {responsavel?.whatsapp
+                                ? `WhatsApp: ${formatWhatsappDisplay(responsavel.whatsapp)}`
+                                : "Sem WhatsApp"}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-muted-foreground">Capital social</p>
-                          <p className="font-medium">
-                            {empresa.capitalSocial
-                              ? empresa.capitalSocial.toLocaleString("pt-BR", {
-                                  style: "currency",
-                                  currency: "BRL",
-                                  maximumFractionDigits: 0
-                                })
-                              : "Não informado"}
-                          </p>
+                        <div className="space-y-1 text-sm text-[#1C1C1C]">
+                          {empresa.aniversarioResponsavel && (
+                            <p>Aniversário do responsável: {formatDate(empresa.aniversarioResponsavel)}</p>
+                          )}
+                          {empresa.aniversarioEmpresa && (
+                            <p>Aniversário da empresa: {formatDate(empresa.aniversarioEmpresa)}</p>
+                          )}
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                        <div className="flex flex-wrap gap-2 pt-2 mt-auto">
+                          <Button
+                            variant="outline"
+                            className="border-[#7E8C5E] text-[#1C1C1C]"
+                            onClick={() => openDetailModal(empresa)}
+                            aria-label={`Ver detalhes de ${empresa.nome}`}
+                          >
+                            Ver detalhes
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            className="bg-[#F7F8F4] text-[#1C1C1C] border border-[#E1E8D3]"
+                            onClick={() => openNotesModal(empresa)}
+                            aria-label={`Observações de ${empresa.nome}`}
+                          >
+                            Observações
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             </section>
+
+            <Dialog open={!!selectedCompany} onOpenChange={(open) => { if (!open) closeDetailModal(); }}>
+              <DialogContent aria-label="Detalhes da empresa" className="max-w-xl">
+                {selectedCompany && (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>{selectedCompany.nome}</DialogTitle>
+                      <DialogDescription>Resumo rápido do relacionamento e da situação atual.</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 text-sm">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge
+                          className={
+                            selectedCompany.situacao === "Inadimplente"
+                              ? "bg-[#E57373] text-white"
+                              : "bg-[#DCE7CB] text-[#1C1C1C]"
+                          }
+                        >
+                          Situação financeira: {selectedCompany.situacao}
+                        </Badge>
+                        {selectedCompany.faixa && (
+                          <Badge variant="outline" className="border-[#7E8C5E] text-[#7E8C5E]">
+                            Faixa: {selectedCompany.faixa}
+                          </Badge>
+                        )}
+                        {selectedCompany.porte && (
+                          <Badge variant="outline" className="border-[#1C1C1C] text-[#1C1C1C]">
+                            Porte: {selectedCompany.porte}
+                          </Badge>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground font-medium">Situação financeira atual</p>
+                        <p className="text-lg font-semibold text-[#1C1C1C]">{selectedCompany.situacao}</p>
+                      </div>
+                      {selectedCompany.historico && (
+                        <div>
+                          <p className="text-muted-foreground font-medium mb-1">Histórico rápido</p>
+                          <ul className="list-disc pl-5 space-y-1">
+                            {selectedCompany.historico.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-[#E1E8D3] p-3">
+                          <p className="text-xs uppercase text-muted-foreground">Aniversário da empresa</p>
+                          <p className="text-base font-semibold text-[#1C1C1C]">
+                            {formatDate(selectedCompany.aniversarioEmpresa)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-[#E1E8D3] p-3">
+                          <p className="text-xs uppercase text-muted-foreground">Aniversário do responsável</p>
+                          <p className="text-base font-semibold text-[#1C1C1C]">
+                            {formatDate(selectedCompany.aniversarioResponsavel)}
+                          </p>
+                        </div>
+                      </div>
+                      {selectedCompany.tags && selectedCompany.tags.length > 0 && (
+                        <div>
+                          <p className="text-muted-foreground font-medium mb-1">Tags atuais</p>
+                          <div className="flex flex-wrap gap-2">
+                            {selectedCompany.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="rounded-full bg-[#EEF4E0] px-3 py-1 text-xs font-medium text-[#4F5B3A]"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={closeDetailModal} aria-label="Fechar detalhes">
+                        Fechar
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={!!notesCompany} onOpenChange={(open) => { if (!open) closeNotesModal(); }}>
+              <DialogContent aria-label="Observações da empresa" className="max-w-lg">
+                {notesCompany && (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>Observações — {notesCompany.nome}</DialogTitle>
+                      <DialogDescription>
+                        Notas rápidas para lembrar ações importantes desta empresa.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                      <Label htmlFor="observacoes-textarea">Observações</Label>
+                      <Textarea
+                        id="observacoes-textarea"
+                        placeholder="Digite algo importante para lembrar sobre esta empresa…"
+                        value={notesDraft}
+                        onChange={(event) => setNotesDraft(event.target.value)}
+                        rows={5}
+                      />
+                    </div>
+                    <DialogFooter className="gap-2 sm:gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={closeNotesModal}
+                        aria-label="Cancelar observações"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button onClick={handleSaveNotes} aria-label="Salvar observações">
+                        Salvar
+                      </Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
 
             <p className="text-sm text-muted-foreground text-center">
               CRM atualizado com alertas inteligentes e lista priorizada.
