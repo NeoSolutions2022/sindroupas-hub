@@ -31,10 +31,10 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
   Calendar,
+  ChevronDown,
   Download,
   Edit,
   Eye,
-  Filter,
   MessageCircle,
   Plus,
   Search,
@@ -476,56 +476,73 @@ const Empresas = () => {
               </Button>
             </div>
 
-            <Card className="border-none shadow-lg">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg text-[#1C1C1C]">Filtros e busca</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      aria-label="Buscar empresa ou colaborador"
-                      placeholder="Buscar por empresa, CNPJ ou colaborador"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-10"
-                    />
-                    {colaboradorMatch && (
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        {colaboradorMatch.colaboradorNome} • Colaborador — {colaboradorMatch.empresaNome}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Filter className="h-4 w-4" />
-                    Ajuste os filtros para refinar a lista
-                  </div>
+            <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-col gap-1">
+                  <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
+                  <span className="text-xs text-muted-foreground">Refine a visualização das empresas com os filtros abaixo.</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
+                  onClick={() => {
+                    setSearchTerm("");
+                    setAssociationFilter("Todas");
+                    setSituacaoFilter("Todas");
+                    setPorteFilter("");
+                    setFaixaFilter("");
+                    setPeriodoTipo("fundacao");
+                    setPeriodoInicio("");
+                    setPeriodoFim("");
+                  }}
+                  aria-label="Limpar filtros"
+                >
+                  Limpar filtros
+                </Button>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                <div className="relative w-full lg:max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    aria-label="Buscar empresa ou colaborador"
+                    placeholder="Buscar por nome, CNPJ ou palavra-chave…"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="h-11 rounded-full border-[#CBD5B1] bg-white pl-10 text-sm"
+                  />
+                  {colaboradorMatch && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {colaboradorMatch.colaboradorNome} • Colaborador — {colaboradorMatch.empresaNome}
+                    </p>
+                  )}
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="flex gap-2 rounded-lg bg-neutral-100 p-2">
+                <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="flex gap-2 rounded-full bg-white p-1 shadow-sm">
                     {["Todas", "Associadas", "Não associadas"].map((status) => (
                       <Button
                         key={status}
                         type="button"
                         variant={associationFilter === status ? "default" : "ghost"}
                         className={cn(
-                          "flex-1 border",
-                          associationFilter === status
-                            ? "bg-[#1C1C1C] text-white"
-                            : "bg-white text-[#1C1C1C]"
+                          "flex-1 justify-between rounded-full border border-[#CBD5B1] bg-white text-sm text-[#1C1C1C] shadow-none",
+                          associationFilter === status && "bg-[#1C1C1C] text-white"
                         )}
                         onClick={() => setAssociationFilter(status as typeof associationFilter)}
                         aria-label={`Filtrar por ${status}`}
                       >
-                        {status}
+                        <span>{status}</span>
+                        <ChevronDown className="h-4 w-4" />
                       </Button>
                     ))}
                   </div>
 
                   <Select value={situacaoFilter} onValueChange={(value) => setSituacaoFilter(value as typeof situacaoFilter)}>
-                    <SelectTrigger aria-label="Filtrar por situação financeira">
+                    <SelectTrigger
+                      aria-label="Filtrar por situação financeira"
+                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
+                    >
                       <SelectValue placeholder="Situação Financeira" />
                     </SelectTrigger>
                     <SelectContent>
@@ -539,7 +556,10 @@ const Empresas = () => {
                     value={porteFilter || "all"}
                     onValueChange={(value) => setPorteFilter(value === "all" ? "" : value)}
                   >
-                    <SelectTrigger aria-label="Filtrar por porte">
+                    <SelectTrigger
+                      aria-label="Filtrar por porte"
+                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
+                    >
                       <SelectValue placeholder="Porte" />
                     </SelectTrigger>
                     <SelectContent>
@@ -556,7 +576,10 @@ const Empresas = () => {
                     value={faixaFilter || "all"}
                     onValueChange={(value) => setFaixaFilter(value === "all" ? "" : value)}
                   >
-                    <SelectTrigger aria-label="Filtrar por faixa">
+                    <SelectTrigger
+                      aria-label="Filtrar por faixa"
+                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
+                    >
                       <SelectValue placeholder="Faixa" />
                     </SelectTrigger>
                     <SelectContent>
@@ -569,46 +592,51 @@ const Empresas = () => {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
 
-                <div className="grid gap-3 md:grid-cols-3">
-                  <Select
-                    value={periodoTipo}
-                    onValueChange={(value) =>
-                      setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
-                    }
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <Select
+                  value={periodoTipo}
+                  onValueChange={(value) =>
+                    setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
+                  }
+                >
+                  <SelectTrigger
+                    aria-label="Selecionar período para filtro"
+                    className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
                   >
-                    <SelectTrigger aria-label="Selecionar período para filtro">
-                      <SelectValue placeholder="Período" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {periodoOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <Input
-                      type="date"
-                      value={periodoInicio}
-                      onChange={(e) => setPeriodoInicio(e.target.value)}
-                      aria-label="Data inicial do período"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <Input
-                      type="date"
-                      value={periodoFim}
-                      onChange={(e) => setPeriodoFim(e.target.value)}
-                      aria-label="Data final do período"
-                    />
-                  </div>
+                    <SelectValue placeholder="Período" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {periodoOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="date"
+                    value={periodoInicio}
+                    onChange={(e) => setPeriodoInicio(e.target.value)}
+                    aria-label="Data inicial do período"
+                    className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
+                  />
                 </div>
-              </CardContent>
-            </Card>
+                <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="date"
+                    value={periodoFim}
+                    onChange={(e) => setPeriodoFim(e.target.value)}
+                    aria-label="Data final do período"
+                    className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
+                  />
+                </div>
+              </div>
+            </div>
 
             <Card className="border-none shadow-lg">
               <CardHeader>
