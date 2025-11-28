@@ -15,10 +15,13 @@ import {
   CalendarClock,
   ChartNoAxesColumn,
   CircleAlert,
+  Cake,
+  ListChecks,
   DollarSign,
   FileSpreadsheet,
   Layers,
   Sparkles,
+  Users,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -58,6 +61,18 @@ const dashboardData = {
     { empresa: "Costura Viva", data: "2025-11-12", valor: 850, status: "A vencer" },
     { empresa: "Confecções Aurora", data: "2025-11-08", valor: 600, status: "Hoje" },
   ],
+};
+
+const crmResumo = {
+  aniversariantesSemana: [
+    { tipo: "empresa", nome: "Estilo Nordeste", data: "2025-04-15" },
+    { tipo: "responsavel", nome: "Bruno Lima", empresa: "ModaSul", data: "2025-04-22" },
+  ],
+  tagsAtencao: {
+    atraso2meses: 4,
+    atualizarCadastro: 6,
+  },
+  cadastrosIncompletos: 12,
 };
 
 const formatCurrency = (value: number) =>
@@ -222,6 +237,92 @@ const Dashboard = () => {
                     <p className="text-xs text-muted-foreground">
                       {inadimplenciaPercentual.toFixed(1)}% da carteira está inadimplente
                     </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </section>
+
+            <section aria-label="Resumo de relacionamento (CRM)">
+              <Card className="border-[#E1E8D3] shadow-sm">
+                <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="flex items-center gap-2 text-primary">
+                      <Users className="h-5 w-5 text-[#7E8C5E]" />
+                      Resumo de Relacionamento (CRM)
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Destaques rápidos do CRM para atuação imediata da equipe.
+                    </p>
+                  </div>
+                  <Button asChild variant="secondary" className="bg-[#DCE7CB] text-primary">
+                    <Link to="/crm" aria-label="Abrir CRM completo">
+                      Abrir CRM completo
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Link>
+                  </Button>
+                </CardHeader>
+                <CardContent className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-lg border border-[#E1E8D3] bg-[#F7F8F4] p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                      <Cake className="h-4 w-4 text-[#7E8C5E]" />
+                      Aniversariantes da semana
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {crmResumo.aniversariantesSemana.length} aniversariantes esta semana
+                    </p>
+                    <ul className="space-y-2 text-sm">
+                      {crmResumo.aniversariantesSemana.slice(0, 3).map((item) => (
+                        <li key={`${item.nome}-${item.data}`} className="flex flex-col">
+                          <span className="font-medium text-primary">
+                            {new Date(item.data).toLocaleDateString("pt-BR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                            })}
+                            {" "}
+                            — {item.nome}
+                            {item.empresa ? ` (${item.empresa})` : ""}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {item.tipo === "empresa" ? "empresa" : "responsável"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="rounded-lg border border-[#E1E8D3] bg-white p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                      <ListChecks className="h-4 w-4 text-[#7E8C5E]" />
+                      Tags de atenção
+                    </div>
+                    <div className="space-y-2 text-sm text-primary">
+                      <div className="flex items-center justify-between rounded-md bg-[#F7F8F4] px-3 py-2">
+                        <span className="text-muted-foreground">"2 meses de atraso, contatar!"</span>
+                        <span className="font-semibold">{crmResumo.tagsAtencao.atraso2meses} empresas</span>
+                      </div>
+                      <div className="flex items-center justify-between rounded-md bg-[#F7F8F4] px-3 py-2">
+                        <span className="text-muted-foreground">"Atualizar cadastro!"</span>
+                        <span className="font-semibold">{crmResumo.tagsAtencao.atualizarCadastro} empresas</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-[#E1E8D3] bg-white p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                      <BadgeInfo className="h-4 w-4 text-[#7E8C5E]" />
+                      Dados de cadastro
+                    </div>
+                    <p className="text-sm text-primary font-semibold">
+                      {crmResumo.cadastrosIncompletos} empresas com dados incompletos
+                    </p>
+                    <p className="text-sm text-muted-foreground">Consulte o CRM para completar informações.</p>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-center border-[#7E8C5E] text-primary"
+                      onClick={() => navigate("/crm?filtro=dados-incompletos")}
+                    >
+                      Ver no CRM
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

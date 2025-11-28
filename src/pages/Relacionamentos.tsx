@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search, Plus, Pencil, Trash2, Eye } from "lucide-react";
+import { ChevronDown, Mail, MessageCircle, Plus, Pencil, Search, Trash2, Eye } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -44,6 +44,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
 type StatusParceiro = "Ativo" | "Em avaliação" | "Encerrado";
@@ -58,7 +65,7 @@ interface Relacionamento {
   categoria?: string;
   status: StatusParceiro | StatusMantenedor | StatusFornecedor;
   ultimaMov?: string;
-  contatos?: { email?: string; whatsapp?: string };
+  contatos?: { nome?: string; email?: string; whatsapp?: string };
   descricao?: string;
   aportes?: { valor: number; data: string }[];
   contrapartidas?: string;
@@ -74,7 +81,11 @@ const mockRelacionamentos: Relacionamento[] = [
     categoria: "Fomento",
     status: "Ativo",
     ultimaMov: "2025-10-21 • Termo de cooperação",
-    contatos: { email: "contato@sebrae.ce.gov.br", whatsapp: "(85) 3421-0000" },
+    contatos: {
+      nome: "Ana Paula",
+      email: "ana.paula@sebrae.com",
+      whatsapp: "5585988887777",
+    },
     descricao: "Parceria para desenvolvimento empresarial",
   },
   {
@@ -84,7 +95,7 @@ const mockRelacionamentos: Relacionamento[] = [
     categoria: "Associação",
     status: "Ativo",
     ultimaMov: "2025-09-15 • Workshop conjunto",
-    contatos: { email: "firjan@firjan.org.br" },
+    contatos: { nome: "Contato Institucional", email: "firjan@firjan.org.br" },
   },
   {
     id: "m1",
@@ -93,7 +104,11 @@ const mockRelacionamentos: Relacionamento[] = [
     cnpj: "11.222.333/0001-44",
     status: "Ativo",
     ultimaMov: "Aporte R$ 50.000 em 2025-09-12",
-    contatos: { email: "contato@textilnordeste.com.br", whatsapp: "(85) 99999-8888" },
+    contatos: {
+      nome: "Carlos Monteiro",
+      email: "contato@textilnordeste.com.br",
+      whatsapp: "5585999998888",
+    },
     aportes: [
       { valor: 50000, data: "2025-09-12" },
       { valor: 30000, data: "2025-03-15" },
@@ -108,7 +123,11 @@ const mockRelacionamentos: Relacionamento[] = [
     categoria: "Papelaria",
     status: "Ativo",
     ultimaMov: "Pagamento R$ 2.100 em 2025-10-02",
-    contatos: { email: "comercial@graficaverde.com", whatsapp: "(85) 98765-4321" },
+    contatos: {
+      nome: "Marina Costa",
+      email: "comercial@graficaverde.com",
+      whatsapp: "5585987654321",
+    },
     ultimoPagamento: { data: "2025-10-02", valor: 2100 },
   },
   {
@@ -119,7 +138,7 @@ const mockRelacionamentos: Relacionamento[] = [
     categoria: "Audiovisual",
     status: "Ativo",
     ultimaMov: "Pagamento R$ 5.800 em 2025-10-15",
-    contatos: { email: "eventos@techaudio.com.br" },
+    contatos: { nome: "Contato Comercial", email: "eventos@techaudio.com.br" },
     ultimoPagamento: { data: "2025-10-15", valor: 5800 },
   },
 ];
@@ -134,6 +153,7 @@ export default function Relacionamentos() {
   const [tipoFilter, setTipoFilter] = useState<TipoRelacionamento[]>([]);
   const [categoriaFilter, setCategoriaFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const tipoOptions: TipoRelacionamento[] = ["Parceiro", "Mantenedor", "Fornecedor"];
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -166,6 +186,13 @@ export default function Relacionamentos() {
     setTipoFilter((prev) =>
       prev.includes(tipo) ? prev.filter((t) => t !== tipo) : [...prev, tipo]
     );
+  };
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setTipoFilter([]);
+    setCategoriaFilter("");
+    setStatusFilter("");
   };
 
   const resetForm = () => {
@@ -240,6 +267,13 @@ export default function Relacionamentos() {
     return "secondary";
   };
 
+  const formatWhatsappLink = (whatsapp?: string) => {
+    if (!whatsapp) return null;
+    const digits = whatsapp.replace(/\D/g, "");
+    if (!digits) return null;
+    return `https://wa.me/${digits}`;
+  };
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen w-full">
@@ -258,81 +292,99 @@ export default function Relacionamentos() {
               </div>
 
               {/* Search & Filters */}
-              <Card className="p-4">
-                <div className="space-y-4">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
+                    <span className="text-xs text-muted-foreground">Aplique combinações de filtros para encontrar relacionamentos com rapidez.</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
+                    onClick={clearFilters}
+                    aria-label="Limpar filtros"
+                  >
+                    Limpar filtros
+                  </Button>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                  <div className="relative w-full lg:max-w-md">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                      placeholder="Buscar por nome, razão social ou CNPJ..."
+                      placeholder="Buscar por nome, CNPJ ou palavra-chave…"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-10"
+                      className="h-11 rounded-full border-[#CBD5B1] bg-white pl-10 text-sm"
                     />
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <Label className="text-sm font-medium w-full">Tipo:</Label>
-                    {(["Parceiro", "Mantenedor", "Fornecedor"] as TipoRelacionamento[]).map(
-                      (tipo) => (
-                        <div key={tipo} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`tipo-${tipo}`}
-                            checked={tipoFilter.includes(tipo)}
-                            onCheckedChange={() => handleTipoFilterToggle(tipo)}
-                          />
-                          <label
-                            htmlFor={`tipo-${tipo}`}
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                          >
-                            {tipo}
-                          </label>
-                        </div>
-                      )
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="categoria-filter">Categoria</Label>
-                      <Select value={categoriaFilter} onValueChange={setCategoriaFilter}>
-                        <SelectTrigger id="categoria-filter">
-                          <SelectValue placeholder="Todas" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Todas</SelectItem>
-                          {[...categoriasParceiro, ...categoriasFornecedor].map((cat) => (
-                            <SelectItem key={cat} value={cat}>
-                              {cat}
-                            </SelectItem>
+                  <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="h-11 justify-between rounded-full border-[#CBD5B1] bg-white text-sm text-[#1C1C1C]"
+                        >
+                          <span>
+                            Tipo{tipoFilter.length ? ` • ${tipoFilter.join(", ")}` : ""}
+                          </span>
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-64 space-y-3" align="start">
+                        <p className="text-sm font-semibold text-[#1C1C1C]">Selecione o tipo</p>
+                        <div className="flex flex-col gap-2">
+                          {tipoOptions.map((tipo) => (
+                            <label key={tipo} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                id={`tipo-${tipo}`}
+                                checked={tipoFilter.includes(tipo)}
+                                onCheckedChange={() => handleTipoFilterToggle(tipo)}
+                              />
+                              <span>{tipo}</span>
+                            </label>
                           ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
 
-                    <div>
-                      <Label htmlFor="status-filter">Status</Label>
-                      <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger id="status-filter">
-                          <SelectValue placeholder="Todos" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Todos</SelectItem>
-                          <SelectItem value="Ativo">Ativo</SelectItem>
-                          <SelectItem value="Em avaliação">Em avaliação</SelectItem>
-                          <SelectItem value="Em análise">Em análise</SelectItem>
-                          <SelectItem value="Encerrado">Encerrado</SelectItem>
-                          <SelectItem value="Recusado">Recusado</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <Select value={categoriaFilter} onValueChange={setCategoriaFilter}>
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm">
+                        <SelectValue placeholder="Categoria" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todas</SelectItem>
+                        {[...categoriasParceiro, ...categoriasFornecedor].map((cat) => (
+                          <SelectItem key={cat} value={cat}>
+                            {cat}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos</SelectItem>
+                        <SelectItem value="Ativo">Ativo</SelectItem>
+                        <SelectItem value="Em avaliação">Em avaliação</SelectItem>
+                        <SelectItem value="Em análise">Em análise</SelectItem>
+                        <SelectItem value="Encerrado">Encerrado</SelectItem>
+                        <SelectItem value="Recusado">Recusado</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
-              </Card>
+              </div>
 
               {/* Table */}
               <Card>
-                <div className="overflow-x-auto">
-                  <Table>
+                <TooltipProvider>
+                  <div className="overflow-x-auto">
+                    <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Tipo</TableHead>
@@ -341,13 +393,14 @@ export default function Relacionamentos() {
                         <TableHead>Categoria</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Última Movimentação</TableHead>
+                        <TableHead>Comunicação</TableHead>
                         <TableHead className="text-right">Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredRelacionamentos.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center text-muted-foreground">
+                          <TableCell colSpan={8} className="text-center text-muted-foreground">
                             Nenhum relacionamento encontrado
                           </TableCell>
                         </TableRow>
@@ -367,6 +420,70 @@ export default function Relacionamentos() {
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
                               {r.ultimaMov || "—"}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div>
+                                  <div className="text-sm font-medium text-foreground">
+                                    {r.contatos?.nome || "Contato principal"}
+                                  </div>
+                                  {(r.contatos?.whatsapp || r.contatos?.email) && (
+                                    <div className="text-xs text-muted-foreground">
+                                      {[r.contatos?.whatsapp, r.contatos?.email]
+                                        .filter(Boolean)
+                                        .join(" • ")}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      {formatWhatsappLink(r.contatos?.whatsapp) ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          asChild
+                                          aria-label={`Abrir conversa no WhatsApp com ${r.contatos?.nome || r.nome}`}
+                                        >
+                                          <a
+                                            href={formatWhatsappLink(r.contatos?.whatsapp) || undefined}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            <MessageCircle className="h-4 w-4" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button variant="ghost" size="icon" disabled>
+                                          <MessageCircle className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                    </TooltipTrigger>
+                                    <TooltipContent> Abrir WhatsApp </TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      {r.contatos?.email ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          asChild
+                                          aria-label={`Enviar e-mail para ${r.contatos?.nome || r.nome}`}
+                                        >
+                                          <a href={`mailto:${r.contatos.email}`}>
+                                            <Mail className="h-4 w-4" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button variant="ghost" size="icon" disabled>
+                                          <Mail className="h-4 w-4" />
+                                        </Button>
+                                      )}
+                                    </TooltipTrigger>
+                                    <TooltipContent> Enviar e-mail </TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
@@ -389,8 +506,9 @@ export default function Relacionamentos() {
                         ))
                       )}
                     </TableBody>
-                  </Table>
-                </div>
+                    </Table>
+                  </div>
+                </TooltipProvider>
               </Card>
             </div>
           </main>
