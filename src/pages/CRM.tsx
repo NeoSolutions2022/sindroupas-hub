@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { AlertCircle, Cake, Flame, PhoneOff, Settings2, Building2 } from "lucide-react";
+import { AlertCircle, Cake, Flame, PhoneOff, Settings2, Building2, ChevronDown } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -678,68 +678,100 @@ const CRM = () => {
             </section>
 
             <section className="space-y-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
+              {/* Filtros padronizados */}
+              <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
+                    <span className="text-xs text-muted-foreground">Refine a visualização para atuação rápida e contextual.</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
+                    onClick={() => {
+                      setActiveFilters([]);
+                      setAssociacaoFilter(undefined);
+                      setPorteFilter(undefined);
+                      setFaixaFilter(undefined);
+                    }}
+                    aria-label="Limpar filtros"
+                  >
+                    Limpar filtros
+                  </Button>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {filterButtons.map((filter) => (
+                      <Button
+                        key={filter.id}
+                        variant={activeFilters.includes(filter.id) ? "default" : "outline"}
+                        className={
+                          activeFilters.includes(filter.id)
+                            ? "bg-[#7E8C5E] text-white border-[#7E8C5E] h-11 rounded-full"
+                            : "border-[#CBD5B1] bg-white text-[#1C1C1C] h-11 rounded-full"
+                        }
+                        onClick={() => toggleFilter(filter.id)}
+                        aria-pressed={activeFilters.includes(filter.id)}
+                        aria-label={`Filtro ${filter.label}`}
+                      >
+                        {filter.label}
+                      </Button>
+                    ))}
+                  </div>
+
+                  <div className="grid w-full gap-3 md:grid-cols-3 xl:w-auto">
+                    <Select
+                      value={associacaoFilter}
+                      onValueChange={(value) => setAssociacaoFilter(value === "todas" ? undefined : value)}
+                    >
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm">
+                        <SelectValue placeholder="Associação" />
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todas">Todas</SelectItem>
+                        <SelectItem value="Sim">Associadas</SelectItem>
+                        <SelectItem value="Não">Não associadas</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={porteFilter}
+                      onValueChange={(value) => setPorteFilter(value === "todos" ? undefined : value)}
+                    >
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm">
+                        <SelectValue placeholder="Porte" />
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todos">Todos</SelectItem>
+                        <SelectItem value="Pequeno">Pequeno</SelectItem>
+                        <SelectItem value="Médio">Médio</SelectItem>
+                        <SelectItem value="Grande">Grande</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={faixaFilter}
+                      onValueChange={(value) => setFaixaFilter(value === "todas" ? undefined : value)}
+                    >
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm">
+                        <SelectValue placeholder="Faixa" />
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todas">Todas</SelectItem>
+                        <SelectItem value="Essencial">Essencial</SelectItem>
+                        <SelectItem value="Expansão">Expansão</SelectItem>
+                        <SelectItem value="Premium">Premium</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between flex-wrap gap-2 pt-2">
                 <h2 className="text-2xl font-semibold">Lista de empresas priorizada</h2>
                 <span className="text-sm text-muted-foreground">Ordenação automática conforme risco e oportunidade</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {filterButtons.map((filter) => (
-                  <Button
-                    key={filter.id}
-                    variant={activeFilters.includes(filter.id) ? "default" : "outline"}
-                    className={
-                      activeFilters.includes(filter.id)
-                        ? "bg-[#7E8C5E] text-white border-[#7E8C5E]"
-                        : "border-[#E1E8D3] text-[#1C1C1C]"
-                    }
-                    onClick={() => toggleFilter(filter.id)}
-                    aria-pressed={activeFilters.includes(filter.id)}
-                    aria-label={`Filtro ${filter.label}`}
-                  >
-                    {filter.label}
-                  </Button>
-                ))}
-                <Select
-                  value={associacaoFilter}
-                  onValueChange={(value) => setAssociacaoFilter(value === "todas" ? undefined : value)}
-                >
-                  <SelectTrigger className="w-[160px] border-[#E1E8D3] bg-white">
-                    <SelectValue placeholder="Associação" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todas">Todas</SelectItem>
-                    <SelectItem value="Sim">Associadas</SelectItem>
-                    <SelectItem value="Não">Não associadas</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={porteFilter}
-                  onValueChange={(value) => setPorteFilter(value === "todos" ? undefined : value)}
-                >
-                  <SelectTrigger className="w-[140px] border-[#E1E8D3] bg-white">
-                    <SelectValue placeholder="Porte" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todos">Todos</SelectItem>
-                    <SelectItem value="Pequeno">Pequeno</SelectItem>
-                    <SelectItem value="Médio">Médio</SelectItem>
-                    <SelectItem value="Grande">Grande</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={faixaFilter}
-                  onValueChange={(value) => setFaixaFilter(value === "todas" ? undefined : value)}
-                >
-                  <SelectTrigger className="w-[140px] border-[#E1E8D3] bg-white">
-                    <SelectValue placeholder="Faixa" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todas">Todas</SelectItem>
-                    <SelectItem value="Essencial">Essencial</SelectItem>
-                    <SelectItem value="Expansão">Expansão</SelectItem>
-                    <SelectItem value="Premium">Premium</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </section>
 
