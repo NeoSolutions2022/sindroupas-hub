@@ -477,14 +477,14 @@ const Empresas = () => {
             </div>
 
             <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-col gap-1">
                   <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
                   <span className="text-xs text-muted-foreground">Refine a visualização das empresas com os filtros abaixo.</span>
                 </div>
                 <Button
                   variant="ghost"
-                  className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
+                  className="self-start shrink-0 p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
                   onClick={() => {
                     setSearchTerm("");
                     setAssociationFilter("Todas");
@@ -501,8 +501,8 @@ const Empresas = () => {
                 </Button>
               </div>
 
-              <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
-                <div className="relative w-full lg:max-w-md">
+              <div className="mt-4 space-y-3">
+                <div className="relative w-full">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     aria-label="Buscar empresa ou colaborador"
@@ -518,22 +518,24 @@ const Empresas = () => {
                   )}
                 </div>
 
-                <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="flex gap-2 rounded-full bg-white p-1 shadow-sm">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="flex gap-1 rounded-full bg-white p-1 shadow-sm">
                     {["Todas", "Associadas", "Não associadas"].map((status) => (
                       <Button
                         key={status}
                         type="button"
                         variant={associationFilter === status ? "default" : "ghost"}
+                        size="sm"
                         className={cn(
-                          "flex-1 justify-between rounded-full border border-[#CBD5B1] bg-white text-sm text-[#1C1C1C] shadow-none",
-                          associationFilter === status && "bg-[#1C1C1C] text-white"
+                          "flex-1 rounded-full text-xs",
+                          associationFilter === status
+                            ? "bg-[#1C1C1C] text-white hover:bg-[#1C1C1C]/90"
+                            : "bg-transparent text-[#1C1C1C] hover:bg-[#DCE7CB]/50"
                         )}
                         onClick={() => setAssociationFilter(status as typeof associationFilter)}
                         aria-label={`Filtrar por ${status}`}
                       >
-                        <span>{status}</span>
-                        <ChevronDown className="h-4 w-4" />
+                        {status}
                       </Button>
                     ))}
                   </div>
@@ -591,49 +593,49 @@ const Empresas = () => {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-              </div>
 
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                <Select
-                  value={periodoTipo}
-                  onValueChange={(value) =>
-                    setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
-                  }
-                >
-                  <SelectTrigger
-                    aria-label="Selecionar período para filtro"
-                    className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
+                  <Select
+                    value={periodoTipo}
+                    onValueChange={(value) =>
+                      setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
+                    }
                   >
-                    <SelectValue placeholder="Período" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {periodoOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="date"
-                    value={periodoInicio}
-                    onChange={(e) => setPeriodoInicio(e.target.value)}
-                    aria-label="Data inicial do período"
-                    className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
-                  />
-                </div>
-                <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="date"
-                    value={periodoFim}
-                    onChange={(e) => setPeriodoFim(e.target.value)}
-                    aria-label="Data final do período"
-                    className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
-                  />
+                    <SelectTrigger
+                      aria-label="Selecionar período para filtro"
+                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
+                    >
+                      <SelectValue placeholder="Período" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {periodoOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
+                    <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={periodoInicio}
+                      onChange={(e) => setPeriodoInicio(e.target.value)}
+                      aria-label="Data inicial do período"
+                      className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
+                    <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={periodoFim}
+                      onChange={(e) => setPeriodoFim(e.target.value)}
+                      aria-label="Data final do período"
+                      className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -714,26 +716,29 @@ const Empresas = () => {
                               )}
                             </TableCell>
                             <TableCell>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-3">
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant="outline"
+                                  className="h-9 w-9 shrink-0"
                                   onClick={() => handleOpenDialog(empresa, true)}
                                   aria-label={`Visualizar ${empresa.nomeFantasia}`}
                                 >
                                   <Eye className="h-4 w-4" />
                                 </Button>
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant="outline"
+                                  className="h-9 w-9 shrink-0"
                                   onClick={() => handleOpenDialog(empresa, false)}
                                   aria-label={`Editar ${empresa.nomeFantasia}`}
                                 >
                                   <Edit className="h-4 w-4" />
                                 </Button>
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant="destructive"
+                                  className="h-9 w-9 shrink-0"
                                   onClick={() => handleDelete(empresa)}
                                   aria-label={`Excluir ${empresa.nomeFantasia}`}
                                 >
