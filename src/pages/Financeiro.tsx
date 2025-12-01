@@ -41,7 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2 } from "lucide-react";
+import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, ChevronDown } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -54,11 +54,56 @@ import {
 
 // Mock de empresas para autocomplete
 const mockEmpresas = [
-  { id: "emp1", nome: "Estilo Nordeste Ltda", cnpj: "12.345.678/0001-90" },
-  { id: "emp2", nome: "ModaSul Indústria e Comércio S.A.", cnpj: "98.765.432/0001-10" },
-  { id: "emp3", nome: "Confecções Aurora", cnpj: "11.222.333/0001-44" },
-  { id: "emp4", nome: "Costura Viva", cnpj: "55.666.777/0001-88" },
-  { id: "emp5", nome: "Têxtil Nordeste", cnpj: "99.888.777/0001-66" },
+  { 
+    id: "emp1", 
+    nome: "Estilo Nordeste Ltda", 
+    cnpj: "12.345.678/0001-90",
+    contatoPrincipal: {
+      nome: "Marina Costa",
+      whatsapp: "5585999991234",
+      email: "marina@estilo.com"
+    }
+  },
+  { 
+    id: "emp2", 
+    nome: "ModaSul Indústria e Comércio S.A.", 
+    cnpj: "98.765.432/0001-10",
+    contatoPrincipal: {
+      nome: "Bruno Lima",
+      whatsapp: "5585977772222",
+      email: "bruno@modasul.com"
+    }
+  },
+  { 
+    id: "emp3", 
+    nome: "Confecções Aurora", 
+    cnpj: "11.222.333/0001-44",
+    contatoPrincipal: {
+      nome: "Renato Souza",
+      whatsapp: "5585988883333",
+      email: "renato@aurora.com"
+    }
+  },
+  { 
+    id: "emp4", 
+    nome: "Costura Viva", 
+    cnpj: "55.666.777/0001-88",
+    contatoPrincipal: {
+      nome: "Ana Pires",
+      whatsapp: "",
+      email: "ana@costuraviva.com"
+    }
+  },
+  { 
+    id: "emp5", 
+    nome: "Têxtil Nordeste", 
+    cnpj: "99.888.777/0001-66",
+    contatoPrincipal: {
+      nome: "Carlos Monteiro",
+      whatsapp: "5585966664444",
+      email: "carlos@textilnordeste.com"
+    }
+  },
 ];
 
 // Tipos
@@ -602,30 +647,59 @@ const Financeiro = () => {
               </TabsList>
 
               <TabsContent value="boletos">
+                {/* Filtros padronizados */}
+                <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm mb-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
+                      <span className="text-xs text-muted-foreground">Refine a visualização de boletos.</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
+                      onClick={() => setMesFilter("Todos")}
+                      aria-label="Limpar filtros"
+                    >
+                      Limpar filtros
+                    </Button>
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                    <Select value={mesFilter} onValueChange={setMesFilter}>
+                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm lg:w-[200px]">
+                        <SelectValue placeholder="Competência" />
+                        <ChevronDown className="h-4 w-4 ml-2" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Todos">Todas</SelectItem>
+                        <SelectItem value="01">Janeiro</SelectItem>
+                        <SelectItem value="02">Fevereiro</SelectItem>
+                        <SelectItem value="03">Março</SelectItem>
+                        <SelectItem value="04">Abril</SelectItem>
+                        <SelectItem value="05">Maio</SelectItem>
+                        <SelectItem value="06">Junho</SelectItem>
+                        <SelectItem value="07">Julho</SelectItem>
+                        <SelectItem value="08">Agosto</SelectItem>
+                        <SelectItem value="09">Setembro</SelectItem>
+                        <SelectItem value="10">Outubro</SelectItem>
+                        <SelectItem value="11">Novembro</SelectItem>
+                        <SelectItem value="12">Dezembro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
                 <Card>
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                       <CardTitle>Controle de Boletos</CardTitle>
-                      <div className="flex gap-2">
-                        <Button 
-                          onClick={() => setWizardOpen(true)}
-                          className="bg-[#00A86B] hover:bg-[#00A86B]/90"
-                        >
-                          <Plus className="h-4 w-4 mr-2" />
-                          Criar boleto
-                        </Button>
-                        <Select value={mesFilter} onValueChange={setMesFilter}>
-                          <SelectTrigger className="w-[150px]">
-                            <SelectValue placeholder="Filtrar por mês" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Todos">Todos</SelectItem>
-                            <SelectItem value="01">Janeiro</SelectItem>
-                            <SelectItem value="02">Fevereiro</SelectItem>
-                            <SelectItem value="03">Março</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      <Button 
+                        onClick={() => setWizardOpen(true)}
+                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Criar boleto
+                      </Button>
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -638,29 +712,101 @@ const Financeiro = () => {
                             <TableHead>Valor</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
+                            <TableHead>Comunicação</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {filteredBoletos.map((boleto) => (
-                            <TableRow key={boleto.id}>
-                              <TableCell className="font-medium">{boleto.empresa}</TableCell>
-                              <TableCell>{boleto.tipo}</TableCell>
-                              <TableCell>R$ {boleto.valor.toLocaleString("pt-BR")}</TableCell>
-                              <TableCell>{boleto.vencimento}</TableCell>
-                              <TableCell>{getStatusBadge(boleto.status)}</TableCell>
-                              <TableCell className="text-right">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
-                                >
-                                  <Eye className="h-4 w-4 mr-2" />
-                                  Detalhes
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                          {filteredBoletos.map((boleto) => {
+                            const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
+                            const contato = empresa?.contatoPrincipal;
+                            const formatWhatsappLink = (whatsapp?: string) => {
+                              if (!whatsapp) return null;
+                              const digits = whatsapp.replace(/\D/g, "");
+                              return digits ? `https://wa.me/${digits}` : null;
+                            };
+
+                            return (
+                              <TableRow key={boleto.id}>
+                                <TableCell className="font-medium">{boleto.empresa}</TableCell>
+                                <TableCell>{boleto.tipo}</TableCell>
+                                <TableCell>R$ {boleto.valor.toLocaleString("pt-BR")}</TableCell>
+                                <TableCell>{boleto.vencimento}</TableCell>
+                                <TableCell>{getStatusBadge(boleto.status)}</TableCell>
+                                <TableCell>
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-sm">
+                                      <div className="font-medium text-foreground">
+                                        {contato?.nome || "Sem contato"}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {contato?.whatsapp && formatWhatsappLink(contato.whatsapp) ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8"
+                                          asChild
+                                        >
+                                          <a
+                                            href={formatWhatsappLink(contato.whatsapp)!}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            aria-label={`Abrir conversa no WhatsApp com ${contato.nome}`}
+                                          >
+                                            <MessageCircle className="h-4 w-4 text-green-600" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8"
+                                          disabled
+                                        >
+                                          <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                                        </Button>
+                                      )}
+                                      {contato?.email ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8"
+                                          asChild
+                                        >
+                                          <a
+                                            href={`mailto:${contato.email}`}
+                                            aria-label={`Enviar e-mail para ${contato.nome}`}
+                                          >
+                                            <Mail className="h-4 w-4 text-blue-600" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-8 w-8"
+                                          disabled
+                                        >
+                                          <Mail className="h-4 w-4 text-muted-foreground" />
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
+                                  >
+                                    <Eye className="h-4 w-4 mr-2" />
+                                    Detalhes
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
