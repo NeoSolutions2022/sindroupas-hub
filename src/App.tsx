@@ -8,7 +8,6 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Empresas from "./pages/Empresas";
 import Comunicacao from "./pages/Comunicacao";
-import CRM from "./pages/CRM";
 import CRMDetalhe from "./pages/CRMDetalhe";
 import Financeiro from "./pages/Financeiro";
 import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
@@ -28,7 +27,6 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/login" element={<Login />} />
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/dashboard/crm" element={<CRM />} />
           <Route path="/dashboard/crm/:id" element={<CRMDetalhe />} />
           <Route path="/dashboard/empresas" element={<Empresas />} />
           <Route path="/dashboard/relacionamentos" element={<Relacionamentos />} />
