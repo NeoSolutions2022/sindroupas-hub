@@ -36,6 +36,36 @@ export const formatDateFull = (date?: string) => {
   });
 };
 
+// Formatar dias de forma humana (ex: "há 14 meses" / "há 1 ano e 2 meses")
+export const formatDaysHuman = (days: number): string => {
+  if (days < 0) return "—";
+  if (days === 0) return "Hoje";
+  if (days === 1) return "há 1 dia";
+  if (days < 7) return `há ${days} dias`;
+  if (days < 14) return "há 1 semana";
+  if (days < 30) return `há ${Math.floor(days / 7)} semanas`;
+  if (days < 60) return "há 1 mês";
+  if (days < 365) return `há ${Math.floor(days / 30)} meses`;
+  
+  const years = Math.floor(days / 365);
+  const remainingMonths = Math.floor((days % 365) / 30);
+  
+  if (remainingMonths === 0) {
+    return years === 1 ? "há 1 ano" : `há ${years} anos`;
+  }
+  
+  const yearPart = years === 1 ? "1 ano" : `${years} anos`;
+  const monthPart = remainingMonths === 1 ? "1 mês" : `${remainingMonths} meses`;
+  return `há ${yearPart} e ${monthPart}`;
+};
+
+// Verificar se é "sem contato recente" (12+ meses = 365 dias)
+export const isSemContatoRecente = (ultimoContato?: string): boolean => {
+  if (!ultimoContato) return true;
+  const dias = differenceInDays(getToday(), new Date(ultimoContato));
+  return dias >= 365;
+};
+
 // WhatsApp utilities
 export const formatWhatsappDisplay = (value?: string) => {
   if (!value) return "Sem WhatsApp";
@@ -62,6 +92,12 @@ export const getWhatsappLink = (value?: string, message?: string) => {
 export const getResponsavel = (empresa: Empresa) => {
   if (empresa.responsavel) return empresa.responsavel;
   return empresa.colaboradores[0] ?? null;
+};
+
+// Verificar se empresa tem dados incompletos
+export const hasIncompleteData = (empresa: Empresa): boolean => {
+  const responsavel = getResponsavel(empresa);
+  return !empresa.whatsapp || !responsavel?.whatsapp || !empresa.dataFundacao;
 };
 
 // Calcular score de prioridade
@@ -102,6 +138,7 @@ export const calcularScorePrioridade = (empresa: Empresa): number => {
 };
 
 // Gerar item de prioridade com motivo e selo
+// Chips padronizados na ordem: R$ em aberto → atraso/boletos → contato/evento
 export const gerarPrioridadeItem = (empresa: Empresa): PrioridadeItem => {
   const score = calcularScorePrioridade(empresa);
   const chips: string[] = [];
@@ -116,55 +153,64 @@ export const gerarPrioridadeItem = (empresa: Empresa): PrioridadeItem => {
     selo = "Atenção";
   }
 
-  // Gerar chips de contexto
+  // 1) R$ em aberto (primeiro chip)
   if (empresa.valorEmAberto && empresa.valorEmAberto > 0) {
     chips.push(formatCurrency(empresa.valorEmAberto) + " em aberto");
   }
 
+  // 2) Atraso/boletos (segundo chip)
+  if ((empresa.multiplosAtrasos || 0) >= 2) {
+    chips.push(`${empresa.multiplosAtrasos} boletos atrasados`);
+  } else if (empresa.diasInadimplente > 0) {
+    chips.push(`Atraso ${empresa.diasInadimplente}d`);
+  }
+
+  // 3) Contato/evento (terceiro chip) - com formato humano
   if (empresa.ultimoContato) {
     const diasSemContato = differenceInDays(getToday(), new Date(empresa.ultimoContato));
-    if (diasSemContato > 30) {
-      chips.push(`Último contato há ${diasSemContato}d`);
+    if (diasSemContato >= 365) {
+      chips.push(`Sem contato recente (${formatDaysHuman(diasSemContato)})`);
+    } else if (diasSemContato > 30) {
+      chips.push(`Último contato ${formatDaysHuman(diasSemContato)}`);
     }
   } else {
     chips.push("Sem registro de contato");
   }
 
-  if (isWithinNextDays(empresa.proximoBoleto?.data, 3)) {
-    chips.push(`Vence em ${differenceInDays(new Date(empresa.proximoBoleto.data), getToday())}d`);
-  }
-
+  // 4) Eventos próximos
   if (isWithinNextDays(empresa.aniversarioResponsavel, 7)) {
-    chips.push("Aniversário responsável próximo");
+    chips.push("🎂 Aniversário responsável próximo");
   }
-
   if (isWithinNextDays(empresa.aniversarioEmpresa, 7)) {
-    chips.push("Aniversário empresa próximo");
+    chips.push("🏢 Aniversário empresa próximo");
   }
 
-  // Gerar motivo
+  // 5) Próximo boleto
+  if (isWithinNextDays(empresa.proximoBoleto?.data, 3)) {
+    const diasParaVencer = differenceInDays(new Date(empresa.proximoBoleto.data), getToday());
+    chips.push(`Vence em ${diasParaVencer}d`);
+  }
+
+  // Gerar motivo (uma linha, conciso)
   const motivos: string[] = [];
   if (empresa.diasInadimplente > 0) {
     motivos.push(`Atraso ${empresa.diasInadimplente}d`);
   }
   if ((empresa.multiplosAtrasos || 0) >= 2) {
-    motivos.push(`${empresa.multiplosAtrasos} boletos atrasados`);
+    motivos.push(`${empresa.multiplosAtrasos} boletos`);
   }
   if (empresa.valorEmAberto && empresa.valorEmAberto > 1000) {
     motivos.push("valor alto");
   }
-  if (empresa.ultimoContato) {
-    const diasSemContato = differenceInDays(getToday(), new Date(empresa.ultimoContato));
-    if (diasSemContato > 60) {
-      motivos.push("sem contato recente");
-    }
+  if (isSemContatoRecente(empresa.ultimoContato)) {
+    motivos.push("sem contato recente");
   }
   if (isWithinNextDays(empresa.aniversarioResponsavel, 3) || 
       isWithinNextDays(empresa.aniversarioEmpresa, 3)) {
     motivos.push("aniversário próximo");
   }
 
-  motivo = motivos.length > 0 ? motivos.join(" + ") : "Acompanhamento regular";
+  motivo = motivos.length > 0 ? motivos.join(" • ") : "Acompanhamento regular";
 
   // Recomendação
   if (selo === "Crítico") {
@@ -186,7 +232,7 @@ export const gerarPrioridadeItem = (empresa: Empresa): PrioridadeItem => {
     motivo,
     selo,
     recomendacao,
-    chips: chips.slice(0, 2), // Máximo 2 chips
+    chips: chips.slice(0, 3), // Máximo 3 chips
   };
 };
 

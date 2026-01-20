@@ -2,13 +2,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { MessageCircle, Eye, AlertCircle, Sparkles } from "lucide-react";
+import { MessageCircle, Eye, AlertCircle, Sparkles, Pencil } from "lucide-react";
 import { PrioridadeItem } from "./types";
 import { getWhatsappLink, getResponsavel } from "./utils";
 
 interface PrioridadesHojeProps {
   prioridades: PrioridadeItem[];
   onVerDetalhes: (empresa: PrioridadeItem) => void;
+  onCompletarCadastro?: (empresa: PrioridadeItem) => void;
   emptyState?: boolean;
 }
 
@@ -29,6 +30,7 @@ const SeloStatus = ({ selo }: { selo: "Crítico" | "Atenção" | "Oportunidade" 
 export const PrioridadesHoje = ({
   prioridades,
   onVerDetalhes,
+  onCompletarCadastro,
   emptyState = false,
 }: PrioridadesHojeProps) => {
   if (emptyState || prioridades.length === 0) {
@@ -100,10 +102,10 @@ export const PrioridadesHoje = ({
                         </h3>
                         <SeloStatus selo={empresa.selo} />
                       </div>
-                      <p className="text-sm text-muted-foreground mt-0.5">
+                      <p className="text-sm text-muted-foreground mt-0.5 line-clamp-1">
                         {empresa.motivo}
                       </p>
-                      {/* Chips de contexto */}
+                      {/* Chips de contexto - ordem padronizada */}
                       <div className="flex flex-wrap gap-1.5 mt-2">
                         {empresa.chips.map((chip, i) => (
                           <span
@@ -144,11 +146,11 @@ export const PrioridadesHoje = ({
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled
-                        className="gap-2 border-border"
+                        className="gap-2 border-amber-500 text-amber-600 hover:bg-amber-50"
+                        onClick={() => onCompletarCadastro?.(empresa)}
                       >
-                        <MessageCircle className="h-4 w-4" />
-                        Sem WhatsApp
+                        <Pencil className="h-4 w-4" />
+                        Adicionar WhatsApp
                       </Button>
                     )}
                     <Button
