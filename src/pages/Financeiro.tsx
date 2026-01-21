@@ -41,7 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, FileText, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, ChevronDown } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -51,6 +51,10 @@ import {
   getFinanceiroData,
   saveFinanceiroData,
 } from "@/lib/financeiro-data";
+import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
+import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
+import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
+import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
 
 // Mock de empresas para autocomplete
 const mockEmpresas = [
@@ -135,11 +139,23 @@ interface BoletoForm {
 }
 
 const Financeiro = () => {
-  const [mesFilter, setMesFilter] = useState("Todos");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const initialData = useMemo(() => getFinanceiroData(), []);
+
+  // Advanced filters state
+  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+  const [appliedFilters, setAppliedFilters] = useState<FilterState>(defaultFilters);
+
+  // Gerar Novo Boleto modal
+  const [gerarNovoOpen, setGerarNovoOpen] = useState(false);
+  const [selectedBoletoForNew, setSelectedBoletoForNew] = useState<{
+    id: string;
+    empresa: string;
+    vencimento: string;
+    valor: number;
+  } | null>(null);
 
   const [boletos, setBoletos] = useState<BoletoRegistro[]>(initialData.boletos);
   const [historicoContribuicao, setHistoricoContribuicao] = useState<HistoricoContribuicao[]>(
@@ -197,12 +213,90 @@ const Financeiro = () => {
     }
   }, [searchParams, setSearchParams]);
 
+  // Helper to parse date from dd/mm/yyyy
+  const parseVencimento = (dateStr: string): Date | null => {
+    try {
+      return parse(dateStr, "dd/MM/yyyy", new Date());
+    } catch {
+      return null;
+    }
+  };
+
+  // Determine boleto effective status (Vencido = due date < today AND not paid)
+  const getBoletoEffectiveStatus = (boleto: BoletoRegistro): string => {
+    if (boleto.status === "Pago") return "Pago";
+    const dueDate = parseVencimento(boleto.vencimento);
+    if (dueDate && isBefore(dueDate, new Date())) {
+      return "Vencido";
+    }
+    return boleto.status;
+  };
+
   const filteredBoletos = useMemo(() => {
-    return boletos.filter((boleto) => {
-      if (mesFilter === "Todos") return true;
-      return boleto.vencimento.includes(`/${mesFilter}/`);
-    });
-  }, [boletos, mesFilter]);
+    return boletos
+      .filter((boleto) => {
+        const f = appliedFilters;
+
+        // Empresa filter
+        if (f.empresaSearch && !boleto.empresa.toLowerCase().includes(f.empresaSearch.toLowerCase())) {
+          return false;
+        }
+
+        // Status filter
+        if (f.status.length > 0) {
+          const effectiveStatus = getBoletoEffectiveStatus(boleto);
+          if (!f.status.includes(effectiveStatus)) {
+            return false;
+          }
+        }
+
+        // Tipo filter
+        if (f.tipo && f.tipo !== "todos" && boleto.tipo !== f.tipo) {
+          return false;
+        }
+
+        // Date range filter
+        const dueDate = parseVencimento(boleto.vencimento);
+        if (dueDate) {
+          if (f.dataInicio && isBefore(dueDate, f.dataInicio)) {
+            return false;
+          }
+          if (f.dataFim && isAfter(dueDate, f.dataFim)) {
+            return false;
+          }
+        }
+
+        // Somente inadimplentes
+        if (f.somenteInadimplentes) {
+          const effectiveStatus = getBoletoEffectiveStatus(boleto);
+          if (effectiveStatus !== "Atrasado" && effectiveStatus !== "Vencido") {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const f = appliedFilters;
+        if (f.ordenacao === "valor") {
+          return b.valor - a.valor;
+        }
+        if (f.ordenacao === "atrasados") {
+          const dueDateA = parseVencimento(a.vencimento);
+          const dueDateB = parseVencimento(b.vencimento);
+          const daysA = dueDateA ? differenceInDays(new Date(), dueDateA) : 0;
+          const daysB = dueDateB ? differenceInDays(new Date(), dueDateB) : 0;
+          return daysB - daysA;
+        }
+        // Default: most recent first
+        const dueDateA = parseVencimento(a.vencimento);
+        const dueDateB = parseVencimento(b.vencimento);
+        if (dueDateA && dueDateB) {
+          return dueDateB.getTime() - dueDateA.getTime();
+        }
+        return 0;
+      });
+  }, [boletos, appliedFilters]);
 
   const ultimasContribuicoes = useMemo(() => {
     return [...historicoContribuicao].slice(-5).reverse();
@@ -225,21 +319,39 @@ const Financeiro = () => {
   }, [boletoForm, previaBoleto, wizardStep]);
 
   const handleExport = (formato: "PDF" | "Excel" | "CSV") => {
-    toast({
-      title: "Exportação iniciada",
-      description: `Relatório será exportado em ${formato}`,
-    });
+    if (formato === "Excel") {
+      // Mock export with filtered data
+      const exportData = filteredBoletos.map((b) => ({
+        empresa: b.empresa,
+        tipo: b.tipo,
+        valor: b.valor,
+        vencimento: b.vencimento,
+        status: getBoletoEffectiveStatus(b),
+      }));
+      console.log("Exportando Excel com dados filtrados:", exportData);
+      toast({
+        title: "Exportação Excel iniciada",
+        description: `Exportando ${filteredBoletos.length} boleto(s) filtrado(s).`,
+      });
+    } else {
+      toast({
+        title: "Exportação iniciada",
+        description: `Relatório será exportado em ${formato}`,
+      });
+    }
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "Pago":
-        return <Badge variant="default">Pago</Badge>;
+        return <Badge className="bg-green-100 text-green-800 border-green-200">Pago</Badge>;
       case "Atrasado":
         return <Badge variant="destructive">Atrasado</Badge>;
+      case "Vencido":
+        return <Badge className="bg-orange-100 text-orange-800 border-orange-200">Vencido</Badge>;
       case "Emitida":
       case "Pendente":
-        return <Badge className="bg-blue-100 text-blue-800">{status}</Badge>;
+        return <Badge className="bg-blue-100 text-blue-800 border-blue-200">{status}</Badge>;
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
@@ -647,52 +759,27 @@ const Financeiro = () => {
               </TabsList>
 
               <TabsContent value="boletos">
-                {/* Filtros padronizados */}
-                <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm mb-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
-                      <span className="text-xs text-muted-foreground">Refine a visualização de boletos.</span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      className="self-start p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
-                      onClick={() => setMesFilter("Todos")}
-                      aria-label="Limpar filtros"
-                    >
-                      Limpar filtros
-                    </Button>
-                  </div>
-
-                  <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
-                    <Select value={mesFilter} onValueChange={setMesFilter}>
-                      <SelectTrigger className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm lg:w-[200px]">
-                        <SelectValue placeholder="Competência" />
-                        <ChevronDown className="h-4 w-4 ml-2" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Todos">Todas</SelectItem>
-                        <SelectItem value="01">Janeiro</SelectItem>
-                        <SelectItem value="02">Fevereiro</SelectItem>
-                        <SelectItem value="03">Março</SelectItem>
-                        <SelectItem value="04">Abril</SelectItem>
-                        <SelectItem value="05">Maio</SelectItem>
-                        <SelectItem value="06">Junho</SelectItem>
-                        <SelectItem value="07">Julho</SelectItem>
-                        <SelectItem value="08">Agosto</SelectItem>
-                        <SelectItem value="09">Setembro</SelectItem>
-                        <SelectItem value="10">Outubro</SelectItem>
-                        <SelectItem value="11">Novembro</SelectItem>
-                        <SelectItem value="12">Dezembro</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+                {/* Advanced Filters */}
+                <AdvancedFilters
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  onFilter={() => setAppliedFilters({ ...filters })}
+                  onClear={() => {
+                    setFilters(defaultFilters);
+                    setAppliedFilters(defaultFilters);
+                  }}
+                  empresas={mockEmpresas.map((e) => ({ id: e.id, nome: e.nome }))}
+                />
 
                 <Card>
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                      <CardTitle>Controle de Boletos</CardTitle>
+                      <div>
+                        <CardTitle>Controle de Boletos</CardTitle>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {filteredBoletos.length} boleto(s) encontrado(s)
+                        </p>
+                      </div>
                       <Button 
                         onClick={() => setWizardOpen(true)}
                         className="bg-[#00A86B] hover:bg-[#00A86B]/90"
@@ -717,101 +804,148 @@ const Financeiro = () => {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {filteredBoletos.map((boleto) => {
-                            const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
-                            const contato = empresa?.contatoPrincipal;
-                            const formatWhatsappLink = (whatsapp?: string) => {
-                              if (!whatsapp) return null;
-                              const digits = whatsapp.replace(/\D/g, "");
-                              return digits ? `https://wa.me/${digits}` : null;
-                            };
+                          {filteredBoletos.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                                Nenhum boleto encontrado com os filtros aplicados.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            filteredBoletos.map((boleto) => {
+                              const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
+                              const contato = empresa?.contatoPrincipal;
+                              const formatWhatsappLink = (whatsapp?: string) => {
+                                if (!whatsapp) return null;
+                                const digits = whatsapp.replace(/\D/g, "");
+                                return digits ? `https://wa.me/${digits}` : null;
+                              };
+                              const whatsappLink = formatWhatsappLink(contato?.whatsapp);
+                              const effectiveStatus = getBoletoEffectiveStatus(boleto);
 
-                            return (
-                              <TableRow key={boleto.id}>
-                                <TableCell className="font-medium">{boleto.empresa}</TableCell>
-                                <TableCell>{boleto.tipo}</TableCell>
-                                <TableCell>R$ {boleto.valor.toLocaleString("pt-BR")}</TableCell>
-                                <TableCell>{boleto.vencimento}</TableCell>
-                                <TableCell>{getStatusBadge(boleto.status)}</TableCell>
-                                <TableCell>
-                                  <div className="flex items-center gap-3">
-                                    <div className="text-sm">
-                                      <div className="font-medium text-foreground">
-                                        {contato?.nome || "Sem contato"}
+                              return (
+                                <TableRow key={boleto.id}>
+                                  <TableCell className="font-medium">{boleto.empresa}</TableCell>
+                                  <TableCell>
+                                    <span className="text-sm">{boleto.tipo}</span>
+                                  </TableCell>
+                                  <TableCell>
+                                    R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                  </TableCell>
+                                  <TableCell>{boleto.vencimento}</TableCell>
+                                  <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-sm">
+                                        <div className="font-medium text-foreground">
+                                          {contato?.nome || "Sem contato"}
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        {whatsappLink ? (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7"
+                                            asChild
+                                          >
+                                            <a
+                                              href={whatsappLink}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              aria-label={`Abrir conversa no WhatsApp com ${contato?.nome}`}
+                                            >
+                                              <MessageCircle className="h-4 w-4 text-green-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7"
+                                            disabled
+                                          >
+                                            <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
+                                        {contato?.email ? (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7"
+                                            asChild
+                                          >
+                                            <a
+                                              href={`mailto:${contato.email}`}
+                                              aria-label={`Enviar e-mail para ${contato?.nome}`}
+                                            >
+                                              <Mail className="h-4 w-4 text-blue-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7"
+                                            disabled
+                                          >
+                                            <Mail className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                      {contato?.whatsapp && formatWhatsappLink(contato.whatsapp) ? (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8"
-                                          asChild
-                                        >
-                                          <a
-                                            href={formatWhatsappLink(contato.whatsapp)!}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            aria-label={`Abrir conversa no WhatsApp com ${contato.nome}`}
-                                          >
-                                            <MessageCircle className="h-4 w-4 text-green-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8"
-                                          disabled
-                                        >
-                                          <MessageCircle className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
-                                      {contato?.email ? (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8"
-                                          asChild
-                                        >
-                                          <a
-                                            href={`mailto:${contato.email}`}
-                                            aria-label={`Enviar e-mail para ${contato.nome}`}
-                                          >
-                                            <Mail className="h-4 w-4 text-blue-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8"
-                                          disabled
-                                        >
-                                          <Mail className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
-                                    </div>
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
-                                  >
-                                    <Eye className="h-4 w-4 mr-2" />
-                                    Detalhes
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
+                                  </TableCell>
+                                  <TableCell>
+                                    <BoletoActionsCell
+                                      status={effectiveStatus}
+                                      whatsappLink={whatsappLink}
+                                      onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
+                                      onDownload={() => {
+                                        toast({
+                                          title: "Download iniciado (mock)",
+                                          description: `Boleto de ${boleto.empresa} sendo baixado.`,
+                                        });
+                                      }}
+                                      onGenerateNew={() => {
+                                        setSelectedBoletoForNew({
+                                          id: boleto.id,
+                                          empresa: boleto.empresa,
+                                          vencimento: boleto.vencimento,
+                                          valor: boleto.valor,
+                                        });
+                                        setGerarNovoOpen(true);
+                                      }}
+                                    />
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })
+                          )}
                         </TableBody>
                       </Table>
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* Modal for Gerar Novo Boleto */}
+                <GerarNovoBoletoModal
+                  open={gerarNovoOpen}
+                  onOpenChange={setGerarNovoOpen}
+                  boleto={selectedBoletoForNew}
+                  onGenerate={(boletoId, novaData) => {
+                    // Find original boleto and create a new one
+                    const original = boletos.find((b) => b.id === boletoId);
+                    if (original) {
+                      const novoBoleto: BoletoRegistro = {
+                        ...original,
+                        id: `b${Date.now()}`,
+                        vencimento: format(novaData, "dd/MM/yyyy"),
+                        status: "Pendente",
+                      };
+                      setBoletos([...boletos, novoBoleto]);
+                    }
+                    setSelectedBoletoForNew(null);
+                  }}
+                />
               </TabsContent>
 
               <TabsContent value="contribuicao" className="space-y-6">
