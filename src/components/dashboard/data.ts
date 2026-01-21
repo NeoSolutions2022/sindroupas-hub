@@ -139,19 +139,106 @@ export const empresas: Empresa[] = [
   },
 ];
 
-// KPIs do dashboard
+// KPIs do dashboard - NOVO formato operacional
 export const dashboardKPIs = {
-  adimplencia: 90.7,
-  adimplenciaAnterior: 88.2,
-  valorEmRisco: 32800,
-  valorEmRiscoAnterior: 28500,
+  inadimplencia: 9.3,
+  inadimplenciaVariacao: -1.2,
+  totalFaturadoMes: 125400,
+  totalFaturadoVariacao: 3.8,
+  valorEmAtraso: 32800,
+  qtdBoletosVencidos: 49,
   empresasCriticas: 4,
   proximosVencimentos15d: 12,
-  proximosEventos7d: 5,
-  receitaMes: 125400,
+  // Removido: proximosEventos7d
   empresasAtivas: 134,
   empresasInadimplentes: 21,
+  empresasEmDia: 113,
+  boletosEmAtraso: 49,
 };
+
+// Resumo da carteira
+export const carteiraResumo = {
+  boletosEmAtraso: 49,
+  empresasInadimplentes: 21,
+  empresasEmDia: 113,
+};
+
+// Empresas com dados incompletos
+export const empresasIncompletas = [
+  { id: 4, nome: "Moda Sul", missingFields: ["whatsapp", "aniversarioResponsavel"] },
+  { id: 5, nome: "Trama Nobre", missingFields: ["responsavel", "dataFundacao", "logo"] },
+  { id: 6, nome: "Têxtil Norte", missingFields: ["whatsapp"] },
+  { id: 7, nome: "Confecções Litoral", missingFields: ["aniversarioResponsavel", "logo"] },
+  { id: 8, nome: "Malhas Premium", missingFields: ["dataFundacao"] },
+  { id: 9, nome: "Estamparia Central", missingFields: ["responsavel", "whatsapp"] },
+];
+
+// Eventos do calendário mensal
+export const calendarEvents = [
+  { date: "2026-01-22", type: "vencimento" as const, label: "Vencimento", detail: "Estilo Nordeste (R$ 600)" },
+  { date: "2026-01-22", type: "aniversario" as const, label: "Aniversário do responsável", detail: "Renato Souza" },
+  { date: "2026-01-23", type: "vencimento" as const, label: "Vencimento", detail: "Costura Viva (R$ 850)" },
+  { date: "2026-01-24", type: "aniversario" as const, label: "Aniversário do responsável", detail: "Lúcia Costa" },
+  { date: "2026-01-25", type: "vencimento" as const, label: "Vencimento", detail: "Confecções Aurora (R$ 600)" },
+  { date: "2026-01-25", type: "aniversario" as const, label: "Aniversário de fundação", detail: "Confecções Aurora" },
+  { date: "2026-01-28", type: "vencimento" as const, label: "Vencimento", detail: "Moda Sul (R$ 480)" },
+  { date: "2026-01-15", type: "atrasado" as const, label: "Atrasado", detail: "Estilo Nordeste (R$ 600) - 6 dias" },
+  { date: "2026-01-10", type: "atrasado" as const, label: "Atrasado", detail: "Moda Sul (R$ 480) - 11 dias" },
+  { date: "2026-02-03", type: "aniversario" as const, label: "Aniversário de fundação", detail: "Costura Viva" },
+  { date: "2026-02-10", type: "vencimento" as const, label: "Vencimento", detail: "Trama Nobre (R$ 720)" },
+  { date: "2026-02-15", type: "vencimento" as const, label: "Vencimento", detail: "Estilo Nordeste (R$ 600)" },
+];
+
+// Prioridades operacionais (ordenadas por data)
+export const prioridadesOperacionais = [
+  {
+    id: 1,
+    nome: "Estilo Nordeste",
+    tipo: "boleto" as const,
+    contexto: "Atraso 70d • 3 boletos",
+    chips: [
+      { label: "Vencido há 70 dias", tipo: "critico" as const },
+      { label: "Crítico", tipo: "critico" as const },
+    ],
+  },
+  {
+    id: 4,
+    nome: "Moda Sul",
+    tipo: "boleto" as const,
+    contexto: "Atraso 35d • 1 boleto",
+    chips: [
+      { label: "Vencido há 35 dias", tipo: "atencao" as const },
+    ],
+  },
+  {
+    id: 3,
+    nome: "Confecções Aurora",
+    tipo: "aniversario" as const,
+    contexto: "Aniversário de fundação em 3 dias",
+    chips: [
+      { label: "Aniversário", tipo: "aniversario" as const },
+      { label: "Vence em 3 dias", tipo: "neutro" as const },
+    ],
+  },
+  {
+    id: 2,
+    nome: "Costura Viva",
+    tipo: "boleto" as const,
+    contexto: "Vence em 2 dias",
+    chips: [
+      { label: "Vence em 2 dias", tipo: "atencao" as const },
+    ],
+  },
+  {
+    id: 5,
+    nome: "Trama Nobre",
+    tipo: "boleto" as const,
+    contexto: "Vence hoje",
+    chips: [
+      { label: "Vence hoje", tipo: "atencao" as const },
+    ],
+  },
+];
 
 // Próximos vencimentos (15 dias)
 export const proximosVencimentos = [

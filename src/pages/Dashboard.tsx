@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -8,71 +8,99 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search, MessageCircle, Phone } from "lucide-react";
+import { toast } from "sonner";
 
 // Types and data
-import { PeriodoFiltro, PrioridadeItem } from "@/components/dashboard/types";
-import { empresas, dashboardKPIs, proximosVencimentos, agendaRelacionamento, mapaInadimplencia } from "@/components/dashboard/data";
-import { formatCurrency, getWhatsappLink, ordenarPorPrioridade, getResponsavel } from "@/components/dashboard/utils";
+import { 
+  empresas, 
+  dashboardKPIs, 
+  carteiraResumo, 
+  empresasIncompletas, 
+  calendarEvents,
+  prioridadesOperacionais 
+} from "@/components/dashboard/data";
+import { formatCurrency, getWhatsappLink, getResponsavel } from "@/components/dashboard/utils";
 
 // Components
-import { VisaoExecutiva } from "@/components/dashboard/VisaoExecutiva";
-import { PrioridadesHoje } from "@/components/dashboard/PrioridadesHoje";
-import { AgendaRelacionamento } from "@/components/dashboard/AgendaRelacionamento";
-import { MapaInadimplencia } from "@/components/dashboard/MapaInadimplencia";
-import { CRMPrioritario } from "@/components/dashboard/CRMPrioritario";
+import { NovasKPIs } from "@/components/dashboard/NovasKPIs";
+import { PrioridadesOperacional, PrioridadeOperacional } from "@/components/dashboard/PrioridadesOperacional";
+import { CalendarioMensal } from "@/components/dashboard/CalendarioMensal";
+import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
+import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
 
 const Dashboard = () => {
   // State
-  const [periodo, setPeriodo] = useState<PeriodoFiltro>("7dias");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedEmpresa, setSelectedEmpresa] = useState<PrioridadeItem | null>(null);
-  const [editingWhatsapp, setEditingWhatsapp] = useState<PrioridadeItem | null>(null);
-  const [whatsappDraft, setWhatsappDraft] = useState("");
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
+  const [focusField, setFocusField] = useState<string | undefined>();
+  const [formData, setFormData] = useState({
+    whatsapp: "",
+    responsavel: "",
+    dataFundacao: "",
+    aniversarioResponsavel: "",
+  });
 
-  // Todas as prioridades ordenadas
-  const todasPrioridades = useMemo(() => ordenarPorPrioridade(empresas), []);
+  const whatsappInputRef = useRef<HTMLInputElement>(null);
+  const responsavelInputRef = useRef<HTMLInputElement>(null);
+  const dataFundacaoInputRef = useRef<HTMLInputElement>(null);
+  const aniversarioInputRef = useRef<HTMLInputElement>(null);
 
-  // Top 5 para "Prioridades de Hoje"
-  const prioridadesHoje = useMemo(() => {
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return todasPrioridades.filter(e => 
-        e.nome.toLowerCase().includes(query) ||
-        getResponsavel(e)?.nome?.toLowerCase().includes(query) ||
-        e.whatsapp?.includes(query)
-      ).slice(0, 5);
+  // Auto-focus on the missing field when modal opens
+  useEffect(() => {
+    if (editingEmpresa && focusField) {
+      setTimeout(() => {
+        const refs: Record<string, React.RefObject<HTMLInputElement>> = {
+          whatsapp: whatsappInputRef,
+          responsavel: responsavelInputRef,
+          dataFundacao: dataFundacaoInputRef,
+          aniversarioResponsavel: aniversarioInputRef,
+        };
+        refs[focusField]?.current?.focus();
+      }, 100);
     }
-    return todasPrioridades.slice(0, 5);
-  }, [searchQuery, todasPrioridades]);
+  }, [editingEmpresa, focusField]);
 
-  // Empresas 6-50 para CRM Prioritário
-  const empresasCRM = useMemo(() => {
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return todasPrioridades.filter(e => 
-        e.nome.toLowerCase().includes(query) ||
-        getResponsavel(e)?.nome?.toLowerCase().includes(query) ||
-        e.whatsapp?.includes(query)
-      ).slice(5);
-    }
-    return todasPrioridades.slice(5);
-  }, [searchQuery, todasPrioridades]);
+  // Filtered priorities based on search
+  const prioridadesFiltradas = useMemo(() => {
+    if (!searchQuery) return prioridadesOperacionais;
+    const query = searchQuery.toLowerCase();
+    return prioridadesOperacionais.filter(
+      (p) =>
+        p.nome.toLowerCase().includes(query) ||
+        p.contexto.toLowerCase().includes(query)
+    );
+  }, [searchQuery]);
 
-  const periodos: { value: PeriodoFiltro; label: string }[] = [
-    { value: "hoje", label: "Hoje" },
-    { value: "7dias", label: "7 dias" },
-    { value: "30dias", label: "30 dias" },
-  ];
+  // Find empresa for details modal
+  const selectedEmpresa = useMemo(() => {
+    if (!selectedEmpresaId) return null;
+    return empresas.find((e) => e.id === selectedEmpresaId) || null;
+  }, [selectedEmpresaId]);
 
-  const handleCompletarCadastro = (empresa: PrioridadeItem) => {
-    setEditingWhatsapp(empresa);
-    setWhatsappDraft(empresa.whatsapp || "");
+  const handleCorrigirCadastro = (empresa: EmpresaIncompleta, field?: string) => {
+    setEditingEmpresa(empresa);
+    setFocusField(field);
+    setFormData({
+      whatsapp: "",
+      responsavel: "",
+      dataFundacao: "",
+      aniversarioResponsavel: "",
+    });
   };
 
-  const handleSaveWhatsapp = () => {
-    console.log("Salvando WhatsApp:", whatsappDraft, "para empresa:", editingWhatsapp?.nome);
-    setEditingWhatsapp(null);
-    setWhatsappDraft("");
+  const handleSaveForm = () => {
+    toast.success(`Dados de ${editingEmpresa?.nome} atualizados com sucesso!`);
+    setEditingEmpresa(null);
+    setFocusField(undefined);
+  };
+
+  const handleAcaoPrimaria = (prioridade: PrioridadeOperacional) => {
+    if (prioridade.tipo === "boleto") {
+      toast.info(`Cobrança enviada para ${prioridade.nome}`);
+    } else {
+      toast.success(`Mensagem de aniversário pronta para ${prioridade.nome}`);
+    }
   };
 
   return (
@@ -83,89 +111,77 @@ const Dashboard = () => {
           <DashboardNavbar />
           <main className="flex-1 p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto w-full">
             
-            {/* A) Header + Contexto - Compacto e alinhado */}
+            {/* A) Header - SEM filtro de período */}
             <header className="space-y-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h1 className="text-2xl font-bold text-foreground">Painel do Sindicato</h1>
                   <p className="text-sm text-muted-foreground">Acompanhamento diário de adimplência e relacionamento</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1 rounded-lg border border-border bg-card p-1">
-                    {periodos.map((p) => (
-                      <Button
-                        key={p.value}
-                        variant={periodo === p.value ? "default" : "ghost"}
-                        size="sm"
-                        className={periodo === p.value ? "bg-primary text-primary-foreground" : "text-muted-foreground"}
-                        onClick={() => setPeriodo(p.value)}
-                      >
-                        {p.label}
-                      </Button>
-                    ))}
-                  </div>
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      type="search"
-                      placeholder="Buscar empresa, responsável..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 bg-card border-border"
-                    />
-                  </div>
+                <div className="relative w-full sm:w-72">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    type="search"
+                    placeholder="Buscar empresa, responsável..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9 bg-card border-border"
+                    aria-label="Buscar empresa ou responsável"
+                  />
                 </div>
               </div>
             </header>
 
-            {/* B) Visão Executiva - KPIs */}
-            <VisaoExecutiva
-              adimplencia={dashboardKPIs.adimplencia}
-              adimplenciaAnterior={dashboardKPIs.adimplenciaAnterior}
-              valorEmRisco={dashboardKPIs.valorEmRisco}
-              valorEmRiscoAnterior={dashboardKPIs.valorEmRiscoAnterior}
+            {/* B) KPIs - Nova versão */}
+            <NovasKPIs
+              inadimplencia={dashboardKPIs.inadimplencia}
+              inadimplenciaVariacao={dashboardKPIs.inadimplenciaVariacao}
+              totalFaturadoMes={dashboardKPIs.totalFaturadoMes}
+              totalFaturadoVariacao={dashboardKPIs.totalFaturadoVariacao}
+              valorEmAtraso={dashboardKPIs.valorEmAtraso}
+              qtdBoletosVencidos={dashboardKPIs.qtdBoletosVencidos}
               empresasCriticas={dashboardKPIs.empresasCriticas}
-              proximosVencimentos15d={dashboardKPIs.proximosVencimentos15d}
-              proximosEventos7d={dashboardKPIs.proximosEventos7d}
+              proximosVencimentos={dashboardKPIs.proximosVencimentos15d}
             />
 
-            {/* C) Prioridades de Hoje - Top 5 */}
-            <PrioridadesHoje
-              prioridades={prioridadesHoje}
-              onVerDetalhes={(empresa) => setSelectedEmpresa(empresa)}
-              onCompletarCadastro={handleCompletarCadastro}
-            />
-
-            {/* D) Agenda de Relacionamento + E) Mapa de Inadimplência */}
+            {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">
-              <AgendaRelacionamento agenda={agendaRelacionamento} />
-              <MapaInadimplencia 
-                mapaInadimplencia={mapaInadimplencia} 
-                proximosVencimentos={proximosVencimentos} 
+              <PrioridadesOperacional
+                prioridades={prioridadesFiltradas}
+                onVerDetalhes={(id) => setSelectedEmpresaId(id)}
+                onAcaoPrimaria={handleAcaoPrimaria}
+              />
+              <CalendarioMensal events={calendarEvents} />
+            </div>
+
+            {/* D) Resumo da Carteira + E) Empresas Incompletas */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <ResumoCarteira
+                boletosEmAtraso={carteiraResumo.boletosEmAtraso}
+                empresasInadimplentes={carteiraResumo.empresasInadimplentes}
+                empresasEmDia={carteiraResumo.empresasEmDia}
+              />
+              <EmpresasIncompletas
+                empresas={empresasIncompletas}
+                onCorrigir={handleCorrigirCadastro}
               />
             </div>
 
-            {/* F) CRM Prioritário - Empresas 6+ */}
-            {empresasCRM.length > 0 && (
-              <CRMPrioritario
-                empresas={empresasCRM}
-                onVerDetalhes={(empresa) => setSelectedEmpresa(empresa)}
-              />
-            )}
-
             {/* Dialog Detalhes */}
-            <Dialog open={!!selectedEmpresa} onOpenChange={(open) => !open && setSelectedEmpresa(null)}>
-              <DialogContent className="max-w-lg">
+            <Dialog open={!!selectedEmpresa} onOpenChange={(open) => !open && setSelectedEmpresaId(null)}>
+              <DialogContent className="max-w-lg" role="dialog" aria-labelledby="detalhes-titulo">
                 {selectedEmpresa && (
                   <>
                     <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2">
+                      <DialogTitle id="detalhes-titulo" className="flex items-center gap-2">
                         {selectedEmpresa.nome}
-                        <Badge className={selectedEmpresa.selo === "Crítico" ? "bg-destructive" : selectedEmpresa.selo === "Atenção" ? "bg-amber-500" : "bg-accent"}>
-                          {selectedEmpresa.selo}
+                        <Badge className={selectedEmpresa.situacao === "Inadimplente" ? "bg-destructive" : "bg-accent"}>
+                          {selectedEmpresa.situacao}
                         </Badge>
                       </DialogTitle>
-                      <DialogDescription>{selectedEmpresa.motivo}</DialogDescription>
+                      <DialogDescription>
+                        {selectedEmpresa.proximoBoleto?.descricao || "Resumo da empresa"}
+                      </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 text-sm">
                       <div className="grid grid-cols-2 gap-3">
@@ -178,11 +194,6 @@ const Dashboard = () => {
                           <p className="text-lg font-bold">{selectedEmpresa.diasInadimplente || 0}</p>
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedEmpresa.chips.map((chip, i) => (
-                          <Badge key={i} variant="outline">{chip}</Badge>
-                        ))}
-                      </div>
                       {selectedEmpresa.historico && (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground mb-1">Histórico</p>
@@ -193,7 +204,7 @@ const Dashboard = () => {
                       )}
                     </div>
                     <DialogFooter className="gap-2">
-                      <Button variant="outline" onClick={() => setSelectedEmpresa(null)}>Fechar</Button>
+                      <Button variant="outline" onClick={() => setSelectedEmpresaId(null)}>Fechar</Button>
                       {selectedEmpresa.whatsapp ? (
                         <Button asChild>
                           <a href={getWhatsappLink(selectedEmpresa.whatsapp)} target="_blank" rel="noreferrer">
@@ -201,7 +212,10 @@ const Dashboard = () => {
                           </a>
                         </Button>
                       ) : (
-                        <Button onClick={() => { setSelectedEmpresa(null); handleCompletarCadastro(selectedEmpresa); }}>
+                        <Button onClick={() => {
+                          setSelectedEmpresaId(null);
+                          handleCorrigirCadastro({ id: selectedEmpresa.id, nome: selectedEmpresa.nome, missingFields: ["whatsapp"] }, "whatsapp");
+                        }}>
                           <Phone className="h-4 w-4 mr-2" /> Adicionar WhatsApp
                         </Button>
                       )}
@@ -211,38 +225,77 @@ const Dashboard = () => {
               </DialogContent>
             </Dialog>
 
-            {/* Dialog Completar Cadastro */}
-            <Dialog open={!!editingWhatsapp} onOpenChange={(open) => !open && setEditingWhatsapp(null)}>
-              <DialogContent className="max-w-md">
-                {editingWhatsapp && (
+            {/* Dialog Corrigir Cadastro - Multi-field */}
+            <Dialog open={!!editingEmpresa} onOpenChange={(open) => !open && setEditingEmpresa(null)}>
+              <DialogContent className="max-w-md" role="dialog" aria-labelledby="corrigir-titulo">
+                {editingEmpresa && (
                   <>
                     <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2">
+                      <DialogTitle id="corrigir-titulo" className="flex items-center gap-2">
                         <Phone className="h-5 w-5 text-accent" />
                         Completar Cadastro
                       </DialogTitle>
                       <DialogDescription>
-                        Adicione o WhatsApp para {editingWhatsapp.nome}
+                        Preencha os dados faltantes de {editingEmpresa.nome}
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="whatsapp">WhatsApp (com DDD)</Label>
-                        <Input
-                          id="whatsapp"
-                          placeholder="5511999999999"
-                          value={whatsappDraft}
-                          onChange={(e) => setWhatsappDraft(e.target.value)}
-                          className="font-mono"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Formato: código do país + DDD + número (ex: 5585999999999)
-                        </p>
-                      </div>
+                      {editingEmpresa.missingFields.includes("whatsapp") && (
+                        <div className="space-y-2">
+                          <Label htmlFor="whatsapp">WhatsApp do responsável</Label>
+                          <Input
+                            id="whatsapp"
+                            ref={whatsappInputRef}
+                            placeholder="5511999999999"
+                            value={formData.whatsapp}
+                            onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
+                            className="font-mono"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Formato: código do país + DDD + número
+                          </p>
+                        </div>
+                      )}
+                      {editingEmpresa.missingFields.includes("responsavel") && (
+                        <div className="space-y-2">
+                          <Label htmlFor="responsavel">Nome do responsável</Label>
+                          <Input
+                            id="responsavel"
+                            ref={responsavelInputRef}
+                            placeholder="Nome completo"
+                            value={formData.responsavel}
+                            onChange={(e) => setFormData({ ...formData, responsavel: e.target.value })}
+                          />
+                        </div>
+                      )}
+                      {editingEmpresa.missingFields.includes("dataFundacao") && (
+                        <div className="space-y-2">
+                          <Label htmlFor="dataFundacao">Data de fundação</Label>
+                          <Input
+                            id="dataFundacao"
+                            ref={dataFundacaoInputRef}
+                            type="date"
+                            value={formData.dataFundacao}
+                            onChange={(e) => setFormData({ ...formData, dataFundacao: e.target.value })}
+                          />
+                        </div>
+                      )}
+                      {editingEmpresa.missingFields.includes("aniversarioResponsavel") && (
+                        <div className="space-y-2">
+                          <Label htmlFor="aniversarioResponsavel">Data de nascimento do responsável</Label>
+                          <Input
+                            id="aniversarioResponsavel"
+                            ref={aniversarioInputRef}
+                            type="date"
+                            value={formData.aniversarioResponsavel}
+                            onChange={(e) => setFormData({ ...formData, aniversarioResponsavel: e.target.value })}
+                          />
+                        </div>
+                      )}
                     </div>
                     <DialogFooter className="gap-2">
-                      <Button variant="outline" onClick={() => setEditingWhatsapp(null)}>Cancelar</Button>
-                      <Button onClick={handleSaveWhatsapp} disabled={!whatsappDraft}>Salvar WhatsApp</Button>
+                      <Button variant="outline" onClick={() => setEditingEmpresa(null)}>Cancelar</Button>
+                      <Button onClick={handleSaveForm}>Salvar alterações</Button>
                     </DialogFooter>
                   </>
                 )}
