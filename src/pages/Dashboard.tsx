@@ -107,30 +107,33 @@ const Dashboard = () => {
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
         <AppSidebar />
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col overflow-hidden">
           <DashboardNavbar />
-          <main className="flex-1 p-4 md:p-6 space-y-6 max-w-[1400px] mx-auto w-full">
-            
-            {/* A) Header - SEM filtro de período */}
-            <header className="space-y-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h1 className="text-2xl font-bold text-foreground">Painel do Sindicato</h1>
-                  <p className="text-sm text-muted-foreground">Acompanhamento diário de adimplência e relacionamento</p>
+          <main className="flex-1 overflow-auto">
+            <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto w-full">
+              
+              {/* Header */}
+              <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-0.5">
+                  <h1 className="text-xl font-bold text-foreground sm:text-2xl">
+                    Painel do Sindicato
+                  </h1>
+                  <p className="text-sm text-muted-foreground">
+                    Acompanhamento diário de adimplência e relacionamento
+                  </p>
                 </div>
-                <div className="relative w-full sm:w-72">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                   <Input
                     type="search"
-                    placeholder="Buscar empresa, responsável..."
+                    placeholder="Buscar empresa..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 bg-card border-border"
+                    className="pl-9 h-9 bg-card border-border text-sm"
                     aria-label="Buscar empresa ou responsável"
                   />
                 </div>
-              </div>
-            </header>
+              </header>
 
             {/* B) KPIs - Nova versão */}
             <NovasKPIs
@@ -302,6 +305,7 @@ const Dashboard = () => {
               </DialogContent>
             </Dialog>
 
+            </div>
           </main>
         </div>
       </div>

@@ -734,29 +734,40 @@ const Financeiro = () => {
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
         <AppSidebar />
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col overflow-hidden">
           <DashboardNavbar />
-          <main className="flex-1 p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h1 className="text-3xl font-bold">Financeiro</h1>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => handleExport("PDF")}>
-                  <FileDown className="h-4 w-4 mr-2" />
-                  Exportar PDF
-                </Button>
-                <Button variant="outline" onClick={() => handleExport("Excel")}>
-                  <FileDown className="h-4 w-4 mr-2" />
-                  Exportar Excel
-                </Button>
+          <main className="flex-1 overflow-auto">
+            <div className="p-4 md:p-6 max-w-[1400px] mx-auto w-full space-y-5">
+              {/* Header */}
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-0.5">
+                  <h1 className="text-xl font-bold text-foreground sm:text-2xl">Financeiro</h1>
+                  <p className="text-sm text-muted-foreground">Gestão de boletos, faixas e contribuições</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => handleExport("PDF")}>
+                    <FileDown className="h-3.5 w-3.5" />
+                    PDF
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => handleExport("Excel")}>
+                    <FileDown className="h-3.5 w-3.5" />
+                    Excel
+                  </Button>
+                </div>
               </div>
-            </div>
 
-            <Tabs defaultValue="boletos" className="w-full">
-              <TabsList className="grid w-full grid-cols-2 lg:grid-cols-3 mb-6">
-                <TabsTrigger value="boletos">Controle de Boletos</TabsTrigger>
-                <TabsTrigger value="faixas">Faixas</TabsTrigger>
-                <TabsTrigger value="contribuicao">Contribuição Assistencial</TabsTrigger>
-              </TabsList>
+              <Tabs defaultValue="boletos" className="w-full">
+                <TabsList className="h-10 p-1 bg-muted/50 rounded-lg w-full sm:w-auto grid grid-cols-3 sm:inline-grid">
+                  <TabsTrigger value="boletos" className="text-xs sm:text-sm rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                    Boletos
+                  </TabsTrigger>
+                  <TabsTrigger value="faixas" className="text-xs sm:text-sm rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                    Faixas
+                  </TabsTrigger>
+                  <TabsTrigger value="contribuicao" className="text-xs sm:text-sm rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                    Contribuição
+                  </TabsTrigger>
+                </TabsList>
 
               <TabsContent value="boletos">
                 {/* Advanced Filters */}
@@ -1671,6 +1682,7 @@ const Financeiro = () => {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            </div>
           </main>
         </div>
       </div>
