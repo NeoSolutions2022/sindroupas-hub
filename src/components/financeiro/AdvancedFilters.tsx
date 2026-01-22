@@ -17,9 +17,10 @@ import {
 } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CalendarIcon, Search, Save, X } from "lucide-react";
+import { CalendarIcon, Search, Save, X, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface FilterState {
@@ -41,10 +42,10 @@ interface AdvancedFiltersProps {
 }
 
 const statusOptions = [
-  { value: "Pago", label: "Pago" },
-  { value: "Pendente", label: "Pendente" },
-  { value: "Atrasado", label: "Atrasado" },
-  { value: "Vencido", label: "Vencido" },
+  { value: "Pago", label: "Pago", color: "bg-green-50 text-green-700 border-green-200" },
+  { value: "Pendente", label: "Pendente", color: "bg-blue-50 text-blue-700 border-blue-200" },
+  { value: "Atrasado", label: "Atrasado", color: "bg-destructive/10 text-destructive border-destructive/20" },
+  { value: "Vencido", label: "Vencido", color: "bg-amber-50 text-amber-700 border-amber-200" },
 ];
 
 export function AdvancedFilters({
@@ -67,238 +68,253 @@ export function AdvancedFilters({
     emp.nome.toLowerCase().includes(filters.empresaSearch.toLowerCase())
   );
 
+  const hasActiveFilters = 
+    filters.empresaSearch ||
+    filters.status.length > 0 ||
+    filters.tipo !== "todos" ||
+    filters.dataInicio ||
+    filters.dataFim ||
+    filters.somenteInadimplentes;
+
   return (
-    <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-5 shadow-sm mb-6">
-      {/* Header */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-5">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">Filtros</h3>
-          <p className="text-sm text-muted-foreground">
-            Refine a visualização de boletos.
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="self-start text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-transparent"
-          onClick={onClear}
-        >
-          <X className="h-4 w-4 mr-1" />
-          Limpar filtros
-        </Button>
-      </div>
-
-      {/* Filters Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-5">
-        {/* Empresa */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Empresa</Label>
-          <div className="relative">
-            <Input
-              placeholder="Buscar empresa..."
-              value={filters.empresaSearch}
-              onChange={(e) => {
-                onFiltersChange({ ...filters, empresaSearch: e.target.value });
-                setEmpresaSuggestions(true);
-              }}
-              onFocus={() => setEmpresaSuggestions(true)}
-              className="h-10"
-            />
-            {empresaSuggestions &&
-              filters.empresaSearch &&
-              filteredEmpresas.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                  {filteredEmpresas.slice(0, 5).map((empresa) => (
-                    <div
-                      key={empresa.id}
-                      className="px-3 py-2 hover:bg-accent cursor-pointer text-sm"
-                      onClick={() => {
-                        onFiltersChange({
-                          ...filters,
-                          empresaSearch: empresa.nome,
-                        });
-                        setEmpresaSuggestions(false);
-                      }}
-                    >
-                      {empresa.nome}
-                    </div>
-                  ))}
-                </div>
-              )}
+    <Card className="shadow-card border-border mb-5">
+      <CardHeader className="pb-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg bg-accent/10 p-1.5">
+              <Filter className="h-4 w-4 text-accent" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-semibold">Filtros</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Refine a visualização de boletos
+              </p>
+            </div>
           </div>
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start text-xs font-medium text-muted-foreground hover:text-foreground h-8"
+              onClick={onClear}
+            >
+              <X className="h-3.5 w-3.5 mr-1" />
+              Limpar filtros
+            </Button>
+          )}
         </div>
-
-        {/* Status Multi-Select */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Status</Label>
-          <div className="flex flex-wrap gap-1.5">
-            {statusOptions.map((option) => (
-              <Badge
-                key={option.value}
-                variant={
-                  filters.status.includes(option.value)
-                    ? "default"
-                    : "outline"
-                }
-                className={cn(
-                  "cursor-pointer transition-colors text-xs px-2 py-1",
-                  filters.status.includes(option.value)
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background hover:bg-accent"
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        {/* Filters Grid */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Empresa */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">Empresa</Label>
+            <div className="relative">
+              <Input
+                placeholder="Buscar empresa..."
+                value={filters.empresaSearch}
+                onChange={(e) => {
+                  onFiltersChange({ ...filters, empresaSearch: e.target.value });
+                  setEmpresaSuggestions(true);
+                }}
+                onFocus={() => setEmpresaSuggestions(true)}
+                className="h-9 text-sm"
+              />
+              {empresaSuggestions &&
+                filters.empresaSearch &&
+                filteredEmpresas.length > 0 && (
+                  <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                    {filteredEmpresas.slice(0, 5).map((empresa) => (
+                      <div
+                        key={empresa.id}
+                        className="px-3 py-2 hover:bg-secondary cursor-pointer text-sm transition-colors"
+                        onClick={() => {
+                          onFiltersChange({
+                            ...filters,
+                            empresaSearch: empresa.nome,
+                          });
+                          setEmpresaSuggestions(false);
+                        }}
+                      >
+                        {empresa.nome}
+                      </div>
+                    ))}
+                  </div>
                 )}
-                onClick={() => toggleStatus(option.value)}
-              >
-                {option.label}
-              </Badge>
-            ))}
+            </div>
           </div>
-        </div>
 
-        {/* Tipo */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Tipo</Label>
-          <Select
-            value={filters.tipo}
-            onValueChange={(value) =>
-              onFiltersChange({ ...filters, tipo: value })
-            }
-          >
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder="Todos os tipos" />
-            </SelectTrigger>
-            <SelectContent className="bg-background">
-              <SelectItem value="todos">Todos os tipos</SelectItem>
-              <SelectItem value="Mensalidade (por Faixa)">
-                Mensalidade (por Faixa)
-              </SelectItem>
-              <SelectItem value="Contribuição Assistencial">
-                Contribuição Assistencial
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Ordenação */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">Ordenação</Label>
-          <Select
-            value={filters.ordenacao}
-            onValueChange={(value) =>
-              onFiltersChange({ ...filters, ordenacao: value })
-            }
-          >
-            <SelectTrigger className="h-10">
-              <SelectValue placeholder="Mais recentes" />
-            </SelectTrigger>
-            <SelectContent className="bg-background">
-              <SelectItem value="recentes">Mais recentes</SelectItem>
-              <SelectItem value="valor">Maior valor</SelectItem>
-              <SelectItem value="atrasados">Mais atrasados</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Date Range + Toggle Row */}
-      <div className="flex flex-col md:flex-row md:items-end gap-4 mb-5">
-        {/* Período de vencimento */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Vencimento (De)</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
+          {/* Status Multi-Select */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">Status</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {statusOptions.map((option) => (
+                <Badge
+                  key={option.value}
                   variant="outline"
                   className={cn(
-                    "h-10 w-[160px] justify-start text-left font-normal",
-                    !filters.dataInicio && "text-muted-foreground"
+                    "cursor-pointer transition-all text-[10px] px-2 py-1 font-medium",
+                    filters.status.includes(option.value)
+                      ? option.color
+                      : "bg-background hover:bg-secondary text-muted-foreground"
                   )}
+                  onClick={() => toggleStatus(option.value)}
                 >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {filters.dataInicio
-                    ? format(filters.dataInicio, "dd/MM/yyyy")
-                    : "Selecione"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 bg-background" align="start">
-                <Calendar
-                  mode="single"
-                  selected={filters.dataInicio}
-                  onSelect={(date) =>
-                    onFiltersChange({ ...filters, dataInicio: date })
-                  }
-                  locale={ptBR}
-                  className="pointer-events-auto"
-                />
-              </PopoverContent>
-            </Popover>
+                  {option.label}
+                </Badge>
+              ))}
+            </div>
           </div>
 
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">Vencimento (Até)</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    "h-10 w-[160px] justify-start text-left font-normal",
-                    !filters.dataFim && "text-muted-foreground"
-                  )}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {filters.dataFim
-                    ? format(filters.dataFim, "dd/MM/yyyy")
-                    : "Selecione"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 bg-background" align="start">
-                <Calendar
-                  mode="single"
-                  selected={filters.dataFim}
-                  onSelect={(date) =>
-                    onFiltersChange({ ...filters, dataFim: date })
-                  }
-                  locale={ptBR}
-                  className="pointer-events-auto"
-                />
-              </PopoverContent>
-            </Popover>
+          {/* Tipo */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">Tipo</Label>
+            <Select
+              value={filters.tipo}
+              onValueChange={(value) =>
+                onFiltersChange({ ...filters, tipo: value })
+              }
+            >
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Todos os tipos" />
+              </SelectTrigger>
+              <SelectContent className="bg-popover">
+                <SelectItem value="todos">Todos os tipos</SelectItem>
+                <SelectItem value="Mensalidade (por Faixa)">
+                  Mensalidade (Faixa)
+                </SelectItem>
+                <SelectItem value="Contribuição Assistencial">
+                  Contrib. Assistencial
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Ordenação */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">Ordenação</Label>
+            <Select
+              value={filters.ordenacao}
+              onValueChange={(value) =>
+                onFiltersChange({ ...filters, ordenacao: value })
+              }
+            >
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Mais recentes" />
+              </SelectTrigger>
+              <SelectContent className="bg-popover">
+                <SelectItem value="recentes">Mais recentes</SelectItem>
+                <SelectItem value="valor">Maior valor</SelectItem>
+                <SelectItem value="atrasados">Mais atrasados</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
-        {/* Toggle Somente Inadimplentes */}
-        <div className="flex items-center gap-3 h-10">
-          <Switch
-            id="inadimplentes"
-            checked={filters.somenteInadimplentes}
-            onCheckedChange={(checked) =>
-              onFiltersChange({ ...filters, somenteInadimplentes: checked })
-            }
-          />
-          <Label
-            htmlFor="inadimplentes"
-            className="text-sm font-medium cursor-pointer"
+        {/* Date Range + Toggle Row */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:flex-wrap">
+          {/* Período de vencimento */}
+          <div className="flex flex-wrap gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">De</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "h-9 w-[130px] justify-start text-left text-sm font-normal",
+                      !filters.dataInicio && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+                    {filters.dataInicio
+                      ? format(filters.dataInicio, "dd/MM/yy")
+                      : "Selecione"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0 bg-popover" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={filters.dataInicio}
+                    onSelect={(date) =>
+                      onFiltersChange({ ...filters, dataInicio: date })
+                    }
+                    locale={ptBR}
+                    className="pointer-events-auto"
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-muted-foreground">Até</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "h-9 w-[130px] justify-start text-left text-sm font-normal",
+                      !filters.dataFim && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+                    {filters.dataFim
+                      ? format(filters.dataFim, "dd/MM/yy")
+                      : "Selecione"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0 bg-popover" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={filters.dataFim}
+                    onSelect={(date) =>
+                      onFiltersChange({ ...filters, dataFim: date })
+                    }
+                    locale={ptBR}
+                    className="pointer-events-auto"
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+          </div>
+
+          {/* Toggle Somente Inadimplentes */}
+          <div className="flex items-center gap-2.5 h-9 px-3 rounded-lg border border-border bg-background">
+            <Switch
+              id="inadimplentes"
+              checked={filters.somenteInadimplentes}
+              onCheckedChange={(checked) =>
+                onFiltersChange({ ...filters, somenteInadimplentes: checked })
+              }
+              className="scale-90"
+            />
+            <Label
+              htmlFor="inadimplentes"
+              className="text-xs font-medium cursor-pointer whitespace-nowrap"
+            >
+              Só inadimplentes
+            </Label>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-wrap gap-2 pt-3 border-t border-border">
+          <Button
+            onClick={onFilter}
+            size="sm"
+            className="h-8 gap-1.5 text-xs bg-accent hover:bg-accent/90"
           >
-            Somente inadimplentes
-          </Label>
+            <Search className="h-3.5 w-3.5" />
+            Filtrar
+          </Button>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Save className="h-3.5 w-3.5" />
+            Salvar filtro
+          </Button>
         </div>
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex flex-wrap gap-3 pt-4 border-t border-[#DCE7CB]">
-        <Button
-          onClick={onFilter}
-          className="bg-[#00A86B] hover:bg-[#00A86B]/90"
-        >
-          <Search className="h-4 w-4 mr-2" />
-          Filtrar
-        </Button>
-        <Button variant="outline">
-          <Save className="h-4 w-4 mr-2" />
-          Salvar filtro
-        </Button>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
