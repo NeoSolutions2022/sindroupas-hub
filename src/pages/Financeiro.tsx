@@ -51,13 +51,25 @@ import {
   getFinanceiroData,
   saveFinanceiroData,
 } from "@/lib/financeiro-data";
+import { hasuraRequest } from "@/lib/api";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
 
 // Mock de empresas para autocomplete
-const mockEmpresas = [
+type EmpresaFinanceiro = {
+  id: string;
+  nome: string;
+  cnpj: string;
+  contatoPrincipal: {
+    nome?: string;
+    whatsapp?: string;
+    email?: string;
+  };
+};
+
+const fallbackEmpresas: EmpresaFinanceiro[] = [
   { 
     id: "emp1", 
     nome: "Estilo Nordeste Ltda", 
@@ -138,6 +150,45 @@ interface BoletoForm {
   pesquisaContribuicaoFeita: boolean;
 }
 
+type FinanceiroQueryResponse = {
+  data?: {
+    financeiro_boletos: {
+      id: string;
+      tipo?: string | null;
+      valor?: number | null;
+      vencimento?: string | null;
+      status?: string | null;
+      competencia_inicial?: string | null;
+      competencia_final?: string | null;
+      descricao?: string | null;
+      empresa?: { id: string; nome_fantasia?: string | null; razao_social?: string | null } | null;
+      faixa?: { label?: string | null } | null;
+    }[];
+    contribuicoes_assistenciais: {
+      id: string;
+      ano?: string | null;
+      periodicidade?: string | null;
+      parcelas?: number | null;
+      base_calculo?: number | null;
+      percentual?: number | null;
+      descontos?: number | null;
+      valor_total?: number | null;
+      vencimento?: string | null;
+      situacao?: string | null;
+      empresa?: { nome_fantasia?: string | null; razao_social?: string | null } | null;
+    }[];
+    faixas: { id: string; min_colaboradores?: number | null; max_colaboradores?: number | null; valor_mensalidade?: number | null }[];
+    empresas: {
+      id: string;
+      razao_social?: string | null;
+      nome_fantasia?: string | null;
+      cnpj?: string | null;
+      responsaveis?: { nome?: string | null; whatsapp?: string | null; email?: string | null }[];
+    }[];
+  };
+  errors?: { message: string }[];
+};
+
 const Financeiro = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -171,6 +222,7 @@ const Financeiro = () => {
     { id: "fx1", min: 1, max: 20, valor: 600 },
     { id: "fx2", min: 21, max: 50, valor: 850 },
   ]);
+  const [empresas, setEmpresas] = useState(fallbackEmpresas);
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
@@ -198,6 +250,158 @@ const Financeiro = () => {
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
   });
+
+  useEffect(() => {
+    const loadFinanceiro = async () => {
+      try {
+        const response = await hasuraRequest<FinanceiroQueryResponse>(`
+          query Financeiro {
+            financeiro_boletos(order_by: { vencimento: desc }) {
+              id
+              tipo
+              valor
+              vencimento
+              status
+              competencia_inicial
+              competencia_final
+              descricao
+              empresa {
+                id
+                nome_fantasia
+                razao_social
+              }
+              faixa {
+                label
+              }
+            }
+            contribuicoes_assistenciais(order_by: { vencimento: desc }) {
+              id
+              ano
+              periodicidade
+              parcelas
+              base_calculo
+              percentual
+              descontos
+              valor_total
+              vencimento
+              situacao
+              empresa {
+                nome_fantasia
+                razao_social
+              }
+            }
+            faixas(order_by: { min_colaboradores: asc }) {
+              id
+              min_colaboradores
+              max_colaboradores
+              valor_mensalidade
+            }
+            empresas(order_by: { nome_fantasia: asc }) {
+              id
+              razao_social
+              nome_fantasia
+              cnpj
+              responsaveis(limit: 1) {
+                nome
+                whatsapp
+                email
+              }
+            }
+          }
+        `);
+
+        if (response.errors?.length) {
+          throw new Error(response.errors[0]?.message);
+        }
+
+        const data = response.data;
+        if (!data) return;
+
+        const mappedBoletos: BoletoRegistro[] = data.financeiro_boletos.map((boleto) => {
+          const status = (boleto.status || "").toLowerCase();
+          const statusLabel =
+            status === "pago"
+              ? "Pago"
+              : status === "atrasado"
+                ? "Atrasado"
+                : status === "cancelado"
+                  ? "Cancelado"
+                  : "Pendente";
+          const tipoLabel =
+            boleto.tipo === "contribuicao" ? "Contribuição Assistencial" : "Mensalidade (por Faixa)";
+          return {
+            id: boleto.id,
+            tipo: tipoLabel,
+            empresa: boleto.empresa?.nome_fantasia || boleto.empresa?.razao_social || "Empresa",
+            valor: boleto.valor ?? 0,
+            vencimento: boleto.vencimento ? format(new Date(boleto.vencimento), "dd/MM/yyyy") : "",
+            status: statusLabel,
+            competenciaInicial: boleto.competencia_inicial ?? undefined,
+            competenciaFinal: boleto.competencia_final ?? undefined,
+            faixa: boleto.faixa?.label ?? undefined,
+          };
+        });
+
+        const mappedHistorico: HistoricoContribuicao[] = data.contribuicoes_assistenciais.map(
+          (registro) => ({
+            id: registro.id,
+            ano: registro.ano ?? "",
+            empresa: registro.empresa?.nome_fantasia || registro.empresa?.razao_social || "Empresa",
+            periodicidade: registro.periodicidade ?? "",
+            parcelas: registro.parcelas ?? 0,
+            base: registro.base_calculo ?? 0,
+            percentual: registro.percentual ?? 0,
+            descontos: registro.descontos ?? 0,
+            valor: registro.valor_total ?? 0,
+            vencimento: registro.vencimento ? format(new Date(registro.vencimento), "dd/MM/yyyy") : "",
+            situacao: registro.situacao ?? "Emitida",
+          }),
+        );
+
+        const mappedFaixas = data.faixas.map((faixa) => ({
+          id: faixa.id,
+          min: faixa.min_colaboradores ?? 0,
+          max: faixa.max_colaboradores ?? 0,
+          valor: faixa.valor_mensalidade ?? 0,
+        }));
+
+        const mappedEmpresas = data.empresas.map((empresa) => ({
+          id: empresa.id,
+          nome: empresa.nome_fantasia || empresa.razao_social || "Empresa",
+          cnpj: empresa.cnpj ?? "",
+          contatoPrincipal: {
+            nome: empresa.responsaveis?.[0]?.nome ?? "",
+            whatsapp: empresa.responsaveis?.[0]?.whatsapp ?? "",
+            email: empresa.responsaveis?.[0]?.email ?? "",
+          },
+        }));
+
+        if (mappedBoletos.length || mappedHistorico.length) {
+          setBoletos(mappedBoletos.length ? mappedBoletos : initialData.boletos);
+          setHistoricoContribuicao(
+            mappedHistorico.length ? mappedHistorico : initialData.historico,
+          );
+        }
+
+        if (mappedFaixas.length) {
+          setFaixas(mappedFaixas);
+        }
+
+        if (mappedEmpresas.length) {
+          setEmpresas(mappedEmpresas);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Erro ao carregar financeiro.";
+        toast({
+          title: "Erro ao carregar dados",
+          description: message,
+          variant: "destructive",
+        });
+      }
+    };
+
+    loadFinanceiro();
+  }, [initialData.boletos, initialData.historico, toast]);
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
@@ -487,7 +691,7 @@ const Financeiro = () => {
     setContribuicaoPreview("");
   };
 
-  const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
+  const handleSelectEmpresa = (empresa: EmpresaFinanceiro) => {
     setBoletoForm({
       ...boletoForm,
       empresaId: empresa.id,
@@ -497,7 +701,7 @@ const Financeiro = () => {
     setShowEmpresaSuggestions(false);
   };
 
-  const empresasFiltradas = mockEmpresas.filter(
+  const empresasFiltradas = empresas.filter(
     (emp) =>
       emp.nome.toLowerCase().includes(empresaSearch.toLowerCase()) ||
       emp.cnpj.includes(empresaSearch)
@@ -779,7 +983,7 @@ const Financeiro = () => {
                     setFilters(defaultFilters);
                     setAppliedFilters(defaultFilters);
                   }}
-                  empresas={mockEmpresas.map((e) => ({ id: e.id, nome: e.nome }))}
+                  empresas={empresas.map((e) => ({ id: e.id, nome: e.nome }))}
                 />
 
                 <Card>
@@ -823,7 +1027,7 @@ const Financeiro = () => {
                             </TableRow>
                           ) : (
                             filteredBoletos.map((boleto) => {
-                              const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
+                              const empresa = empresas.find(e => e.nome === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
                                 if (!whatsapp) return null;

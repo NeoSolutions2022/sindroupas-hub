@@ -7,47 +7,135 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Download } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { useEffect, useMemo, useState } from "react";
+import { hasuraRequest } from "@/lib/api";
+import { format } from "date-fns";
 
-const mockBoletos = [
-  {
-    id: 1,
-    empresa: "Estilo Nordeste",
-    valor: 450,
-    vencimento: "10/03/2025",
-    status: "Pago",
-    pagamento: "09/03/2025",
-    historico: [
-      { data: "09/03/2025", evento: "Pagamento confirmado" },
-      { data: "05/03/2025", evento: "Boleto enviado por e-mail" },
-      { data: "01/03/2025", evento: "Boleto gerado" },
-    ],
-  },
-  {
-    id: 2,
-    empresa: "Costura Viva",
-    valor: 450,
-    vencimento: "15/03/2025",
-    status: "Atrasado",
-    pagamento: null,
-    historico: [
-      { data: "16/03/2025", evento: "Notificação de atraso enviada" },
-      { data: "10/03/2025", evento: "Boleto enviado por e-mail" },
-      { data: "05/03/2025", evento: "Boleto gerado" },
-    ],
-  },
-];
+type BoletoDetalhe = {
+  id: string;
+  empresa: string;
+  valor: number;
+  vencimento: string;
+  status: string;
+  pagamento?: string | null;
+  pdfUrl?: string | null;
+  historico: { data: string; evento: string }[];
+};
+
+type BoletoDetalheResponse = {
+  data?: {
+    financeiro_boletos_by_pk?: {
+      id: string;
+      valor?: number | null;
+      vencimento?: string | null;
+      status?: string | null;
+      pdf_url?: string | null;
+      empresa?: { nome_fantasia?: string | null; razao_social?: string | null } | null;
+      updated_at?: string | null;
+    } | null;
+  };
+  errors?: { message: string }[];
+};
 
 const FinanceiroDetalhe = () => {
   const navigate = useNavigate();
   const { id } = useParams();
   const { toast } = useToast();
-  const boleto = mockBoletos.find((b) => b.id === Number(id));
+  const [boleto, setBoleto] = useState<BoletoDetalhe | null>(null);
+
+  const fallbackHistorico = useMemo(
+    () => [
+      { data: "—", evento: "Boleto gerado" },
+      { data: "—", evento: "Boleto enviado por e-mail" },
+      { data: "—", evento: "Aguardando pagamento" },
+    ],
+    [],
+  );
+
+  useEffect(() => {
+    const loadBoleto = async () => {
+      if (!id) return;
+      try {
+        const response = await hasuraRequest<BoletoDetalheResponse>(
+          `
+          query BoletoDetalhe($id: uuid!) {
+            financeiro_boletos_by_pk(id: $id) {
+              id
+              valor
+              vencimento
+              status
+              pdf_url
+              updated_at
+              empresa {
+                nome_fantasia
+                razao_social
+              }
+            }
+          }
+        `,
+          { id },
+        );
+
+        if (response.errors?.length) {
+          throw new Error(response.errors[0]?.message);
+        }
+
+        const data = response.data?.financeiro_boletos_by_pk;
+        if (!data) {
+          setBoleto(null);
+          return;
+        }
+
+        const status = (data.status || "").toLowerCase();
+        const statusLabel =
+          status === "pago"
+            ? "Pago"
+            : status === "atrasado"
+              ? "Atrasado"
+              : status === "cancelado"
+                ? "Cancelado"
+                : "Pendente";
+        const updatedAt = data.updated_at ? format(new Date(data.updated_at), "dd/MM/yyyy") : "—";
+
+        setBoleto({
+          id: data.id,
+          empresa: data.empresa?.nome_fantasia || data.empresa?.razao_social || "Empresa",
+          valor: data.valor ?? 0,
+          vencimento: data.vencimento ? format(new Date(data.vencimento), "dd/MM/yyyy") : "—",
+          status: statusLabel,
+          pagamento: status === "pago" ? updatedAt : null,
+          pdfUrl: data.pdf_url ?? null,
+          historico:
+            status === "pago"
+              ? [
+                  { data: updatedAt, evento: "Pagamento confirmado" },
+                  { data: "—", evento: "Boleto enviado por e-mail" },
+                  { data: "—", evento: "Boleto gerado" },
+                ]
+              : fallbackHistorico,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Erro ao carregar boleto.";
+        toast({
+          title: "Erro ao carregar boleto",
+          description: message,
+          variant: "destructive",
+        });
+      }
+    };
+
+    loadBoleto();
+  }, [fallbackHistorico, id, toast]);
 
   if (!boleto) {
     return <div>Boleto não encontrado</div>;
   }
 
   const handleDownload = () => {
+    if (boleto.pdfUrl) {
+      window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
     toast({
       title: "Download iniciado",
       description: "O boleto será baixado em breve",

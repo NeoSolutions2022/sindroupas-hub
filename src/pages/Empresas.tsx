@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { hasuraRequest } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   Calendar,
@@ -93,7 +94,7 @@ type Faixa = {
   label: string;
 };
 
-const faixas: Faixa[] = [
+const fallbackFaixas: Faixa[] = [
   { id: "fx1", min: 1, max: 20, valor: 600, label: "1–20 • R$600" },
   { id: "fx2", min: 21, max: 50, valor: 850, label: "21–50 • R$850" },
 ];
@@ -207,8 +208,56 @@ const formatPhone = (value: string) => {
     .slice(0, 15);
 };
 
+type EmpresasQueryResponse = {
+  data?: {
+    empresas: {
+      id: string;
+      logo_url?: string | null;
+      razao_social?: string | null;
+      nome_fantasia?: string | null;
+      cnpj?: string | null;
+      email?: string | null;
+      whatsapp?: string | null;
+      endereco?: string | null;
+      associada?: boolean | null;
+      situacao_financeira?: string | null;
+      porte?: string | null;
+      capital_social?: number | null;
+      data_fundacao?: string | null;
+      data_associacao?: string | null;
+      data_desassociacao?: string | null;
+      faixa?: {
+        id: string;
+        label?: string | null;
+        min_colaboradores?: number | null;
+        max_colaboradores?: number | null;
+        valor_mensalidade?: number | null;
+      } | null;
+      responsaveis?: { nome?: string | null; whatsapp?: string | null }[];
+      colaboradores?: {
+        nome?: string | null;
+        cpf?: string | null;
+        whatsapp?: string | null;
+        cargo?: string | null;
+        email?: string | null;
+        observacoes?: string | null;
+      }[];
+    }[];
+    faixas: {
+      id: string;
+      label?: string | null;
+      min_colaboradores?: number | null;
+      max_colaboradores?: number | null;
+      valor_mensalidade?: number | null;
+    }[];
+  };
+  errors?: { message: string }[];
+};
+
 const Empresas = () => {
-  const [empresas] = useState<Empresa[]>(initialEmpresas);
+  const { toast } = useToast();
+  const [empresas, setEmpresas] = useState<Empresa[]>(initialEmpresas);
+  const [faixas, setFaixas] = useState<Faixa[]>(fallbackFaixas);
   const [searchTerm, setSearchTerm] = useState("");
   const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
@@ -218,14 +267,145 @@ const Empresas = () => {
   const [periodoInicio, setPeriodoInicio] = useState("");
   const [periodoFim, setPeriodoFim] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  useEffect(() => {
+    const loadEmpresas = async () => {
+      try {
+        const response = await hasuraRequest<EmpresasQueryResponse>(`
+          query Empresas {
+            empresas(order_by: { nome_fantasia: asc }) {
+              id
+              logo_url
+              razao_social
+              nome_fantasia
+              cnpj
+              email
+              whatsapp
+              endereco
+              associada
+              situacao_financeira
+              porte
+              capital_social
+              data_fundacao
+              data_associacao
+              data_desassociacao
+              faixa {
+                id
+                label
+                min_colaboradores
+                max_colaboradores
+                valor_mensalidade
+              }
+              responsaveis(limit: 1) {
+                nome
+                whatsapp
+              }
+              colaboradores {
+                nome
+                cpf
+                whatsapp
+                cargo
+                email
+                observacoes
+              }
+            }
+            faixas(order_by: { min_colaboradores: asc }) {
+              id
+              label
+              min_colaboradores
+              max_colaboradores
+              valor_mensalidade
+            }
+          }
+        `);
+
+        if (response.errors?.length) {
+          throw new Error(response.errors[0]?.message);
+        }
+
+        const data = response.data;
+        if (!data) return;
+
+        const mappedFaixas = data.faixas.map((faixa) => ({
+          id: faixa.id,
+          min: faixa.min_colaboradores ?? 0,
+          max: faixa.max_colaboradores ?? 0,
+          valor: faixa.valor_mensalidade ?? 0,
+          label:
+            faixa.label ??
+            `${faixa.min_colaboradores ?? 0}–${faixa.max_colaboradores ?? 0} • R$${(
+              faixa.valor_mensalidade ?? 0
+            ).toFixed(0)}`,
+        }));
+
+        const mappedEmpresas = data.empresas.map((empresa) => {
+          const faixa = empresa.faixa;
+          return {
+            id: empresa.id,
+            logoUrl: empresa.logo_url ?? "",
+            razaoSocial: empresa.razao_social ?? "",
+            nomeFantasia: empresa.nome_fantasia ?? "",
+            cnpj: empresa.cnpj ?? "",
+            email: empresa.email ?? undefined,
+            whatsapp: empresa.whatsapp ?? undefined,
+            endereco: empresa.endereco ?? undefined,
+            associado: Boolean(empresa.associada),
+            situacaoFinanceira:
+              empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
+            porte: portes.includes(empresa.porte as (typeof portes)[number])
+              ? (empresa.porte as (typeof portes)[number])
+              : "ME",
+            capitalSocial: empresa.capital_social ?? undefined,
+            faixaId: faixa?.id,
+            faixaLabel: faixa
+              ? faixa.label ??
+                `${faixa.min_colaboradores ?? 0}–${faixa.max_colaboradores ?? 0} • R$${(
+                  faixa.valor_mensalidade ?? 0
+                ).toFixed(0)}`
+              : undefined,
+            dataFundacao: empresa.data_fundacao ?? "",
+            dataAssociacao: empresa.data_associacao ?? null,
+            dataDesassociacao: empresa.data_desassociacao ?? null,
+            responsavel: empresa.responsaveis?.[0]
+              ? {
+                  nome: empresa.responsaveis[0].nome ?? undefined,
+                  whatsapp: empresa.responsaveis[0].whatsapp ?? undefined,
+                }
+              : null,
+            colaboradores:
+              empresa.colaboradores?.map((colaborador) => ({
+                nome: colaborador.nome ?? "",
+                cpf: colaborador.cpf ?? "",
+                whatsapp: colaborador.whatsapp ?? "",
+                cargo: colaborador.cargo ?? "",
+                email: colaborador.email ?? "",
+                observacoes: colaborador.observacoes ?? undefined,
+              })) ?? [],
+          } as Empresa;
+        });
+
+        setFaixas(mappedFaixas.length ? mappedFaixas : fallbackFaixas);
+        setEmpresas(mappedEmpresas.length ? mappedEmpresas : initialEmpresas);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Erro ao carregar empresas.";
+        toast({
+          title: "Erro ao carregar dados",
+          description: message,
+          variant: "destructive",
+        });
+        setEmpresas(initialEmpresas);
+        setFaixas(fallbackFaixas);
+      }
+    };
+
+    loadEmpresas();
+  }, [toast]);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
-  const { toast } = useToast();
-
   const colaboradorMatch = useMemo(() => {
     if (!searchTerm.trim()) return null;
     const lower = searchTerm.trim().toLowerCase();

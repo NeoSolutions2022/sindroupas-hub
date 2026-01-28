@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, Mail, MessageCircle, Plus, Pencil, Search, Trash2, Eye } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -44,6 +44,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { hasuraRequest } from "@/lib/api";
 import {
   Tooltip,
   TooltipContent,
@@ -73,7 +74,7 @@ interface Relacionamento {
   ultimoPagamento?: { data: string; valor: number };
 }
 
-const mockRelacionamentos: Relacionamento[] = [
+const fallbackRelacionamentos: Relacionamento[] = [
   {
     id: "p1",
     tipo: "Parceiro",
@@ -148,7 +149,7 @@ const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"
 
 export default function Relacionamentos() {
   const { toast } = useToast();
-  const [relacionamentos, setRelacionamentos] = useState<Relacionamento[]>(mockRelacionamentos);
+  const [relacionamentos, setRelacionamentos] = useState<Relacionamento[]>(fallbackRelacionamentos);
   const [searchTerm, setSearchTerm] = useState("");
   const [tipoFilter, setTipoFilter] = useState<TipoRelacionamento[]>([]);
   const [categoriaFilter, setCategoriaFilter] = useState("");
@@ -169,6 +170,124 @@ export default function Relacionamentos() {
   const [formDescricao, setFormDescricao] = useState("");
   const [formContrapartidas, setFormContrapartidas] = useState("");
   const [formObservacoes, setFormObservacoes] = useState("");
+
+  useEffect(() => {
+    const loadRelacionamentos = async () => {
+      try {
+        const response = await hasuraRequest<{
+          data?: {
+            relacionamentos: {
+              id: string;
+              tipo?: string | null;
+              nome?: string | null;
+              cnpj?: string | null;
+              categoria?: string | null;
+              status?: string | null;
+              descricao?: string | null;
+              contrapartidas?: string | null;
+              observacoes?: string | null;
+              relacionamento_contatos?: { nome?: string | null; email?: string | null; whatsapp?: string | null }[];
+              relacionamento_aportes?: { valor?: number | null; data?: string | null }[];
+              relacionamento_pagamentos?: { valor?: number | null; data?: string | null }[];
+            }[];
+          };
+          errors?: { message: string }[];
+        }>(
+          `
+          query Relacionamentos {
+            relacionamentos(order_by: { nome: asc }) {
+              id
+              tipo
+              nome
+              cnpj
+              categoria
+              status
+              descricao
+              contrapartidas
+              observacoes
+              relacionamento_contatos(limit: 1) {
+                nome
+                email
+                whatsapp
+              }
+              relacionamento_aportes(order_by: { data: desc }, limit: 3) {
+                valor
+                data
+              }
+              relacionamento_pagamentos(order_by: { data: desc }, limit: 3) {
+                valor
+                data
+              }
+            }
+          }
+        `,
+        );
+
+        if (response.errors?.length) {
+          throw new Error(response.errors[0]?.message);
+        }
+
+        const data = response.data?.relacionamentos;
+        if (!data?.length) return;
+
+        const mapped = data.map((item) => {
+          const tipo =
+            item.tipo === "mantenedor"
+              ? "Mantenedor"
+              : item.tipo === "fornecedor"
+                ? "Fornecedor"
+                : "Parceiro";
+          return {
+            id: item.id,
+            tipo,
+            nome: item.nome ?? "Relacionamento",
+            cnpj: item.cnpj ?? undefined,
+            categoria: item.categoria ?? undefined,
+            status: (item.status as Relacionamento["status"]) ?? "Ativo",
+            ultimaMov: item.relacionamento_aportes?.[0]?.data
+              ? `Aporte em ${item.relacionamento_aportes[0].data}`
+              : item.relacionamento_pagamentos?.[0]?.data
+                ? `Pagamento em ${item.relacionamento_pagamentos[0].data}`
+                : undefined,
+            contatos: item.relacionamento_contatos?.[0]
+              ? {
+                  nome: item.relacionamento_contatos[0].nome ?? undefined,
+                  email: item.relacionamento_contatos[0].email ?? undefined,
+                  whatsapp: item.relacionamento_contatos[0].whatsapp ?? undefined,
+                }
+              : undefined,
+            descricao: item.descricao ?? undefined,
+            aportes:
+              item.relacionamento_aportes?.map((aporte) => ({
+                valor: aporte.valor ?? 0,
+                data: aporte.data ?? "",
+              })) ?? undefined,
+            contrapartidas: item.contrapartidas ?? undefined,
+            observacoes: item.observacoes ?? undefined,
+            ultimoPagamento: item.relacionamento_pagamentos?.[0]
+              ? {
+                  data: item.relacionamento_pagamentos[0].data ?? "",
+                  valor: item.relacionamento_pagamentos[0].valor ?? 0,
+                }
+              : undefined,
+          } as Relacionamento;
+        });
+
+        setRelacionamentos(mapped);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Erro ao carregar relacionamentos.";
+        toast({
+          title: "Erro ao carregar dados",
+          description: message,
+          variant: "destructive",
+        });
+        setRelacionamentos(fallbackRelacionamentos);
+      }
+    };
+
+    loadRelacionamentos();
+  }, [toast]);
 
   const filteredRelacionamentos = relacionamentos.filter((r) => {
     const matchSearch =

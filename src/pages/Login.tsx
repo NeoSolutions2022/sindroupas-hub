@@ -5,11 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import logo from "@/assets/logo.jpeg";
-
-const MOCK_USER = {
-  email: "sindroupas@email.com",
-  password: "senha123",
-} as const;
+import { authLogin } from "@/lib/api";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -17,15 +13,18 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email === MOCK_USER.email && password === MOCK_USER.password) {
+    setError("");
+    try {
+      await authLogin(email, password);
       setError("");
       navigate("/dashboard");
       return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro ao autenticar.";
+      setError(message || "Credenciais inválidas. Verifique seu e-mail e senha.");
     }
-
-    setError("Credenciais inválidas. Verifique seu e-mail e senha.");
   };
 
   return (
