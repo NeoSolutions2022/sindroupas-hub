@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -256,6 +257,7 @@ type EmpresasQueryResponse = {
 
 const Empresas = () => {
   const { toast } = useToast();
+  const isMobile = useIsMobile();
   const [empresas, setEmpresas] = useState<Empresa[]>(initialEmpresas);
   const [faixas, setFaixas] = useState<Faixa[]>(fallbackFaixas);
   const [searchTerm, setSearchTerm] = useState("");
