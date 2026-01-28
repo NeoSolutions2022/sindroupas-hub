@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, Mail, MessageCircle, Plus, Pencil, Search, Trash2, Eye } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -149,6 +150,7 @@ const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"
 
 export default function Relacionamentos() {
   const { toast } = useToast();
+  const isMobile = useIsMobile();
   const [relacionamentos, setRelacionamentos] = useState<Relacionamento[]>(fallbackRelacionamentos);
   const [searchTerm, setSearchTerm] = useState("");
   const [tipoFilter, setTipoFilter] = useState<TipoRelacionamento[]>([]);
