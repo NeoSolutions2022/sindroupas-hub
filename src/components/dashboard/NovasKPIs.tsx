@@ -27,27 +27,27 @@ const KPICard = ({ label, valor, helper, helperTipo = "neutro", icone, destaque 
   return (
     <div 
       className={`
-        rounded-xl border bg-card p-4 shadow-card transition-card hover:shadow-card-hover
+        rounded-xl border bg-card p-3 sm:p-4 shadow-card transition-card hover:shadow-card-hover
         ${destaque ? "ring-2 ring-destructive/20 border-destructive/30" : "border-border"}
       `}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0 space-y-1">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide leading-tight">
+      <div className="flex items-start justify-between gap-2 sm:gap-3">
+        <div className="flex-1 min-w-0 space-y-0.5 sm:space-y-1">
+          <p className="text-[10px] sm:text-xs font-medium text-muted-foreground uppercase tracking-wide leading-tight">
             {label}
           </p>
-          <p className="text-2xl font-bold text-foreground tabular-nums">
+          <p className="text-lg sm:text-2xl font-bold text-foreground tabular-nums">
             {valor}
           </p>
           {helper && (
-            <div className={`flex items-center gap-1.5 text-xs ${helperColor[helperTipo]}`}>
-              {helperTipo === "positivo" && <TrendingUp className="h-3 w-3" />}
-              {helperTipo === "negativo" && <TrendingDown className="h-3 w-3" />}
+            <div className={`flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs ${helperColor[helperTipo]}`}>
+              {helperTipo === "positivo" && <TrendingUp className="h-2.5 w-2.5 sm:h-3 sm:w-3" />}
+              {helperTipo === "negativo" && <TrendingDown className="h-2.5 w-2.5 sm:h-3 sm:w-3" />}
               <span className="truncate">{helper}</span>
             </div>
           )}
         </div>
-        <div className="shrink-0 rounded-lg bg-secondary/80 p-2.5">
+        <div className="shrink-0 rounded-lg bg-secondary/80 p-2 sm:p-2.5">
           {icone}
         </div>
       </div>
@@ -92,7 +92,7 @@ export const NovasKPIs = ({
 
   return (
     <section aria-label="Indicadores Executivos">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 md:gap-4 md:grid-cols-3 lg:grid-cols-5">
         <KPICard
           label="Inadimplência"
           valor={`${inadimplencia.toFixed(1)}%`}

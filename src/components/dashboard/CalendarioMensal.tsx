@@ -104,10 +104,10 @@ export const CalendarioMensal = ({ events }: CalendarioMensalProps) => {
         </div>
 
         {/* Calendar grid */}
-        <div className="grid grid-cols-7 gap-0.5">
+        <div className="grid grid-cols-7 gap-0.5 sm:gap-1">
           {/* Empty cells for padding */}
           {Array.from({ length: startPadding }).map((_, i) => (
-            <div key={`pad-${i}`} className="h-9" />
+            <div key={`pad-${i}`} className="h-8 sm:h-9" />
           ))}
 
           {/* Day cells */}
@@ -119,12 +119,12 @@ export const CalendarioMensal = ({ events }: CalendarioMensalProps) => {
             const dayCell = (
               <div
                 className={`
-                  h-9 flex flex-col items-center justify-center rounded-md relative transition-colors
+                  h-8 sm:h-9 flex flex-col items-center justify-center rounded-md relative transition-colors
                   ${isToday ? "bg-primary text-primary-foreground font-semibold" : ""}
                   ${hasEvents && !isToday ? "cursor-pointer hover:bg-secondary" : ""}
                 `}
               >
-                <span className={`text-xs ${!isToday ? "text-foreground" : ""}`}>
+                <span className={`text-[11px] sm:text-xs ${!isToday ? "text-foreground" : ""}`}>
                   {format(day, "d")}
                 </span>
                 {/* Event dots */}

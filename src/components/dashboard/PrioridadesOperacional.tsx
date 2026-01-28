@@ -132,21 +132,21 @@ export const PrioridadesOperacional = ({
               </div>
 
               {/* Actions */}
-              <div className="flex items-center gap-2 mt-3 ml-9">
+              <div className="flex flex-wrap items-center gap-2 mt-3 ml-0 sm:ml-9">
                 <Button
                   size="sm"
-                  className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90"
+                  className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90 flex-1 sm:flex-none min-w-0"
                   onClick={() => onAcaoPrimaria(prioridade)}
                 >
                   {prioridade.tipo === "boleto" ? (
                     <>
-                      <Receipt className="h-3.5 w-3.5" />
-                      Cobrar boleto
+                      <Receipt className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">Cobrar</span>
                     </>
                   ) : (
                     <>
-                      <Gift className="h-3.5 w-3.5" />
-                      Enviar mensagem
+                      <Gift className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">Enviar</span>
                     </>
                   )}
                 </Button>
@@ -157,7 +157,7 @@ export const PrioridadesOperacional = ({
                   onClick={() => onVerDetalhes(prioridade.id)}
                 >
                   <Eye className="h-3.5 w-3.5" />
-                  Detalhes
+                  <span className="sr-only sm:not-sr-only">Detalhes</span>
                 </Button>
               </div>
             </div>
