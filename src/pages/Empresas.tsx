@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -208,6 +209,7 @@ const formatPhone = (value: string) => {
 };
 
 const Empresas = () => {
+  const isMobile = useIsMobile();
   const [empresas] = useState<Empresa[]>(initialEmpresas);
   const [searchTerm, setSearchTerm] = useState("");
   const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
@@ -464,13 +466,13 @@ const Empresas = () => {
         <AppSidebar />
         <div className="flex-1 flex flex-col">
           <DashboardNavbar />
-          <main className="flex-1 p-6 space-y-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <main className="flex-1 p-4 md:p-6 space-y-4 md:space-y-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h1 className="text-3xl font-bold text-[#1C1C1C]">Empresas</h1>
-                <p className="text-muted-foreground">Gestão de associadas, status financeiro e equipes</p>
+                <h1 className="text-2xl md:text-3xl font-bold text-[#1C1C1C]">Empresas</h1>
+                <p className="text-sm text-muted-foreground">Gestão de associadas, status financeiro e equipes</p>
               </div>
-              <Button onClick={() => handleOpenDialog()} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" aria-label="Cadastrar nova empresa">
+              <Button onClick={() => handleOpenDialog()} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90 w-full sm:w-auto" aria-label="Cadastrar nova empresa">
                 <Plus className="mr-2 h-4 w-4" />
                 Cadastrar Empresa
               </Button>
@@ -518,7 +520,7 @@ const Empresas = () => {
                   )}
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="flex gap-1 rounded-full bg-white p-1 shadow-sm">
                     {["Todas", "Associadas", "Não associadas"].map((status) => (
                       <Button
@@ -640,123 +642,250 @@ const Empresas = () => {
               </div>
             </div>
 
-            <Card className="border-none shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-lg text-[#1C1C1C]">Empresas</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead scope="col">Logo</TableHead>
-                        <TableHead scope="col">Empresa</TableHead>
-                        <TableHead scope="col">CNPJ</TableHead>
-                        <TableHead scope="col">Associado</TableHead>
-                        <TableHead scope="col">Situação Financeira</TableHead>
-                        <TableHead scope="col">Porte</TableHead>
-                        <TableHead scope="col">Capital Social</TableHead>
-                        <TableHead scope="col">Faixa</TableHead>
-                        <TableHead scope="col">Datas</TableHead>
-                        <TableHead scope="col">Responsável p/ contato</TableHead>
-                        <TableHead scope="col">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredEmpresas.map((empresa) => {
-                        const contato = getContatoPrincipal(empresa);
-                        return (
-                          <TableRow
-                            key={empresa.id}
-                            className={cn(
-                              highlightedEmpresaId === empresa.id && "bg-[#DCE7CB]/60"
+            {/* Mobile Card View */}
+            {isMobile ? (
+              <div className="space-y-3">
+                <h2 className="text-lg font-semibold text-[#1C1C1C]">Empresas ({filteredEmpresas.length})</h2>
+                {filteredEmpresas.length === 0 ? (
+                  <Card className="p-6 text-center text-muted-foreground">
+                    Nenhuma empresa encontrada com os filtros selecionados.
+                  </Card>
+                ) : (
+                  filteredEmpresas.map((empresa) => {
+                    const contato = getContatoPrincipal(empresa);
+                    return (
+                      <Card 
+                        key={empresa.id} 
+                        className={cn(
+                          "p-4 space-y-3",
+                          highlightedEmpresaId === empresa.id && "bg-[#DCE7CB]/60"
+                        )}
+                      >
+                        {/* Header with logo and name */}
+                        <div className="flex items-start gap-3">
+                          <Avatar className="h-12 w-12 border shrink-0">
+                            <AvatarImage src={empresa.logoUrl} alt={`Logo ${empresa.nomeFantasia}`} />
+                            <AvatarFallback className="text-sm font-medium">
+                              {empresa.nomeFantasia.substring(0, 2).toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold text-foreground truncate">{empresa.nomeFantasia}</h3>
+                            <p className="text-xs text-muted-foreground truncate">{empresa.razaoSocial}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{empresa.cnpj}</p>
+                          </div>
+                        </div>
+
+                        {/* Status badges */}
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white text-xs" : "bg-secondary text-[#1C1C1C] text-xs"}>
+                            {empresa.associado ? "Associada" : "Não associada"}
+                          </Badge>
+                          <Badge className={empresa.situacaoFinanceira === "Regular" ? "bg-[#DCE7CB] text-[#1C1C1C] text-xs" : "bg-red-500 text-white text-xs"}>
+                            {empresa.situacaoFinanceira}
+                          </Badge>
+                          <Badge variant="outline" className="text-xs">{empresa.porte}</Badge>
+                        </div>
+
+                        {/* Key info grid */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <span className="text-muted-foreground">Capital Social</span>
+                            <p className="font-medium">{formatCurrency(empresa.capitalSocial)}</p>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Faixa</span>
+                            <p className="font-medium">{empresa.faixaLabel || "—"}</p>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Fundação</span>
+                            <p className="font-medium">{formatDate(empresa.dataFundacao)}</p>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Associação</span>
+                            <p className="font-medium">{formatDate(empresa.dataAssociacao)}</p>
+                          </div>
+                        </div>
+
+                        {/* Contact info */}
+                        {contato && (
+                          <div className="flex items-center justify-between pt-2 border-t border-border">
+                            <div className="text-xs">
+                              <p className="font-medium text-foreground">{contato.nome}</p>
+                              <p className="text-muted-foreground flex items-center gap-1">
+                                <MessageCircle className="h-3 w-3" /> {contato.whatsapp}
+                              </p>
+                            </div>
+                            {contato.whatsapp && contato.whatsapp !== "—" && (
+                              <Button 
+                                size="sm" 
+                                className="h-8 gap-1.5 bg-primary"
+                                asChild
+                              >
+                                <a 
+                                  href={`https://wa.me/${contato.whatsapp.replace(/\D/g, "")}`} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                >
+                                  <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                                </a>
+                              </Button>
                             )}
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 gap-1.5"
+                            onClick={() => handleOpenDialog(empresa, true)}
                           >
-                            <TableCell>
-                              <Avatar className="h-10 w-10 border">
-                                <AvatarImage src={empresa.logoUrl} alt={`Logo ${empresa.nomeFantasia}`} />
-                                <AvatarFallback>{empresa.nomeFantasia.substring(0, 2).toUpperCase()}</AvatarFallback>
-                              </Avatar>
-                            </TableCell>
-                            <TableCell>
-                              <p className="font-semibold text-[#1C1C1C]">{empresa.razaoSocial}</p>
-                              <p className="text-sm text-muted-foreground">{empresa.nomeFantasia}</p>
-                            </TableCell>
-                            <TableCell>{empresa.cnpj}</TableCell>
-                            <TableCell>
-                              <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white" : "bg-secondary text-[#1C1C1C]"}>
-                                {empresa.associado ? "Sim" : "Não"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <Badge className={empresa.situacaoFinanceira === "Regular" ? "bg-[#DCE7CB] text-[#1C1C1C]" : "bg-red-500 text-white"}>
-                                {empresa.situacaoFinanceira}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{empresa.porte}</TableCell>
-                            <TableCell>{formatCurrency(empresa.capitalSocial)}</TableCell>
-                            <TableCell>{empresa.faixaLabel || "—"}</TableCell>
-                            <TableCell className="text-sm">
-                              <span className="font-semibold">Fundação:</span> {formatDate(empresa.dataFundacao)}
-                              <br />
-                              <span className="font-semibold">Associação:</span> {formatDate(empresa.dataAssociacao)}
-                              <br />
-                              <span className="font-semibold">Desassociação:</span> {formatDate(empresa.dataDesassociacao)}
-                            </TableCell>
-                            <TableCell>
-                              {contato ? (
-                                <div>
-                                  <p className="font-medium">{contato.nome}</p>
-                                  <p className="flex items-center gap-1 text-sm text-muted-foreground">
-                                    <MessageCircle className="h-3.5 w-3.5" /> {contato.whatsapp}
-                                  </p>
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
+                            <Eye className="h-3.5 w-3.5" /> Ver
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 gap-1.5"
+                            onClick={() => handleOpenDialog(empresa, false)}
+                          >
+                            <Edit className="h-3.5 w-3.5" /> Editar
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-destructive"
+                            onClick={() => handleDelete(empresa)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </Card>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              /* Desktop Table View */
+              <Card className="border-none shadow-lg">
+                <CardHeader>
+                  <CardTitle className="text-lg text-[#1C1C1C]">Empresas</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead scope="col">Logo</TableHead>
+                          <TableHead scope="col">Empresa</TableHead>
+                          <TableHead scope="col">CNPJ</TableHead>
+                          <TableHead scope="col">Associado</TableHead>
+                          <TableHead scope="col">Situação Financeira</TableHead>
+                          <TableHead scope="col">Porte</TableHead>
+                          <TableHead scope="col">Capital Social</TableHead>
+                          <TableHead scope="col">Faixa</TableHead>
+                          <TableHead scope="col">Datas</TableHead>
+                          <TableHead scope="col">Responsável p/ contato</TableHead>
+                          <TableHead scope="col">Ações</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredEmpresas.map((empresa) => {
+                          const contato = getContatoPrincipal(empresa);
+                          return (
+                            <TableRow
+                              key={empresa.id}
+                              className={cn(
+                                highlightedEmpresaId === empresa.id && "bg-[#DCE7CB]/60"
                               )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-3">
-                                <Button
-                                  size="icon"
-                                  variant="outline"
-                                  className="h-9 w-9 shrink-0"
-                                  onClick={() => handleOpenDialog(empresa, true)}
-                                  aria-label={`Visualizar ${empresa.nomeFantasia}`}
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="outline"
-                                  className="h-9 w-9 shrink-0"
-                                  onClick={() => handleOpenDialog(empresa, false)}
-                                  aria-label={`Editar ${empresa.nomeFantasia}`}
-                                >
-                                  <Edit className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="icon"
-                                  variant="destructive"
-                                  className="h-9 w-9 shrink-0"
-                                  onClick={() => handleDelete(empresa)}
-                                  aria-label={`Excluir ${empresa.nomeFantasia}`}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                  {filteredEmpresas.length === 0 && (
-                    <p className="py-6 text-center text-muted-foreground">Nenhuma empresa encontrada com os filtros selecionados.</p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                            >
+                              <TableCell>
+                                <Avatar className="h-10 w-10 border">
+                                  <AvatarImage src={empresa.logoUrl} alt={`Logo ${empresa.nomeFantasia}`} />
+                                  <AvatarFallback>{empresa.nomeFantasia.substring(0, 2).toUpperCase()}</AvatarFallback>
+                                </Avatar>
+                              </TableCell>
+                              <TableCell>
+                                <p className="font-semibold text-[#1C1C1C]">{empresa.razaoSocial}</p>
+                                <p className="text-sm text-muted-foreground">{empresa.nomeFantasia}</p>
+                              </TableCell>
+                              <TableCell>{empresa.cnpj}</TableCell>
+                              <TableCell>
+                                <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white" : "bg-secondary text-[#1C1C1C]"}>
+                                  {empresa.associado ? "Sim" : "Não"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge className={empresa.situacaoFinanceira === "Regular" ? "bg-[#DCE7CB] text-[#1C1C1C]" : "bg-red-500 text-white"}>
+                                  {empresa.situacaoFinanceira}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>{empresa.porte}</TableCell>
+                              <TableCell>{formatCurrency(empresa.capitalSocial)}</TableCell>
+                              <TableCell>{empresa.faixaLabel || "—"}</TableCell>
+                              <TableCell className="text-sm">
+                                <span className="font-semibold">Fundação:</span> {formatDate(empresa.dataFundacao)}
+                                <br />
+                                <span className="font-semibold">Associação:</span> {formatDate(empresa.dataAssociacao)}
+                                <br />
+                                <span className="font-semibold">Desassociação:</span> {formatDate(empresa.dataDesassociacao)}
+                              </TableCell>
+                              <TableCell>
+                                {contato ? (
+                                  <div>
+                                    <p className="font-medium">{contato.nome}</p>
+                                    <p className="flex items-center gap-1 text-sm text-muted-foreground">
+                                      <MessageCircle className="h-3.5 w-3.5" /> {contato.whatsapp}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <Button
+                                    size="icon"
+                                    variant="outline"
+                                    className="h-9 w-9 shrink-0"
+                                    onClick={() => handleOpenDialog(empresa, true)}
+                                    aria-label={`Visualizar ${empresa.nomeFantasia}`}
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="outline"
+                                    className="h-9 w-9 shrink-0"
+                                    onClick={() => handleOpenDialog(empresa, false)}
+                                    aria-label={`Editar ${empresa.nomeFantasia}`}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="icon"
+                                    variant="destructive"
+                                    className="h-9 w-9 shrink-0"
+                                    onClick={() => handleDelete(empresa)}
+                                    aria-label={`Excluir ${empresa.nomeFantasia}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                    {filteredEmpresas.length === 0 && (
+                      <p className="py-6 text-center text-muted-foreground">Nenhuma empresa encontrada com os filtros selecionados.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             <Dialog
               open={isDialogOpen}
