@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, Mail, MessageCircle, Plus, Pencil, Search, Trash2, Eye } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -148,6 +149,7 @@ const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"
 
 export default function Relacionamentos() {
   const { toast } = useToast();
+  const isMobile = useIsMobile();
   const [relacionamentos, setRelacionamentos] = useState<Relacionamento[]>(mockRelacionamentos);
   const [searchTerm, setSearchTerm] = useState("");
   const [tipoFilter, setTipoFilter] = useState<TipoRelacionamento[]>([]);
@@ -280,13 +282,13 @@ export default function Relacionamentos() {
         <AppSidebar />
         <div className="flex-1 flex flex-col">
           <DashboardNavbar />
-          <main className="flex-1 p-6 bg-background">
-            <div className="max-w-7xl mx-auto space-y-6">
+          <main className="flex-1 p-4 md:p-6 bg-background">
+            <div className="max-w-7xl mx-auto space-y-4 md:space-y-6">
               {/* Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <h1 className="text-3xl font-bold text-foreground">Relacionamentos</h1>
-                <Button onClick={() => setIsCreateModalOpen(true)}>
-                  <Plus className="h-4 w-4" />
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h1 className="text-2xl md:text-3xl font-bold text-foreground">Relacionamentos</h1>
+                <Button onClick={() => setIsCreateModalOpen(true)} className="w-full sm:w-auto">
+                  <Plus className="h-4 w-4 mr-2" />
                   Criar
                 </Button>
               </div>
@@ -308,8 +310,8 @@ export default function Relacionamentos() {
                   </Button>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
-                  <div className="relative w-full lg:max-w-md">
+                <div className="mt-4 flex flex-col gap-3">
+                  <div className="relative w-full">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       placeholder="Buscar por nome, CNPJ ou palavra-chave…"
@@ -319,7 +321,7 @@ export default function Relacionamentos() {
                     />
                   </div>
 
-                  <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid w-full gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
@@ -380,136 +382,221 @@ export default function Relacionamentos() {
                 </div>
               </div>
 
-              {/* Table */}
-              <Card>
-                <TooltipProvider>
-                  <div className="overflow-x-auto">
-                    <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Tipo</TableHead>
-                        <TableHead>Nome/Razão</TableHead>
-                        <TableHead>CNPJ</TableHead>
-                        <TableHead>Categoria</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Última Movimentação</TableHead>
-                        <TableHead>Comunicação</TableHead>
-                        <TableHead className="text-right">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredRelacionamentos.length === 0 ? (
+              {/* Mobile Card View */}
+              {isMobile ? (
+                <div className="space-y-3">
+                  {filteredRelacionamentos.length === 0 ? (
+                    <Card className="p-6 text-center text-muted-foreground">
+                      Nenhum relacionamento encontrado
+                    </Card>
+                  ) : (
+                    filteredRelacionamentos.map((r) => (
+                      <Card key={r.id} className="p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant={getTipoBadgeVariant(r.tipo)} className="text-xs">{r.tipo}</Badge>
+                              <Badge variant={getStatusBadgeVariant(r.status)} className="text-xs">{r.status}</Badge>
+                            </div>
+                            <h3 className="font-semibold text-foreground mt-2 truncate">{r.nome}</h3>
+                            {r.cnpj && <p className="text-xs text-muted-foreground">{r.cnpj}</p>}
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {r.categoria && (
+                            <div>
+                              <span className="text-muted-foreground">Categoria:</span>
+                              <p className="font-medium">{r.categoria}</p>
+                            </div>
+                          )}
+                          {r.ultimaMov && (
+                            <div className="col-span-2">
+                              <span className="text-muted-foreground">Última mov.:</span>
+                              <p className="font-medium truncate">{r.ultimaMov}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Contact info */}
+                        {r.contatos && (r.contatos.nome || r.contatos.whatsapp || r.contatos.email) && (
+                          <div className="flex items-center justify-between pt-2 border-t border-border">
+                            <div className="text-xs">
+                              <p className="font-medium text-foreground">{r.contatos.nome || "Contato principal"}</p>
+                              {r.contatos.whatsapp && <p className="text-muted-foreground">{r.contatos.whatsapp}</p>}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {formatWhatsappLink(r.contatos?.whatsapp) && (
+                                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                                  <a href={formatWhatsappLink(r.contatos?.whatsapp)!} target="_blank" rel="noreferrer">
+                                    <MessageCircle className="h-4 w-4 text-primary" />
+                                  </a>
+                                </Button>
+                              )}
+                              {r.contatos?.email && (
+                                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                                  <a href={`mailto:${r.contatos.email}`}>
+                                    <Mail className="h-4 w-4" />
+                                  </a>
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                          <Button variant="ghost" size="sm" className="h-8 gap-1.5">
+                            <Eye className="h-3.5 w-3.5" /> Ver
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-8 gap-1.5">
+                            <Pencil className="h-3.5 w-3.5" /> Editar
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-8 text-destructive"
+                            onClick={() => openDeleteDialog(r.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </Card>
+                    ))
+                  )}
+                </div>
+              ) : (
+                /* Desktop Table View */
+                <Card>
+                  <TooltipProvider>
+                    <div className="overflow-x-auto">
+                      <Table>
+                      <TableHeader>
                         <TableRow>
-                          <TableCell colSpan={8} className="text-center text-muted-foreground">
-                            Nenhum relacionamento encontrado
-                          </TableCell>
+                          <TableHead>Tipo</TableHead>
+                          <TableHead>Nome/Razão</TableHead>
+                          <TableHead>CNPJ</TableHead>
+                          <TableHead>Categoria</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Última Movimentação</TableHead>
+                          <TableHead>Comunicação</TableHead>
+                          <TableHead className="text-right">Ações</TableHead>
                         </TableRow>
-                      ) : (
-                        filteredRelacionamentos.map((r) => (
-                          <TableRow key={r.id}>
-                            <TableCell>
-                              <Badge variant={getTipoBadgeVariant(r.tipo)}>{r.tipo}</Badge>
-                            </TableCell>
-                            <TableCell className="font-medium">{r.nome}</TableCell>
-                            <TableCell>{r.cnpj || "—"}</TableCell>
-                            <TableCell>{r.categoria || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant={getStatusBadgeVariant(r.status)}>
-                                {r.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {r.ultimaMov || "—"}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-foreground">
-                                    {r.contatos?.nome || "Contato principal"}
-                                  </div>
-                                  {(r.contatos?.whatsapp || r.contatos?.email) && (
-                                    <div className="text-xs text-muted-foreground">
-                                      {[r.contatos?.whatsapp, r.contatos?.email]
-                                        .filter(Boolean)
-                                        .join(" • ")}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      {formatWhatsappLink(r.contatos?.whatsapp) ? (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          asChild
-                                          aria-label={`Abrir conversa no WhatsApp com ${r.contatos?.nome || r.nome}`}
-                                        >
-                                          <a
-                                            href={formatWhatsappLink(r.contatos?.whatsapp) || undefined}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                          >
-                                            <MessageCircle className="h-4 w-4" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" disabled>
-                                          <MessageCircle className="h-4 w-4" />
-                                        </Button>
-                                      )}
-                                    </TooltipTrigger>
-                                    <TooltipContent> Abrir WhatsApp </TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      {r.contatos?.email ? (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          asChild
-                                          aria-label={`Enviar e-mail para ${r.contatos?.nome || r.nome}`}
-                                        >
-                                          <a href={`mailto:${r.contatos.email}`}>
-                                            <Mail className="h-4 w-4" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" disabled>
-                                          <Mail className="h-4 w-4" />
-                                        </Button>
-                                      )}
-                                    </TooltipTrigger>
-                                    <TooltipContent> Enviar e-mail </TooltipContent>
-                                  </Tooltip>
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-2">
-                                <Button variant="ghost" size="icon">
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                                <Button variant="ghost" size="icon">
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => openDeleteDialog(r.id)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </Button>
-                              </div>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredRelacionamentos.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={8} className="text-center text-muted-foreground">
+                              Nenhum relacionamento encontrado
                             </TableCell>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                    </Table>
-                  </div>
-                </TooltipProvider>
-              </Card>
+                        ) : (
+                          filteredRelacionamentos.map((r) => (
+                            <TableRow key={r.id}>
+                              <TableCell>
+                                <Badge variant={getTipoBadgeVariant(r.tipo)}>{r.tipo}</Badge>
+                              </TableCell>
+                              <TableCell className="font-medium">{r.nome}</TableCell>
+                              <TableCell>{r.cnpj || "—"}</TableCell>
+                              <TableCell>{r.categoria || "—"}</TableCell>
+                              <TableCell>
+                                <Badge variant={getStatusBadgeVariant(r.status)}>
+                                  {r.status}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {r.ultimaMov || "—"}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <div>
+                                    <div className="text-sm font-medium text-foreground">
+                                      {r.contatos?.nome || "Contato principal"}
+                                    </div>
+                                    {(r.contatos?.whatsapp || r.contatos?.email) && (
+                                      <div className="text-xs text-muted-foreground">
+                                        {[r.contatos?.whatsapp, r.contatos?.email]
+                                          .filter(Boolean)
+                                          .join(" • ")}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        {formatWhatsappLink(r.contatos?.whatsapp) ? (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            asChild
+                                            aria-label={`Abrir conversa no WhatsApp com ${r.contatos?.nome || r.nome}`}
+                                          >
+                                            <a
+                                              href={formatWhatsappLink(r.contatos?.whatsapp) || undefined}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                            >
+                                              <MessageCircle className="h-4 w-4" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" disabled>
+                                            <MessageCircle className="h-4 w-4" />
+                                          </Button>
+                                        )}
+                                      </TooltipTrigger>
+                                      <TooltipContent> Abrir WhatsApp </TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        {r.contatos?.email ? (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            asChild
+                                            aria-label={`Enviar e-mail para ${r.contatos?.nome || r.nome}`}
+                                          >
+                                            <a href={`mailto:${r.contatos.email}`}>
+                                              <Mail className="h-4 w-4" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" disabled>
+                                            <Mail className="h-4 w-4" />
+                                          </Button>
+                                        )}
+                                      </TooltipTrigger>
+                                      <TooltipContent> Enviar e-mail </TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-2">
+                                  <Button variant="ghost" size="icon">
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon">
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openDeleteDialog(r.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                      </Table>
+                    </div>
+                  </TooltipProvider>
+                </Card>
+              )}
             </div>
           </main>
         </div>
