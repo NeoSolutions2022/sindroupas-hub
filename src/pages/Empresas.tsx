@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AlertDialog,
@@ -30,6 +31,8 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Calendar,
   ChevronDown,
@@ -94,79 +97,6 @@ type Faixa = {
   label: string;
 };
 
-const faixas: Faixa[] = [
-  { id: "fx1", min: 1, max: 20, valor: 600, label: "1–20 • R$600" },
-  { id: "fx2", min: 21, max: 50, valor: 850, label: "21–50 • R$850" },
-];
-
-const initialEmpresas: Empresa[] = [
-  {
-    id: "e1",
-    logoUrl: "/logos/estilo.png",
-    razaoSocial: "Estilo Nordeste Ltda",
-    nomeFantasia: "Estilo Nordeste",
-    cnpj: "11.222.333/0001-44",
-    associado: true,
-    situacaoFinanceira: "Regular",
-    porte: "ME",
-    capitalSocial: 200000,
-    faixaId: "fx1",
-    faixaLabel: "1–20 • R$600",
-    dataFundacao: "2015-03-10",
-    dataAssociacao: "2020-06-01",
-    dataDesassociacao: null,
-    email: "contato@estilonordeste.com",
-    whatsapp: "(85) 3333-4444",
-    endereco: "Rua das Flores, 123, Centro, Fortaleza/CE",
-    responsavel: { nome: "Marina Costa", whatsapp: "(85) 99999-1234" },
-    colaboradores: [
-      {
-        nome: "João Silva",
-        cpf: "123.456.789-00",
-        whatsapp: "(85) 99999-0000",
-        cargo: "Compras",
-        email: "joao@estilo.com",
-      },
-      {
-        nome: "Maria Souza",
-        cpf: "987.654.321-00",
-        whatsapp: "(85) 98888-1111",
-        cargo: "Financeiro",
-        email: "maria@estilo.com",
-      },
-    ],
-  },
-  {
-    id: "e2",
-    logoUrl: "/logos/modasul.png",
-    razaoSocial: "ModaSul Indústria e Comércio S.A.",
-    nomeFantasia: "ModaSul",
-    cnpj: "22.333.444/0001-55",
-    associado: false,
-    situacaoFinanceira: "Inadimplente",
-    porte: "EPP",
-    capitalSocial: 500000,
-    faixaId: "fx2",
-    faixaLabel: "21–50 • R$850",
-    dataFundacao: "2012-08-20",
-    dataAssociacao: null,
-    dataDesassociacao: null,
-    email: "contato@modasul.com",
-    whatsapp: "(85) 3555-6666",
-    endereco: "Av. Principal, 456, Aldeota, Fortaleza/CE",
-    responsavel: null,
-    colaboradores: [
-      {
-        nome: "Bruno Lima",
-        cpf: "222.333.444-55",
-        whatsapp: "(85) 97777-2222",
-        cargo: "Diretor",
-        email: "bruno@modasul.com",
-      },
-    ],
-  },
-];
-
 const formatCurrency = (value?: number) => {
   if (value === undefined || value === null) return "-";
   return new Intl.NumberFormat("pt-BR", {
@@ -208,9 +138,89 @@ const formatPhone = (value: string) => {
     .slice(0, 15);
 };
 
+type EmpresaRow = {
+  id: string;
+  razao_social: string;
+  nome_fantasia: string;
+  cnpj: string;
+  email?: string | null;
+  whatsapp?: string | null;
+  endereco?: string | null;
+  associada?: boolean | null;
+  situacao_financeira?: "Regular" | "Inadimplente" | null;
+  porte?: string | null;
+  capital_social?: number | null;
+  faixa_id?: string | null;
+  data_fundacao?: string | null;
+  data_associacao?: string | null;
+  data_desassociacao?: string | null;
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+  colaboradores?: {
+    id: string;
+    nome?: string | null;
+    cpf?: string | null;
+    whatsapp?: string | null;
+    cargo?: string | null;
+    email?: string | null;
+    observacoes?: string | null;
+  }[];
+};
+
+type FaixaRow = {
+  id: string;
+  label?: string | null;
+  min_colaboradores?: number | null;
+  max_colaboradores?: number | null;
+  valor_mensalidade?: number | null;
+};
+
+const EMPRESAS_QUERY = `
+  query EmpresasPage {
+    empresas(order_by: { razao_social: asc }) {
+      id
+      razao_social
+      nome_fantasia
+      cnpj
+      email
+      whatsapp
+      endereco
+      associada
+      situacao_financeira
+      porte
+      capital_social
+      faixa_id
+      data_fundacao
+      data_associacao
+      data_desassociacao
+      responsaveis {
+        id
+        nome
+        whatsapp
+      }
+      colaboradores {
+        id
+        nome
+        cpf
+        whatsapp
+        cargo
+        email
+        observacoes
+      }
+    }
+    faixas(order_by: { min_colaboradores: asc }) {
+      id
+      label
+      min_colaboradores
+      max_colaboradores
+      valor_mensalidade
+    }
+  }
+`;
+
 const Empresas = () => {
   const isMobile = useIsMobile();
-  const [empresas] = useState<Empresa[]>(initialEmpresas);
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
@@ -227,6 +237,180 @@ const Empresas = () => {
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["empresas-page"],
+    queryFn: () =>
+      hasuraRequest<{ empresas: EmpresaRow[]; faixas: FaixaRow[] }>({
+        query: EMPRESAS_QUERY,
+        token,
+      }),
+  });
+
+  const faixas = useMemo<Faixa[]>(() => {
+    return (
+      data?.faixas.map((faixa) => ({
+        id: faixa.id,
+        min: faixa.min_colaboradores ?? 0,
+        max: faixa.max_colaboradores ?? 0,
+        valor: faixa.valor_mensalidade ?? 0,
+        label:
+          faixa.label ??
+          `${faixa.min_colaboradores ?? 0}–${faixa.max_colaboradores ?? 0} • R$${faixa.valor_mensalidade ?? 0}`,
+      })) ?? []
+    );
+  }, [data?.faixas]);
+
+  const empresas = useMemo<Empresa[]>(() => {
+    if (!data?.empresas) return [];
+    return data.empresas.map((empresa) => {
+      const faixaLabel = empresa.faixa_id ? faixas.find((faixa) => faixa.id === empresa.faixa_id)?.label : undefined;
+      const responsavel = empresa.responsaveis?.[0];
+      return {
+        id: empresa.id,
+        logoUrl: "",
+        razaoSocial: empresa.razao_social,
+        nomeFantasia: empresa.nome_fantasia,
+        cnpj: empresa.cnpj,
+        email: empresa.email ?? undefined,
+        whatsapp: empresa.whatsapp ?? undefined,
+        endereco: empresa.endereco ?? undefined,
+        associado: Boolean(empresa.associada),
+        situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
+        porte: (empresa.porte as Empresa["porte"]) ?? "ME",
+        capitalSocial: empresa.capital_social ?? undefined,
+        faixaId: empresa.faixa_id ?? undefined,
+        faixaLabel,
+        dataFundacao: empresa.data_fundacao ?? "",
+        dataAssociacao: empresa.data_associacao ?? null,
+        dataDesassociacao: empresa.data_desassociacao ?? null,
+        responsavel: responsavel
+          ? { nome: responsavel.nome ?? undefined, whatsapp: responsavel.whatsapp ?? undefined }
+          : null,
+        colaboradores:
+          empresa.colaboradores?.map((colaborador) => ({
+            nome: colaborador.nome ?? "",
+            cpf: colaborador.cpf ?? "",
+            whatsapp: colaborador.whatsapp ?? "",
+            cargo: colaborador.cargo ?? "",
+            email: colaborador.email ?? "",
+            observacoes: colaborador.observacoes ?? undefined,
+          })) ?? [],
+      };
+    });
+  }, [data?.empresas, faixas]);
+
+  const saveEmpresaMutation = useMutation({
+    mutationFn: async (payload: { values: Partial<Empresa>; id?: string | null }) => {
+      const input = {
+        razao_social: payload.values.razaoSocial ?? "",
+        nome_fantasia: payload.values.nomeFantasia ?? "",
+        cnpj: payload.values.cnpj ?? "",
+        associada: payload.values.associado ?? false,
+        situacao_financeira: payload.values.situacaoFinanceira ?? "Regular",
+        porte: payload.values.porte ?? "ME",
+        capital_social: payload.values.capitalSocial ?? null,
+        faixa_id: payload.values.faixaId ?? null,
+        email: payload.values.email ?? null,
+        whatsapp: payload.values.whatsapp ?? null,
+        endereco: payload.values.endereco ?? null,
+        data_fundacao: payload.values.dataFundacao ?? null,
+        data_associacao: payload.values.dataAssociacao ?? null,
+        data_desassociacao: payload.values.dataDesassociacao ?? null,
+      };
+
+      const responsavel = payload.values.responsavel;
+      const responsavelInput =
+        responsavel?.nome || responsavel?.whatsapp
+          ? [{ nome: responsavel?.nome ?? "", whatsapp: responsavel?.whatsapp ?? "" }]
+          : [];
+
+      const colaboradoresInput =
+        payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
+
+      if (payload.id) {
+        await hasuraRequest({
+          query: `
+            mutation UpdateEmpresa($id: uuid!, $input: empresas_set_input!) {
+              update_empresas_by_pk(pk_columns: { id: $id }, _set: $input) {
+                id
+              }
+            }
+          `,
+          variables: { id: payload.id, input },
+          token,
+        });
+
+        await hasuraRequest({
+          query: `
+            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+              delete_responsaveis(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_colaboradores(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              insert_responsaveis(objects: $responsaveis) { affected_rows }
+              insert_colaboradores(objects: $colaboradores) { affected_rows }
+            }
+          `,
+          variables: {
+            empresaId: payload.id,
+            responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: payload.id })),
+            colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: payload.id })),
+          },
+          token,
+        });
+
+        return payload.id;
+      }
+
+      const created = await hasuraRequest<{ insert_empresas_one: { id: string } }>({
+        query: `
+          mutation InsertEmpresa($input: empresas_insert_input!) {
+            insert_empresas_one(object: $input) { id }
+          }
+        `,
+        variables: { input },
+        token,
+      });
+
+      const empresaId = created.insert_empresas_one.id;
+      if (responsavelInput.length || colaboradoresInput.length) {
+        await hasuraRequest({
+          query: `
+            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+              insert_responsaveis(objects: $responsaveis) { affected_rows }
+              insert_colaboradores(objects: $colaboradores) { affected_rows }
+            }
+          `,
+          variables: {
+            responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: empresaId })),
+            colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: empresaId })),
+          },
+          token,
+        });
+      }
+
+      return empresaId;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const deleteEmpresaMutation = useMutation({
+    mutationFn: async (empresaId: string) => {
+      await hasuraRequest({
+        query: `
+          mutation DeleteEmpresa($id: uuid!) {
+            delete_empresas_by_pk(id: $id) { id }
+          }
+        `,
+        variables: { id: empresaId },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
 
   const colaboradorMatch = useMemo(() => {
     if (!searchTerm.trim()) return null;
@@ -419,12 +603,25 @@ const Empresas = () => {
       return;
     }
 
-    toast({
-      title: "Empresas atualizado com sucesso",
-      description: "As informações foram registradas corretamente.",
-    });
-
-    handleCloseDialog();
+    saveEmpresaMutation.mutate(
+      { values: formData, id: editingEmpresa?.id ?? null },
+      {
+        onSuccess: () => {
+          toast({
+            title: "Empresa atualizada com sucesso",
+            description: "As informações foram registradas corretamente.",
+          });
+          handleCloseDialog();
+        },
+        onError: (err) => {
+          toast({
+            title: "Não foi possível salvar a empresa",
+            description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   const handleDelete = (empresa: Empresa) => {
@@ -432,12 +629,24 @@ const Empresas = () => {
   };
 
   const confirmDelete = () => {
-    toast({
-      title: "Empresa excluída",
-      description: "Registro removido com sucesso.",
-      variant: "destructive",
+    if (!empresaToDelete) return;
+    deleteEmpresaMutation.mutate(empresaToDelete.id, {
+      onSuccess: () => {
+        toast({
+          title: "Empresa excluída",
+          description: "Registro removido com sucesso.",
+          variant: "destructive",
+        });
+        setEmpresaToDelete(null);
+      },
+      onError: (err) => {
+        toast({
+          title: "Falha ao excluir empresa",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      },
     });
-    setEmpresaToDelete(null);
   };
 
   const getContatoPrincipal = (empresa: Empresa) => {
@@ -477,6 +686,18 @@ const Empresas = () => {
                 Cadastrar Empresa
               </Button>
             </div>
+
+            {isLoading && (
+              <div className="rounded-xl border border-dashed border-[#CBD5B1] bg-white p-4 text-sm text-muted-foreground">
+                Carregando empresas do Hasura...
+              </div>
+            )}
+
+            {error && (
+              <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                {error instanceof Error ? error.message : "Erro ao carregar empresas."}
+              </div>
+            )}
 
             <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

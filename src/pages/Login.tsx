@@ -5,27 +5,25 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import logo from "@/assets/logo.jpeg";
-
-const MOCK_USER = {
-  email: "sindroupas@email.com",
-  password: "senha123",
-} as const;
+import { useAuth } from "@/contexts/AuthContext";
 
 const Login = () => {
   const navigate = useNavigate();
+  const { login, isLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email === MOCK_USER.email && password === MOCK_USER.password) {
-      setError("");
+    setError("");
+    try {
+      await login(email, password);
       navigate("/dashboard");
-      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Erro ao autenticar.";
+      setError(message);
     }
-
-    setError("Credenciais inválidas. Verifique seu e-mail e senha.");
   };
 
   return (
@@ -62,8 +60,8 @@ const Login = () => {
                 required
               />
             </div>
-            <Button type="submit" className="w-full">
-              Entrar
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? "Entrando..." : "Entrar"}
             </Button>
             {error && <p className="text-sm text-destructive text-center">{error}</p>}
             <div className="text-center">
