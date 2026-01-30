@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -45,70 +46,126 @@ import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw,
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import {
-  BoletoRegistro,
-  HistoricoContribuicao,
-  getFinanceiroData,
-  saveFinanceiroData,
-} from "@/lib/financeiro-data";
+import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
 
-// Mock de empresas para autocomplete
-const mockEmpresas = [
-  { 
-    id: "emp1", 
-    nome: "Estilo Nordeste Ltda", 
-    cnpj: "12.345.678/0001-90",
-    contatoPrincipal: {
-      nome: "Marina Costa",
-      whatsapp: "5585999991234",
-      email: "marina@estilo.com"
+type EmpresaLookupRow = {
+  id: string;
+  razao_social: string;
+  cnpj?: string | null;
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
+  colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
+};
+
+type BoletoRow = {
+  id: string;
+  tipo?: string | null;
+  valor?: number | null;
+  vencimento?: string | null;
+  status?: string | null;
+  competencia_inicial?: string | null;
+  competencia_final?: string | null;
+  faixa?: string | null;
+  ano?: string | null;
+  periodicidade?: string | null;
+  parcelas?: number | null;
+  base?: number | null;
+  percentual?: number | null;
+  descontos?: number | null;
+  empresa?: { id: string; razao_social: string } | null;
+};
+
+type ContribuicaoRow = {
+  id: string;
+  ano?: string | null;
+  periodicidade?: string | null;
+  parcelas?: number | null;
+  base?: number | null;
+  percentual?: number | null;
+  descontos?: number | null;
+  valor?: number | null;
+  vencimento?: string | null;
+  situacao?: string | null;
+  empresa?: { id: string; razao_social: string } | null;
+};
+
+type FaixaRow = {
+  id: string;
+  label?: string | null;
+  min_colaboradores?: number | null;
+  max_colaboradores?: number | null;
+  valor_mensalidade?: number | null;
+};
+
+const FINANCEIRO_QUERY = `
+  query FinanceiroPage {
+    financeiro_boletos(order_by: { vencimento: desc }) {
+      id
+      tipo
+      valor
+      vencimento
+      status
+      competencia_inicial
+      competencia_final
+      faixa
+      ano
+      periodicidade
+      parcelas
+      base
+      percentual
+      descontos
+      empresa {
+        id
+        razao_social
+      }
     }
-  },
-  { 
-    id: "emp2", 
-    nome: "ModaSul Indústria e Comércio S.A.", 
-    cnpj: "98.765.432/0001-10",
-    contatoPrincipal: {
-      nome: "Bruno Lima",
-      whatsapp: "5585977772222",
-      email: "bruno@modasul.com"
+    contribuicoes_assistenciais(order_by: { vencimento: desc }) {
+      id
+      ano
+      periodicidade
+      parcelas
+      base
+      percentual
+      descontos
+      valor
+      vencimento
+      situacao
+      empresa {
+        id
+        razao_social
+      }
     }
-  },
-  { 
-    id: "emp3", 
-    nome: "Confecções Aurora", 
-    cnpj: "11.222.333/0001-44",
-    contatoPrincipal: {
-      nome: "Renato Souza",
-      whatsapp: "5585988883333",
-      email: "renato@aurora.com"
+    empresas(order_by: { razao_social: asc }) {
+      id
+      razao_social
+      cnpj
+      responsaveis {
+        id
+        nome
+        whatsapp
+        email
+      }
+      colaboradores {
+        id
+        nome
+        whatsapp
+        email
+      }
     }
-  },
-  { 
-    id: "emp4", 
-    nome: "Costura Viva", 
-    cnpj: "55.666.777/0001-88",
-    contatoPrincipal: {
-      nome: "Ana Pires",
-      whatsapp: "",
-      email: "ana@costuraviva.com"
+    faixas(order_by: { min_colaboradores: asc }) {
+      id
+      label
+      min_colaboradores
+      max_colaboradores
+      valor_mensalidade
     }
-  },
-  { 
-    id: "emp5", 
-    nome: "Têxtil Nordeste", 
-    cnpj: "99.888.777/0001-66",
-    contatoPrincipal: {
-      nome: "Carlos Monteiro",
-      whatsapp: "5585966664444",
-      email: "carlos@textilnordeste.com"
-    }
-  },
-];
+  }
+`;
 
 // Tipos
 interface Faixa {
@@ -140,9 +197,10 @@ interface BoletoForm {
 
 const Financeiro = () => {
   const navigate = useNavigate();
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
-  const initialData = useMemo(() => getFinanceiroData(), []);
 
   // Advanced filters state
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
@@ -157,20 +215,213 @@ const Financeiro = () => {
     valor: number;
   } | null>(null);
 
-  const [boletos, setBoletos] = useState<BoletoRegistro[]>(initialData.boletos);
-  const [historicoContribuicao, setHistoricoContribuicao] = useState<HistoricoContribuicao[]>(
-    initialData.historico,
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["financeiro-page"],
+    queryFn: () =>
+      hasuraRequest<{
+        financeiro_boletos: BoletoRow[];
+        contribuicoes_assistenciais: ContribuicaoRow[];
+        empresas: EmpresaLookupRow[];
+        faixas: FaixaRow[];
+      }>({
+        query: FINANCEIRO_QUERY,
+        token,
+      }),
+  });
+
+  const boletos = useMemo<BoletoRegistro[]>(() => {
+    return (
+      data?.financeiro_boletos.map((boleto) => ({
+        id: boleto.id,
+        tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
+        empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
+        valor: boleto.valor ?? 0,
+        vencimento: boleto.vencimento ?? "",
+        status: boleto.status ?? "Pendente",
+        competenciaInicial: boleto.competencia_inicial ?? undefined,
+        competenciaFinal: boleto.competencia_final ?? undefined,
+        faixa: boleto.faixa ?? undefined,
+        ano: boleto.ano ?? undefined,
+        periodicidade: boleto.periodicidade ?? undefined,
+        parcelas: boleto.parcelas ?? undefined,
+        base: boleto.base ?? undefined,
+        percentual: boleto.percentual ?? undefined,
+        descontos: boleto.descontos ?? undefined,
+      })) ?? []
+    );
+  }, [data?.financeiro_boletos]);
+
+  const historicoContribuicao = useMemo<HistoricoContribuicao[]>(() => {
+    return (
+      data?.contribuicoes_assistenciais.map((item) => ({
+        id: item.id,
+        ano: item.ano ?? "",
+        empresa: item.empresa?.razao_social ?? "Empresa não informada",
+        periodicidade: item.periodicidade ?? "",
+        parcelas: item.parcelas ?? 0,
+        base: item.base ?? 0,
+        percentual: item.percentual ?? 0,
+        descontos: item.descontos ?? 0,
+        valor: item.valor ?? 0,
+        vencimento: item.vencimento ?? "",
+        situacao: item.situacao ?? "Emitida",
+      })) ?? []
+    );
+  }, [data?.contribuicoes_assistenciais]);
+
+  const mockEmpresas = useMemo(
+    () =>
+      data?.empresas.map((empresa) => {
+        const responsavel = empresa.responsaveis?.[0];
+        const colaborador = empresa.colaboradores?.[0];
+        const contato = responsavel ?? colaborador;
+        return {
+          id: empresa.id,
+          nome: empresa.razao_social,
+          cnpj: empresa.cnpj ?? "",
+          contatoPrincipal: {
+            nome: contato?.nome ?? "",
+            whatsapp: contato?.whatsapp ?? "",
+            email: contato?.email ?? "",
+          },
+        };
+      }) ?? [],
+    [data?.empresas],
   );
 
-  useEffect(() => {
-    saveFinanceiroData({ boletos, historico: historicoContribuicao });
-  }, [boletos, historicoContribuicao]);
+  const createBoletoMutation = useMutation({
+    mutationFn: async (payload: BoletoForm) => {
+      await hasuraRequest({
+        query: `
+          mutation InsertBoleto($input: financeiro_boletos_insert_input!) {
+            insert_financeiro_boletos_one(object: $input) { id }
+          }
+        `,
+        variables: {
+          input: {
+            empresa_id: payload.empresaId || null,
+            tipo: payload.tipo === "contribuicao" ? "Contribuição Assistencial" : "Mensalidade (por Faixa)",
+            competencia_inicial: payload.competenciaInicial || null,
+            competencia_final: payload.competenciaFinal || null,
+            vencimento: payload.dataVencimento || null,
+            faixa: payload.faixaId || null,
+            valor: payload.valorCalculado || null,
+            status: "Pendente",
+            ano: payload.anoContribuicao || null,
+            periodicidade: payload.periodicidade || null,
+            parcelas: payload.parcelas ? Number(payload.parcelas) : null,
+            base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
+            percentual: payload.percentual ? Number(payload.percentual) : null,
+            descontos: payload.descontos ? Number(payload.descontos) : null,
+          },
+        },
+        token,
+      });
+
+      if (payload.tipo === "contribuicao") {
+        await hasuraRequest({
+          query: `
+            mutation InsertContribuicao($input: contribuicoes_assistenciais_insert_input!) {
+              insert_contribuicoes_assistenciais_one(object: $input) { id }
+            }
+          `,
+          variables: {
+            input: {
+              empresa_id: payload.empresaId || null,
+              ano: payload.anoContribuicao || null,
+              periodicidade: payload.periodicidade || null,
+              parcelas: payload.parcelas ? Number(payload.parcelas) : null,
+              base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
+              percentual: payload.percentual ? Number(payload.percentual) : null,
+              descontos: payload.descontos ? Number(payload.descontos) : null,
+              valor: payload.valorCalculado || null,
+              vencimento: payload.dataVencimento || null,
+              situacao: "Emitida",
+            },
+          },
+          token,
+        });
+      }
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    },
+  });
+
+  const faixas = useMemo<Faixa[]>(() => {
+    return (
+      data?.faixas.map((faixa) => ({
+        id: faixa.id,
+        min: faixa.min_colaboradores ?? 0,
+        max: faixa.max_colaboradores ?? 0,
+        valor: faixa.valor_mensalidade ?? 0,
+      })) ?? []
+    );
+  }, [data?.faixas]);
+
+  const saveFaixaMutation = useMutation({
+    mutationFn: async (payload: { id?: string; min: number; max: number; valor: number }) => {
+      if (payload.id) {
+        await hasuraRequest({
+          query: `
+            mutation UpdateFaixa($id: uuid!, $input: faixas_set_input!) {
+              update_faixas_by_pk(pk_columns: { id: $id }, _set: $input) { id }
+            }
+          `,
+          variables: {
+            id: payload.id,
+            input: {
+              min_colaboradores: payload.min,
+              max_colaboradores: payload.max,
+              valor_mensalidade: payload.valor,
+            },
+          },
+          token,
+        });
+        return payload.id;
+      }
+
+      const created = await hasuraRequest<{ insert_faixas_one: { id: string } }>({
+        query: `
+          mutation InsertFaixa($input: faixas_insert_input!) {
+            insert_faixas_one(object: $input) { id }
+          }
+        `,
+        variables: {
+          input: {
+            min_colaboradores: payload.min,
+            max_colaboradores: payload.max,
+            valor_mensalidade: payload.valor,
+          },
+        },
+        token,
+      });
+
+      return created.insert_faixas_one.id;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    },
+  });
+
+  const deleteFaixaMutation = useMutation({
+    mutationFn: async (faixaId: string) => {
+      await hasuraRequest({
+        query: `
+          mutation DeleteFaixa($id: uuid!) {
+            delete_faixas_by_pk(id: $id) { id }
+          }
+        `,
+        variables: { id: faixaId },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    },
+  });
 
   // Estado para Faixas
-  const [faixas, setFaixas] = useState<Faixa[]>([
-    { id: "fx1", min: 1, max: 20, valor: 600 },
-    { id: "fx2", min: 21, max: 50, valor: 850 },
-  ]);
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
@@ -425,37 +676,47 @@ const Financeiro = () => {
       return;
     }
 
-    if (faixaToEdit) {
-      setFaixas(faixas.map((f) => f.id === faixaToEdit.id ? { ...f, min, max, valor } : f));
-      toast({
-        title: "Faixa atualizada",
-        description: "A faixa foi atualizada com sucesso.",
-      });
-    } else {
-      const newFaixa: Faixa = {
-        id: `fx${Date.now()}`,
-        min,
-        max,
-        valor,
-      };
-      setFaixas([...faixas, newFaixa]);
-      toast({
-        title: "Faixa criada",
-        description: "A nova faixa foi criada com sucesso.",
-      });
-    }
-
-    setFaixaDialogOpen(false);
-    setFaixaForm({ min: "", max: "", valor: "" });
-    setFaixaToEdit(null);
+    saveFaixaMutation.mutate(
+      { id: faixaToEdit?.id, min, max, valor },
+      {
+        onSuccess: () => {
+          toast({
+            title: faixaToEdit ? "Faixa atualizada" : "Faixa criada",
+            description: faixaToEdit
+              ? "A faixa foi atualizada com sucesso."
+              : "A nova faixa foi criada com sucesso.",
+          });
+          setFaixaDialogOpen(false);
+          setFaixaForm({ min: "", max: "", valor: "" });
+          setFaixaToEdit(null);
+        },
+        onError: (err) => {
+          toast({
+            title: "Falha ao salvar faixa",
+            description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   const handleDeleteFaixa = (faixa: Faixa) => {
-    setFaixas(faixas.filter((f) => f.id !== faixa.id));
-    setFaixaToDelete(null);
-    toast({
-      title: "Faixa excluída",
-      description: "A faixa foi excluída com sucesso.",
+    deleteFaixaMutation.mutate(faixa.id, {
+      onSuccess: () => {
+        setFaixaToDelete(null);
+        toast({
+          title: "Faixa excluída",
+          description: "A faixa foi excluída com sucesso.",
+        });
+      },
+      onError: (err) => {
+        toast({
+          title: "Falha ao excluir faixa",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      },
     });
   };
 
@@ -668,66 +929,25 @@ const Financeiro = () => {
   };
 
   const handleEmitirBoleto = () => {
-    if (boletoForm.tipo === "contribuicao") {
-      const parcelasNumber = parseInt(boletoForm.parcelas, 10) || 1;
-      const novoBoleto: BoletoRegistro = {
-        id: `b${Date.now()}`,
-        tipo: "Contribuição Assistencial",
-        empresa: boletoForm.empresaNome,
-        valor: boletoForm.valorCalculado,
-        vencimento: boletoForm.dataVencimento,
-        status: "Emitida",
-        ano: boletoForm.anoContribuicao,
-        periodicidade: boletoForm.periodicidade,
-        parcelas: parcelasNumber,
-        base: parseCurrencyInput(boletoForm.baseCalculo),
-        percentual: parseFloat(boletoForm.percentual.replace(",", ".") || "0"),
-        descontos: parseCurrencyInput(boletoForm.descontos),
-      };
-
-      const novoHistorico: HistoricoContribuicao = {
-        id: `h${Date.now()}`,
-        ano: boletoForm.anoContribuicao,
-        empresa: boletoForm.empresaNome,
-        periodicidade: boletoForm.periodicidade,
-        parcelas: parcelasNumber,
-        base: novoBoleto.base || 0,
-        percentual: novoBoleto.percentual || 0,
-        descontos: novoBoleto.descontos || 0,
-        valor: novoBoleto.valor,
-        vencimento: boletoForm.dataVencimento,
-        situacao: "Emitida",
-      };
-
-      setBoletos([...boletos, novoBoleto]);
-      setHistoricoContribuicao([...historicoContribuicao, novoHistorico]);
-      toast({
-        title: "Boleto de Contribuição Assistencial emitido com sucesso (mock)",
-        description: `Boleto para ${boletoForm.empresaNome} criado.`,
-      });
-    } else {
-      const faixaSelecionada = faixas.find((f) => f.id === boletoForm.faixaId);
-      const novoBoleto: BoletoRegistro = {
-        id: `b${Date.now()}`,
-        tipo: "Mensalidade (por Faixa)",
-        empresa: boletoForm.empresaNome,
-        valor: faixaSelecionada?.valor || 0,
-        vencimento: boletoForm.dataVencimento,
-        status: "Pendente",
-        competenciaInicial: boletoForm.competenciaInicial,
-        competenciaFinal: boletoForm.competenciaFinal,
-        faixa: faixaSelecionada
-          ? `${faixaSelecionada.min}-${faixaSelecionada.max}`
-          : "",
-      };
-
-      setBoletos([...boletos, novoBoleto]);
-      toast({
-        title: "Boleto emitido com sucesso (mock)",
-        description: `Boleto para ${boletoForm.empresaNome} criado.`,
-      });
-    }
-    resetWizard();
+    createBoletoMutation.mutate(boletoForm, {
+      onSuccess: () => {
+        toast({
+          title:
+            boletoForm.tipo === "contribuicao"
+              ? "Boleto de Contribuição Assistencial emitido com sucesso"
+              : "Boleto emitido com sucesso",
+          description: `Boleto para ${boletoForm.empresaNome} criado.`,
+        });
+        resetWizard();
+      },
+      onError: (err) => {
+        toast({
+          title: "Falha ao emitir boleto",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      },
+    });
   };
 
   return (
@@ -755,6 +975,18 @@ const Financeiro = () => {
                   </Button>
                 </div>
               </div>
+
+              {isLoading && (
+                <div className="rounded-xl border border-dashed border-muted p-4 text-sm text-muted-foreground">
+                  Carregando dados financeiros do Hasura...
+                </div>
+              )}
+
+              {error && (
+                <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                  {error instanceof Error ? error.message : "Erro ao carregar dados financeiros."}
+                </div>
+              )}
 
               <Tabs defaultValue="boletos" className="w-full">
                 <TabsList className="h-10 p-1 bg-muted/50 rounded-lg w-full sm:w-auto grid grid-cols-3 sm:inline-grid">
@@ -943,16 +1175,45 @@ const Financeiro = () => {
                   onOpenChange={setGerarNovoOpen}
                   boleto={selectedBoletoForNew}
                   onGenerate={(boletoId, novaData) => {
-                    // Find original boleto and create a new one
                     const original = boletos.find((b) => b.id === boletoId);
                     if (original) {
-                      const novoBoleto: BoletoRegistro = {
-                        ...original,
-                        id: `b${Date.now()}`,
-                        vencimento: format(novaData, "dd/MM/yyyy"),
-                        status: "Pendente",
+                      const empresaMatch = data?.empresas.find(
+                        (empresa) => empresa.razao_social === original.empresa,
+                      );
+                      const payload: BoletoForm = {
+                        tipo: original.tipo === "Contribuição Assistencial" ? "contribuicao" : "mensalidade",
+                        empresaId: empresaMatch?.id ?? "",
+                        empresaNome: original.empresa,
+                        competenciaInicial: original.competenciaInicial ?? "",
+                        competenciaFinal: original.competenciaFinal ?? "",
+                        dataVencimento: format(novaData, "yyyy-MM-dd"),
+                        faixaId: original.faixa ?? "",
+                        unificarCompetencias: "Não",
+                        mensagemPersonalizada: "",
+                        anoContribuicao: original.ano ?? "",
+                        periodicidade: original.periodicidade ?? "",
+                        parcelas: original.parcelas ? String(original.parcelas) : "",
+                        baseCalculo: original.base ? String(original.base) : "",
+                        percentual: original.percentual ? String(original.percentual) : "",
+                        descontos: original.descontos ? String(original.descontos) : "",
+                        valorCalculado: original.valor,
+                        pesquisaContribuicaoFeita: true,
                       };
-                      setBoletos([...boletos, novoBoleto]);
+                      createBoletoMutation.mutate(payload, {
+                        onSuccess: () => {
+                          toast({
+                            title: "Novo boleto gerado",
+                            description: `Boleto para ${original.empresa} atualizado.`,
+                          });
+                        },
+                        onError: (err) => {
+                          toast({
+                            title: "Falha ao gerar novo boleto",
+                            description: err instanceof Error ? err.message : "Tente novamente.",
+                            variant: "destructive",
+                          });
+                        },
+                      });
                     }
                     setSelectedBoletoForNew(null);
                   }}
