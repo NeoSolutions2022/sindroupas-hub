@@ -65,18 +65,18 @@ type EmpresaLookupRow = {
 type BoletoRow = {
   id: string;
   tipo?: string | null;
-  valor?: number | null;
+  valor?: number | string | null;
   vencimento?: string | null;
   status?: string | null;
   competencia_inicial?: string | null;
   competencia_final?: string | null;
-  faixa?: string | null;
+  faixa_id?: string | null;
   ano?: string | null;
   periodicidade?: string | null;
   parcelas?: number | null;
-  base?: number | null;
-  percentual?: number | null;
-  descontos?: number | null;
+  base?: number | string | null;
+  percentual?: number | string | null;
+  descontos?: number | string | null;
   empresa?: { id: string; razao_social: string } | null;
 };
 
@@ -85,10 +85,10 @@ type ContribuicaoRow = {
   ano?: string | null;
   periodicidade?: string | null;
   parcelas?: number | null;
-  base?: number | null;
-  percentual?: number | null;
-  descontos?: number | null;
-  valor?: number | null;
+  base?: number | string | null;
+  percentual?: number | string | null;
+  descontos?: number | string | null;
+  valor?: number | string | null;
   vencimento?: string | null;
   situacao?: string | null;
   empresa?: { id: string; razao_social: string } | null;
@@ -99,7 +99,7 @@ type FaixaRow = {
   label?: string | null;
   min_colaboradores?: number | null;
   max_colaboradores?: number | null;
-  valor_mensalidade?: number | null;
+  valor_mensalidade?: number | string | null;
 };
 
 const FINANCEIRO_QUERY = `
@@ -112,7 +112,7 @@ const FINANCEIRO_QUERY = `
       status
       competencia_inicial
       competencia_final
-      faixa
+      faixa_id
       ano
       periodicidade
       parcelas
@@ -235,18 +235,18 @@ const Financeiro = () => {
         id: boleto.id,
         tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
         empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
-        valor: boleto.valor ?? 0,
+        valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
         vencimento: boleto.vencimento ?? "",
         status: boleto.status ?? "Pendente",
         competenciaInicial: boleto.competencia_inicial ?? undefined,
         competenciaFinal: boleto.competencia_final ?? undefined,
-        faixa: boleto.faixa ?? undefined,
+        faixaId: boleto.faixa_id ?? undefined,
         ano: boleto.ano ?? undefined,
         periodicidade: boleto.periodicidade ?? undefined,
         parcelas: boleto.parcelas ?? undefined,
-        base: boleto.base ?? undefined,
-        percentual: boleto.percentual ?? undefined,
-        descontos: boleto.descontos ?? undefined,
+        base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
+        percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
+        descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
       })) ?? []
     );
   }, [data?.financeiro_boletos]);
@@ -259,10 +259,10 @@ const Financeiro = () => {
         empresa: item.empresa?.razao_social ?? "Empresa não informada",
         periodicidade: item.periodicidade ?? "",
         parcelas: item.parcelas ?? 0,
-        base: item.base ?? 0,
-        percentual: item.percentual ?? 0,
-        descontos: item.descontos ?? 0,
-        valor: item.valor ?? 0,
+        base: item.base !== undefined && item.base !== null ? Number(item.base) : 0,
+        percentual: item.percentual !== undefined && item.percentual !== null ? Number(item.percentual) : 0,
+        descontos: item.descontos !== undefined && item.descontos !== null ? Number(item.descontos) : 0,
+        valor: item.valor !== undefined && item.valor !== null ? Number(item.valor) : 0,
         vencimento: item.vencimento ?? "",
         situacao: item.situacao ?? "Emitida",
       })) ?? []
@@ -304,7 +304,7 @@ const Financeiro = () => {
             competencia_inicial: payload.competenciaInicial || null,
             competencia_final: payload.competenciaFinal || null,
             vencimento: payload.dataVencimento || null,
-            faixa: payload.faixaId || null,
+            faixa_id: payload.faixaId || null,
             valor: payload.valorCalculado || null,
             status: "Pendente",
             ano: payload.anoContribuicao || null,
@@ -354,7 +354,7 @@ const Financeiro = () => {
         id: faixa.id,
         min: faixa.min_colaboradores ?? 0,
         max: faixa.max_colaboradores ?? 0,
-        valor: faixa.valor_mensalidade ?? 0,
+        valor: faixa.valor_mensalidade !== undefined && faixa.valor_mensalidade !== null ? Number(faixa.valor_mensalidade) : 0,
       })) ?? []
     );
   }, [data?.faixas]);
@@ -1187,7 +1187,7 @@ const Financeiro = () => {
                         competenciaInicial: original.competenciaInicial ?? "",
                         competenciaFinal: original.competenciaFinal ?? "",
                         dataVencimento: format(novaData, "yyyy-MM-dd"),
-                        faixaId: original.faixa ?? "",
+                        faixaId: original.faixaId ?? "",
                         unificarCompetencias: "Não",
                         mensagemPersonalizada: "",
                         anoContribuicao: original.ano ?? "",
