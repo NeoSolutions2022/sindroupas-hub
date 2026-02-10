@@ -50,6 +50,19 @@ npm run dev
 - Click on "New codespace" to launch a new Codespace environment.
 - Edit files directly within the Codespace and commit and push your changes once you're done.
 
+
+## Variáveis de ambiente (integração Auth + Hasura)
+
+Crie um arquivo `.env` na raiz do projeto com:
+
+```bash
+VITE_AUTH_URL=http://localhost:3001
+VITE_HASURA_URL=http://localhost:8080/v1/graphql
+VITE_HASURA_ADMIN_SECRET=seu_admin_secret
+```
+
+> Após alterar `.env`, reinicie o `npm run dev` para o Vite recarregar as variáveis.
+
 ## What technologies are used for this project?
 
 This project is built with:
