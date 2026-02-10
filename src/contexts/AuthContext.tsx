@@ -34,21 +34,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       return;
     }
 
-    try {
-      const user = await meRequest(token);
-      setState({ token, user });
-    } catch (err) {
-      logout();
-      throw err;
-    }
-  }, [logout, state.token]);
+    const user = await meRequest(token);
+    setState({ token, user });
+  }, [state.token]);
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
     const token = await loginRequest(email, password);
     saveAuthToken(token);
-    const user = await meRequest(token);
-    setState({ token, user });
+
+    try {
+      const user = await meRequest(token);
+      setState({ token, user });
+    } catch {
+      // Mantém sessão ativa mesmo se /auth/me falhar momentaneamente.
+      setState({ token, user: null });
+    }
   }, []);
 
   useEffect(() => {
@@ -59,19 +60,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return;
       }
 
+      // Hidrata token imediatamente para manter sessão entre reloads/navegação.
+      setState({ token: storedToken, user: null });
+      setIsLoading(false);
+
       try {
         const user = await meRequest(storedToken);
         setState({ token: storedToken, user });
-      } catch (err) {
-        logout();
-        setError("Sessão expirada. Faça login novamente.");
-      } finally {
-        setIsLoading(false);
+      } catch {
+        // Não derruba sessão por falha temporária de /auth/me.
+        setError(null);
       }
     };
 
     initialize();
-  }, [logout]);
+  }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
