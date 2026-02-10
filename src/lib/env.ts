@@ -28,7 +28,7 @@ const readEnv = (key: string) => {
   const aliases = key.startsWith("VITE_") ? [key, key.replace("VITE_", "")] : [key];
 
   for (const alias of aliases) {
-    const value = readFromImportMeta(alias) ?? readFromWindow(alias) ?? readFromProcess(alias);
+    const value = readFromWindow(alias) ?? readFromImportMeta(alias) ?? readFromProcess(alias);
     if (value && value.trim()) {
       return value.trim();
     }

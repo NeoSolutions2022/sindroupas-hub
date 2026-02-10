@@ -21,4 +21,6 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Expose the default HTTP port
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
+CMD ["/docker-entrypoint.sh"]

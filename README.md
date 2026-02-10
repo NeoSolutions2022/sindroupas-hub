@@ -62,6 +62,7 @@ VITE_HASURA_ADMIN_SECRET=seu_admin_secret
 ```
 
 > Após alterar `.env`, reinicie o `npm run dev` para o Vite recarregar as variáveis.
+> Em produção (Docker + nginx deste projeto), as variáveis também são lidas em **runtime** via `/env.js` gerado no startup do container.
 
 ## What technologies are used for this project?
 
