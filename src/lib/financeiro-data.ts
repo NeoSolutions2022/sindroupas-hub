@@ -10,6 +10,7 @@ export interface BoletoRegistro {
   competenciaInicial?: string;
   competenciaFinal?: string;
   faixa?: string;
+  faixaId?: string;
   ano?: string;
   periodicidade?: string;
   parcelas?: number;

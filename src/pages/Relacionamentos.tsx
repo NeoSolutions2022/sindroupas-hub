@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Mail, MessageCircle, Plus, Pencil, Search, Trash2, Eye } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -45,6 +46,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Tooltip,
   TooltipContent,
@@ -74,75 +77,52 @@ interface Relacionamento {
   ultimoPagamento?: { data: string; valor: number };
 }
 
-const mockRelacionamentos: Relacionamento[] = [
-  {
-    id: "p1",
-    tipo: "Parceiro",
-    nome: "SEBRAE/CE",
-    categoria: "Fomento",
-    status: "Ativo",
-    ultimaMov: "2025-10-21 • Termo de cooperação",
-    contatos: {
-      nome: "Ana Paula",
-      email: "ana.paula@sebrae.com",
-      whatsapp: "5585988887777",
-    },
-    descricao: "Parceria para desenvolvimento empresarial",
-  },
-  {
-    id: "p2",
-    tipo: "Parceiro",
-    nome: "FIRJAN",
-    categoria: "Associação",
-    status: "Ativo",
-    ultimaMov: "2025-09-15 • Workshop conjunto",
-    contatos: { nome: "Contato Institucional", email: "firjan@firjan.org.br" },
-  },
-  {
-    id: "m1",
-    tipo: "Mantenedor",
-    nome: "Têxtil Nordeste S/A",
-    cnpj: "11.222.333/0001-44",
-    status: "Ativo",
-    ultimaMov: "Aporte R$ 50.000 em 2025-09-12",
-    contatos: {
-      nome: "Carlos Monteiro",
-      email: "contato@textilnordeste.com.br",
-      whatsapp: "5585999998888",
-    },
-    aportes: [
-      { valor: 50000, data: "2025-09-12" },
-      { valor: 30000, data: "2025-03-15" },
-    ],
-    contrapartidas: "Logo em eventos, menção em materiais de divulgação",
-  },
-  {
-    id: "f1",
-    tipo: "Fornecedor",
-    nome: "Gráfica Verde",
-    cnpj: "22.333.444/0001-55",
-    categoria: "Papelaria",
-    status: "Ativo",
-    ultimaMov: "Pagamento R$ 2.100 em 2025-10-02",
-    contatos: {
-      nome: "Marina Costa",
-      email: "comercial@graficaverde.com",
-      whatsapp: "5585987654321",
-    },
-    ultimoPagamento: { data: "2025-10-02", valor: 2100 },
-  },
-  {
-    id: "f2",
-    tipo: "Fornecedor",
-    nome: "TechAudio Eventos",
-    cnpj: "33.444.555/0001-66",
-    categoria: "Audiovisual",
-    status: "Ativo",
-    ultimaMov: "Pagamento R$ 5.800 em 2025-10-15",
-    contatos: { nome: "Contato Comercial", email: "eventos@techaudio.com.br" },
-    ultimoPagamento: { data: "2025-10-15", valor: 5800 },
-  },
-];
+type RelacionamentoRow = {
+  id: string;
+  tipo: TipoRelacionamento;
+  nome: string;
+  cnpj?: string | null;
+  categoria?: string | null;
+  status: string;
+  descricao?: string | null;
+  contrapartidas?: string | null;
+  observacoes?: string | null;
+  relacionamento_contatos?: { id: string; nome?: string | null; email?: string | null; whatsapp?: string | null }[];
+  relacionamento_aportes?: { id: string; valor: number; data: string }[];
+  relacionamento_pagamentos?: { id: string; valor: number; data: string }[];
+};
+
+const RELACIONAMENTOS_QUERY = `
+  query RelacionamentosPage {
+    relacionamentos(order_by: { nome: asc }) {
+      id
+      tipo
+      nome
+      cnpj
+      categoria
+      status
+      descricao
+      contrapartidas
+      observacoes
+      relacionamento_contatos {
+        id
+        nome
+        email
+        whatsapp
+      }
+      relacionamento_aportes(order_by: { data: desc }) {
+        id
+        valor
+        data
+      }
+      relacionamento_pagamentos(order_by: { data: desc }) {
+        id
+        valor
+        data
+      }
+    }
+  }
+`;
 
 const categoriasParceiro = ["Universidade", "IEL", "FIRJAN", "SEBRAE", "Associação", "Fomento"];
 const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"];
@@ -150,7 +130,16 @@ const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"
 export default function Relacionamentos() {
   const { toast } = useToast();
   const isMobile = useIsMobile();
-  const [relacionamentos, setRelacionamentos] = useState<Relacionamento[]>(mockRelacionamentos);
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["relacionamentos-page"],
+    queryFn: () =>
+      hasuraRequest<{ relacionamentos: RelacionamentoRow[] }>({
+        query: RELACIONAMENTOS_QUERY,
+        token,
+      }),
+  });
   const [searchTerm, setSearchTerm] = useState("");
   const [tipoFilter, setTipoFilter] = useState<TipoRelacionamento[]>([]);
   const [categoriaFilter, setCategoriaFilter] = useState("");
@@ -171,6 +160,139 @@ export default function Relacionamentos() {
   const [formDescricao, setFormDescricao] = useState("");
   const [formContrapartidas, setFormContrapartidas] = useState("");
   const [formObservacoes, setFormObservacoes] = useState("");
+
+  const relacionamentos = useMemo<Relacionamento[]>(() => {
+    if (!data?.relacionamentos) return [];
+    return data.relacionamentos.map((item) => {
+      const contato = item.relacionamento_contatos?.[0];
+      const ultimoPagamento = item.relacionamento_pagamentos?.[0];
+      const ultimoAporte = item.relacionamento_aportes?.[0];
+      const ultimaMov = ultimoPagamento
+        ? `Pagamento R$ ${ultimoPagamento.valor.toLocaleString("pt-BR")} em ${ultimoPagamento.data}`
+        : ultimoAporte
+          ? `Aporte R$ ${ultimoAporte.valor.toLocaleString("pt-BR")} em ${ultimoAporte.data}`
+          : undefined;
+
+      return {
+        id: item.id,
+        tipo: item.tipo,
+        nome: item.nome,
+        cnpj: item.cnpj ?? undefined,
+        categoria: item.categoria ?? undefined,
+        status: item.status as Relacionamento["status"],
+        ultimaMov,
+        contatos: contato
+          ? { nome: contato.nome ?? undefined, email: contato.email ?? undefined, whatsapp: contato.whatsapp ?? undefined }
+          : undefined,
+        descricao: item.descricao ?? undefined,
+        aportes: item.relacionamento_aportes,
+        contrapartidas: item.contrapartidas ?? undefined,
+        observacoes: item.observacoes ?? undefined,
+        ultimoPagamento: ultimoPagamento ? { data: ultimoPagamento.data, valor: ultimoPagamento.valor } : undefined,
+      };
+    });
+  }, [data?.relacionamentos]);
+
+  const saveRelacionamentoMutation = useMutation({
+    mutationFn: async (payload: { id?: string; input: Partial<Relacionamento> }) => {
+      const relacionamentoInput = {
+        tipo: payload.input.tipo,
+        nome: payload.input.nome,
+        cnpj: payload.input.cnpj ?? null,
+        categoria: payload.input.categoria ?? null,
+        status: payload.input.status,
+        descricao: payload.input.descricao ?? null,
+        contrapartidas: payload.input.contrapartidas ?? null,
+        observacoes: payload.input.observacoes ?? null,
+      };
+
+      const contatoInput =
+        payload.input.contatos?.nome || payload.input.contatos?.email || payload.input.contatos?.whatsapp
+          ? [
+              {
+                nome: payload.input.contatos?.nome ?? "",
+                email: payload.input.contatos?.email ?? "",
+                whatsapp: payload.input.contatos?.whatsapp ?? "",
+              },
+            ]
+          : [];
+
+      if (payload.id) {
+        await hasuraRequest({
+          query: `
+            mutation UpdateRelacionamento($id: uuid!, $input: relacionamentos_set_input!) {
+              update_relacionamentos_by_pk(pk_columns: { id: $id }, _set: $input) { id }
+            }
+          `,
+          variables: { id: payload.id, input: relacionamentoInput },
+          token,
+        });
+
+        await hasuraRequest({
+          query: `
+            mutation RefreshRelacionamentoContatos($relacionamentoId: uuid!, $contatos: [relacionamento_contatos_insert_input!]!) {
+              delete_relacionamento_contatos(where: { relacionamento_id: { _eq: $relacionamentoId } }) { affected_rows }
+              insert_relacionamento_contatos(objects: $contatos) { affected_rows }
+            }
+          `,
+          variables: {
+            relacionamentoId: payload.id,
+            contatos: contatoInput.map((contato) => ({ ...contato, relacionamento_id: payload.id })),
+          },
+          token,
+        });
+
+        return payload.id;
+      }
+
+      const created = await hasuraRequest<{ insert_relacionamentos_one: { id: string } }>({
+        query: `
+          mutation InsertRelacionamento($input: relacionamentos_insert_input!) {
+            insert_relacionamentos_one(object: $input) { id }
+          }
+        `,
+        variables: { input: relacionamentoInput },
+        token,
+      });
+
+      const relacionamentoId = created.insert_relacionamentos_one.id;
+      if (contatoInput.length) {
+        await hasuraRequest({
+          query: `
+            mutation InsertRelacionamentoContatos($contatos: [relacionamento_contatos_insert_input!]!) {
+              insert_relacionamento_contatos(objects: $contatos) { affected_rows }
+            }
+          `,
+          variables: {
+            contatos: contatoInput.map((contato) => ({ ...contato, relacionamento_id: relacionamentoId })),
+          },
+          token,
+        });
+      }
+
+      return relacionamentoId;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["relacionamentos-page"] });
+    },
+  });
+
+  const deleteRelacionamentoMutation = useMutation({
+    mutationFn: async (relacionamentoId: string) => {
+      await hasuraRequest({
+        query: `
+          mutation DeleteRelacionamento($id: uuid!) {
+            delete_relacionamentos_by_pk(id: $id) { id }
+          }
+        `,
+        variables: { id: relacionamentoId },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["relacionamentos-page"] });
+    },
+  });
 
   const filteredRelacionamentos = relacionamentos.filter((r) => {
     const matchSearch =
@@ -211,40 +333,61 @@ export default function Relacionamentos() {
   };
 
   const handleCreate = () => {
-    const newRelacionamento: Relacionamento = {
-      id: `new-${Date.now()}`,
-      tipo: formTipo,
-      nome: formNome,
-      cnpj: formCnpj || undefined,
-      categoria: formCategoria || undefined,
-      status: formStatus as any,
-      contatos: { email: formEmail, whatsapp: formWhatsapp },
-      descricao: formDescricao || undefined,
-      contrapartidas: formContrapartidas || undefined,
-      observacoes: formObservacoes || undefined,
-    };
-
-    setRelacionamentos([...relacionamentos, newRelacionamento]);
-    setIsCreateModalOpen(false);
-    resetForm();
-    toast({
-      title: "Relacionamento criado",
-      description: `${formTipo} "${formNome}" foi adicionado com sucesso.`,
-    });
+    saveRelacionamentoMutation.mutate(
+      {
+        input: {
+          tipo: formTipo,
+          nome: formNome,
+          cnpj: formCnpj || undefined,
+          categoria: formCategoria || undefined,
+          status: formStatus as Relacionamento["status"],
+          contatos: { nome: formNome, email: formEmail, whatsapp: formWhatsapp },
+          descricao: formDescricao || undefined,
+          contrapartidas: formContrapartidas || undefined,
+          observacoes: formObservacoes || undefined,
+        },
+      },
+      {
+        onSuccess: () => {
+          setIsCreateModalOpen(false);
+          resetForm();
+          toast({
+            title: "Relacionamento criado",
+            description: `${formTipo} "${formNome}" foi adicionado com sucesso.`,
+          });
+        },
+        onError: (err) => {
+          toast({
+            title: "Falha ao salvar relacionamento",
+            description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
   };
 
   const handleDelete = () => {
-    if (selectedId) {
-      const deleted = relacionamentos.find((r) => r.id === selectedId);
-      setRelacionamentos(relacionamentos.filter((r) => r.id !== selectedId));
-      setIsDeleteDialogOpen(false);
-      setSelectedId(null);
-      toast({
-        title: "Relacionamento excluído",
-        description: `${deleted?.tipo} "${deleted?.nome}" foi removido.`,
-        variant: "destructive",
-      });
-    }
+    if (!selectedId) return;
+    const deleted = relacionamentos.find((r) => r.id === selectedId);
+    deleteRelacionamentoMutation.mutate(selectedId, {
+      onSuccess: () => {
+        setIsDeleteDialogOpen(false);
+        setSelectedId(null);
+        toast({
+          title: "Relacionamento excluído",
+          description: `${deleted?.tipo} "${deleted?.nome}" foi removido.`,
+          variant: "destructive",
+        });
+      },
+      onError: (err) => {
+        toast({
+          title: "Falha ao excluir relacionamento",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      },
+    });
   };
 
   const openDeleteDialog = (id: string) => {
@@ -292,6 +435,18 @@ export default function Relacionamentos() {
                   Criar
                 </Button>
               </div>
+
+              {isLoading && (
+                <div className="rounded-xl border border-dashed border-[#CBD5B1] bg-white p-4 text-sm text-muted-foreground">
+                  Carregando relacionamentos do Hasura...
+                </div>
+              )}
+
+              {error && (
+                <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                  {error instanceof Error ? error.message : "Erro ao carregar relacionamentos."}
+                </div>
+              )}
 
               {/* Search & Filters */}
               <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">

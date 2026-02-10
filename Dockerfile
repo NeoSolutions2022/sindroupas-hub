@@ -17,8 +17,11 @@ FROM nginx:1.27-alpine AS runner
 
 # Copy the built assets from the previous stage
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx-spa.conf /etc/nginx/conf.d/default.conf
 
 # Expose the default HTTP port
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
+CMD ["/docker-entrypoint.sh"]

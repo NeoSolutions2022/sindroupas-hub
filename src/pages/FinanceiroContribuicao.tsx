@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -17,20 +18,77 @@ import {
 import { FileDown, FileText, Search, ArrowLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
-import { BoletoRegistro, HistoricoContribuicao, getFinanceiroData, saveFinanceiroData } from "@/lib/financeiro-data";
+import { HistoricoContribuicao } from "@/lib/financeiro-data";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
+
+type ContribuicaoRow = {
+  id: string;
+  ano?: string | null;
+  periodicidade?: string | null;
+  parcelas?: number | null;
+  base?: number | null;
+  percentual?: number | null;
+  descontos?: number | null;
+  valor?: number | null;
+  vencimento?: string | null;
+  situacao?: string | null;
+  empresa?: { id: string; razao_social: string } | null;
+};
+
+const CONTRIBUICAO_QUERY = `
+  query ContribuicaoAssistencial {
+    contribuicoes_assistenciais(order_by: { vencimento: desc }) {
+      id
+      ano
+      periodicidade
+      parcelas
+      base
+      percentual
+      descontos
+      valor
+      vencimento
+      situacao
+      empresa {
+        id
+        razao_social
+      }
+    }
+  }
+`;
 
 const FinanceiroContribuicao = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { token } = useAuth();
   const [anoFiltro, setAnoFiltro] = useState("");
   const [empresaFiltro, setEmpresaFiltro] = useState("");
-  const initialData = useMemo(() => getFinanceiroData(), []);
-  const [boletos] = useState<BoletoRegistro[]>(initialData.boletos);
-  const [historico, setHistorico] = useState<HistoricoContribuicao[]>(initialData.historico);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["contribuicoes-assistenciais"],
+    queryFn: () =>
+      hasuraRequest<{ contribuicoes_assistenciais: ContribuicaoRow[] }>({
+        query: CONTRIBUICAO_QUERY,
+        token,
+      }),
+  });
 
-  useEffect(() => {
-    saveFinanceiroData({ boletos, historico });
-  }, [boletos, historico]);
+  const historico = useMemo<HistoricoContribuicao[]>(() => {
+    return (
+      data?.contribuicoes_assistenciais.map((item) => ({
+        id: item.id,
+        ano: item.ano ?? "",
+        empresa: item.empresa?.razao_social ?? "Empresa não informada",
+        periodicidade: item.periodicidade ?? "",
+        parcelas: item.parcelas ?? 0,
+        base: item.base ?? 0,
+        percentual: item.percentual ?? 0,
+        descontos: item.descontos ?? 0,
+        valor: item.valor ?? 0,
+        vencimento: item.vencimento ?? "",
+        situacao: item.situacao ?? "Emitida",
+      })) ?? []
+    );
+  }, [data?.contribuicoes_assistenciais]);
 
   const historicoFiltrado = useMemo(() => {
     return historico.filter((item) => {
@@ -64,11 +122,23 @@ const FinanceiroContribuicao = () => {
                   <ArrowLeft className="h-4 w-4 mr-2" />
                   Voltar ao Financeiro
                 </Button>
-                <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => navigate("/dashboard/financeiro") }>
-                  + Criar boleto
-                </Button>
-              </div>
+                  <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => navigate("/dashboard/financeiro") }>
+                    + Criar boleto
+                  </Button>
+                </div>
             </div>
+
+            {isLoading && (
+              <div className="rounded-xl border border-dashed border-muted p-4 text-sm text-muted-foreground">
+                Carregando contribuições assistenciais...
+              </div>
+            )}
+
+            {error && (
+              <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                {error instanceof Error ? error.message : "Erro ao carregar contribuições assistenciais."}
+              </div>
+            )}
 
             <Card>
               <CardHeader>
