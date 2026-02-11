@@ -52,6 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
+import { createEfiBoletoRequest } from "@/lib/api/efi";
 import { useAuth } from "@/contexts/AuthContext";
 
 type EmpresaLookupRow = {
@@ -291,6 +292,12 @@ const Financeiro = () => {
 
   const createBoletoMutation = useMutation({
     mutationFn: async (payload: BoletoForm) => {
+      if (!token) {
+        throw new Error("Sessão expirada. Faça login novamente para criar boletos.");
+      }
+
+      const efiBoleto = await createEfiBoletoRequest(payload, token);
+
       await hasuraRequest({
         query: `
           mutation InsertBoleto($input: financeiro_boletos_insert_input!) {
@@ -303,10 +310,10 @@ const Financeiro = () => {
             tipo: payload.tipo === "contribuicao" ? "Contribuição Assistencial" : "Mensalidade (por Faixa)",
             competencia_inicial: payload.competenciaInicial || null,
             competencia_final: payload.competenciaFinal || null,
-            vencimento: payload.dataVencimento || null,
+            vencimento: efiBoleto.vencimento || payload.dataVencimento || null,
             faixa_id: payload.faixaId || null,
-            valor: payload.valorCalculado || null,
-            status: "Pendente",
+            valor: efiBoleto.valor !== undefined && efiBoleto.valor !== null ? Number(efiBoleto.valor) : payload.valorCalculado || null,
+            status: efiBoleto.status_ui || "Pendente",
             ano: payload.anoContribuicao || null,
             periodicidade: payload.periodicidade || null,
             parcelas: payload.parcelas ? Number(payload.parcelas) : null,
@@ -334,9 +341,9 @@ const Financeiro = () => {
               base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
               percentual: payload.percentual ? Number(payload.percentual) : null,
               descontos: payload.descontos ? Number(payload.descontos) : null,
-              valor: payload.valorCalculado || null,
-              vencimento: payload.dataVencimento || null,
-              situacao: "Emitida",
+              valor: efiBoleto.valor !== undefined && efiBoleto.valor !== null ? Number(efiBoleto.valor) : payload.valorCalculado || null,
+              vencimento: efiBoleto.vencimento || payload.dataVencimento || null,
+              situacao: efiBoleto.status_ui || "Emitida",
             },
           },
           token,
