@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Handshake, DollarSign, MessageSquare } from "lucide-react";
+import { LayoutDashboard, Users, Handshake, DollarSign, MessageSquare, ClipboardList } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -19,6 +19,7 @@ const items = [
   { title: "Relacionamentos", url: "/dashboard/relacionamentos", icon: Handshake },
   { title: "Financeiro", url: "/dashboard/financeiro", icon: DollarSign },
   { title: "Comunicação", url: "/dashboard/comunicacao", icon: MessageSquare },
+  { title: "Atividades", url: "/dashboard/atividades", icon: ClipboardList },
 ];
 
 export function AppSidebar() {
