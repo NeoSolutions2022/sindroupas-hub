@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect } from "react";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
+import { ImpersonationBar } from "@/components/ImpersonationBar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +28,7 @@ import { PrioridadesOperacional, PrioridadeOperacional } from "@/components/dash
 import { CalendarioMensal } from "@/components/dashboard/CalendarioMensal";
 import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
 import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
+import { ParticipacaoEventosCard } from "@/components/dashboard/ParticipacaoEventosCard";
 
 const Dashboard = () => {
   // State
@@ -109,6 +111,7 @@ const Dashboard = () => {
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <DashboardNavbar />
+          <ImpersonationBar />
           <main className="flex-1 overflow-auto">
             <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto w-full">
               
@@ -146,6 +149,9 @@ const Dashboard = () => {
               empresasCriticas={dashboardKPIs.empresasCriticas}
               proximosVencimentos={dashboardKPIs.proximosVencimentos15d}
             />
+
+            {/* KPI extra: Participação em eventos */}
+            <ParticipacaoEventosCard month={new Date().getMonth()} year={new Date().getFullYear()} />
 
             {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">

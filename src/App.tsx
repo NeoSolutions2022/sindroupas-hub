@@ -4,10 +4,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { MockAuthProvider } from "@/contexts/MockAuthContext";
+import { ActivitiesProvider } from "@/contexts/ActivitiesContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Atividades from "./pages/Atividades";
 import Empresas from "./pages/Empresas";
 import Comunicacao from "./pages/Comunicacao";
 import CRMDetalhe from "./pages/CRMDetalhe";
@@ -22,7 +25,9 @@ const queryClient = new QueryClient();
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <TooltipProvider>
+      <MockAuthProvider>
+        <ActivitiesProvider>
+          <TooltipProvider>
         <Toaster />
         <Sonner />
         <BrowserRouter>
@@ -93,11 +98,21 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/dashboard/atividades"
+              element={
+                <ProtectedRoute>
+                  <Atividades />
+                </ProtectedRoute>
+              }
+            />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>
+    </ActivitiesProvider>
+  </MockAuthProvider>
     </AuthProvider>
   </QueryClientProvider>
 );
