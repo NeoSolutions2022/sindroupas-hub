@@ -42,7 +42,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, CalendarIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -50,10 +52,12 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, isBefore, isAfter, differenceInDays, isValid } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { createEfiBoletoRequest } from "@/lib/api/efi";
 import { useAuth } from "@/contexts/AuthContext";
+import { cn } from "@/lib/utils";
+import { ptBR } from "date-fns/locale";
 
 type EmpresaLookupRow = {
   id: string;
@@ -478,6 +482,20 @@ const Financeiro = () => {
     } catch {
       return null;
     }
+  };
+
+  const parseDateFromForm = (value: string): Date | undefined => {
+    if (!value) return undefined;
+    const isoDate = parse(value, "yyyy-MM-dd", new Date());
+    if (isValid(isoDate)) return isoDate;
+    const brDate = parse(value, "dd/MM/yyyy", new Date());
+    if (isValid(brDate)) return brDate;
+    return undefined;
+  };
+
+  const formatDateForDisplay = (value: string) => {
+    const parsedDate = parseDateFromForm(value);
+    return parsedDate ? format(parsedDate, "dd/MM/yyyy") : "Selecione a data";
   };
 
   // Determine boleto effective status (Vencido = due date < today AND not paid)
@@ -1573,13 +1591,37 @@ const Financeiro = () => {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label htmlFor="dataVenc">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="dataVenc"
-                              placeholder="25/11/2025"
-                              value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
-                            />
+                            <Label htmlFor="dataVenc">Data Vencimento*</Label>
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <Button
+                                  id="dataVenc"
+                                  type="button"
+                                  variant="outline"
+                                  className={cn(
+                                    "w-full justify-start text-left font-normal",
+                                    !boletoForm.dataVencimento && "text-muted-foreground",
+                                  )}
+                                >
+                                  <CalendarIcon className="mr-2 h-4 w-4" />
+                                  {formatDateForDisplay(boletoForm.dataVencimento)}
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent className="w-auto p-0 bg-background" align="start">
+                                <Calendar
+                                  mode="single"
+                                  locale={ptBR}
+                                  selected={parseDateFromForm(boletoForm.dataVencimento)}
+                                  onSelect={(date) =>
+                                    setBoletoForm({
+                                      ...boletoForm,
+                                      dataVencimento: date ? format(date, "yyyy-MM-dd") : "",
+                                    })
+                                  }
+                                  className="pointer-events-auto"
+                                />
+                              </PopoverContent>
+                            </Popover>
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="faixa">Faixa*</Label>
@@ -1726,13 +1768,37 @@ const Financeiro = () => {
                             </Select>
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="vencimentoContrib">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="vencimentoContrib"
-                              placeholder="30/11/2025"
-                              value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
-                            />
+                            <Label htmlFor="vencimentoContrib">Data Vencimento*</Label>
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <Button
+                                  id="vencimentoContrib"
+                                  type="button"
+                                  variant="outline"
+                                  className={cn(
+                                    "w-full justify-start text-left font-normal",
+                                    !boletoForm.dataVencimento && "text-muted-foreground",
+                                  )}
+                                >
+                                  <CalendarIcon className="mr-2 h-4 w-4" />
+                                  {formatDateForDisplay(boletoForm.dataVencimento)}
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent className="w-auto p-0 bg-background" align="start">
+                                <Calendar
+                                  mode="single"
+                                  locale={ptBR}
+                                  selected={parseDateFromForm(boletoForm.dataVencimento)}
+                                  onSelect={(date) =>
+                                    setBoletoForm({
+                                      ...boletoForm,
+                                      dataVencimento: date ? format(date, "yyyy-MM-dd") : "",
+                                    })
+                                  }
+                                  className="pointer-events-auto"
+                                />
+                              </PopoverContent>
+                            </Popover>
                           </div>
                         </div>
 
