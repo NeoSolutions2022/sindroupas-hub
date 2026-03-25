@@ -182,7 +182,18 @@ const Dashboard = () => {
         chips: [{ label: "Aniversário", tipo: "aniversario" as const }],
       }));
 
-    const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios];
+    const prioridadeSemFundacao = empresasMapeadas
+      .filter((e) => !e.dataFundacao)
+      .slice(0, 2)
+      .map((e) => ({
+        id: e.id,
+        nome: e.nome,
+        tipo: "aniversario" as const,
+        contexto: "Data de fundação não cadastrada",
+        chips: [{ label: "Cadastro incompleto", tipo: "atencao" as const }],
+      }));
+
+    const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
     const boletosVencidos = boletos.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
     const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
@@ -220,7 +231,6 @@ const Dashboard = () => {
         if (!e.whatsapp) missingFields.push("whatsapp");
         if (!e.responsavelNome) missingFields.push("responsavel");
         if (!e.dataFundacao) missingFields.push("dataFundacao");
-        if (!e.aniversarioResponsavel) missingFields.push("aniversarioResponsavel");
         return { id: e.id, nome: e.nome, missingFields };
       })
       .filter((e) => e.missingFields.length > 0);
