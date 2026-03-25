@@ -195,6 +195,16 @@ interface BoletoForm {
   pesquisaContribuicaoFeita: boolean;
 }
 
+const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | "Cancelado" | "Inadimplente" => {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized) return "Aguardando";
+  if (["pago", "paid", "liquidado", "recebido"].includes(normalized)) return "Pago";
+  if (["cancelado", "canceled", "cancelled"].includes(normalized)) return "Cancelado";
+  if (["inadimplente", "atrasado", "vencido", "overdue"].includes(normalized)) return "Inadimplente";
+  if (["pendente", "emitida", "aguardando", "pending", "waiting"].includes(normalized)) return "Aguardando";
+  return "Aguardando";
+};
+
 const Financeiro = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
@@ -237,7 +247,7 @@ const Financeiro = () => {
         empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
         valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
         vencimento: boleto.vencimento ?? "",
-        status: boleto.efi_status ?? "Pendente",
+        status: normalizeBoletoStatus(boleto.efi_status),
         competenciaInicial: boleto.competencia_inicial ?? undefined,
         competenciaFinal: boleto.competencia_final ?? undefined,
         faixaId: boleto.faixa_id ?? undefined,
@@ -306,7 +316,7 @@ const Financeiro = () => {
             vencimento: payload.dataVencimento || null,
             faixa_id: payload.faixaId || null,
             valor: payload.valorCalculado || null,
-            efi_status: "Pendente",
+            efi_status: "Aguardando",
             ano: payload.anoContribuicao || null,
             periodicidade: payload.periodicidade || null,
             parcelas: payload.parcelas ? Number(payload.parcelas) : null,
@@ -473,14 +483,14 @@ const Financeiro = () => {
     }
   };
 
-  // Determine boleto effective status (Vencido = due date < today AND not paid)
+  // Determine boleto effective status for UI
   const getBoletoEffectiveStatus = (boleto: BoletoRegistro): string => {
-    if (boleto.status === "Pago") return "Pago";
+    if (boleto.status === "Pago" || boleto.status === "Cancelado") return boleto.status;
     const dueDate = parseVencimento(boleto.vencimento);
     if (dueDate && isBefore(dueDate, new Date())) {
-      return "Vencido";
+      return "Inadimplente";
     }
-    return boleto.status;
+    return normalizeBoletoStatus(boleto.status);
   };
 
   const filteredBoletos = useMemo(() => {
@@ -520,7 +530,7 @@ const Financeiro = () => {
         // Somente inadimplentes
         if (f.somenteInadimplentes) {
           const effectiveStatus = getBoletoEffectiveStatus(boleto);
-          if (effectiveStatus !== "Atrasado" && effectiveStatus !== "Vencido") {
+          if (effectiveStatus !== "Inadimplente") {
             return false;
           }
         }
@@ -596,13 +606,12 @@ const Financeiro = () => {
     switch (status) {
       case "Pago":
         return <Badge className="bg-green-100 text-green-800 border-green-200">Pago</Badge>;
-      case "Atrasado":
-        return <Badge variant="destructive">Atrasado</Badge>;
-      case "Vencido":
-        return <Badge className="bg-orange-100 text-orange-800 border-orange-200">Vencido</Badge>;
-      case "Emitida":
-      case "Pendente":
-        return <Badge className="bg-blue-100 text-blue-800 border-blue-200">{status}</Badge>;
+      case "Aguardando":
+        return <Badge className="bg-blue-100 text-blue-800 border-blue-200">Aguardando</Badge>;
+      case "Cancelado":
+        return <Badge className="bg-slate-100 text-slate-800 border-slate-300">Cancelado</Badge>;
+      case "Inadimplente":
+        return <Badge variant="destructive">Inadimplente</Badge>;
       default:
         return <Badge variant="secondary">{status}</Badge>;
     }
