@@ -140,9 +140,9 @@ const formatPhone = (value: string) => {
 
 type EmpresaRow = {
   id: string;
-  razao_social: string;
-  nome_fantasia: string;
-  cnpj: string;
+  razao_social?: string | null;
+  nome_fantasia?: string | null;
+  cnpj?: string | null;
   email?: string | null;
   whatsapp?: string | null;
   endereco?: string | null;
@@ -164,6 +164,10 @@ type EmpresaRow = {
     email?: string | null;
     observacoes?: string | null;
   }[];
+};
+
+const getEmpresaDisplayName = (empresa: Pick<EmpresaRow, "nome_fantasia" | "razao_social">) => {
+  return empresa.nome_fantasia?.trim() || empresa.razao_social?.trim() || "Empresa sem nome";
 };
 
 type FaixaRow = {
@@ -266,12 +270,14 @@ const Empresas = () => {
     return data.empresas.map((empresa) => {
       const faixaLabel = empresa.faixa_id ? faixas.find((faixa) => faixa.id === empresa.faixa_id)?.label : undefined;
       const responsavel = empresa.responsaveis?.[0];
+      const nomeFantasia = getEmpresaDisplayName(empresa);
+      const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
       return {
         id: empresa.id,
         logoUrl: "",
-        razaoSocial: empresa.razao_social,
-        nomeFantasia: empresa.nome_fantasia,
-        cnpj: empresa.cnpj,
+        razaoSocial,
+        nomeFantasia,
+        cnpj: empresa.cnpj ?? "",
         email: empresa.email ?? undefined,
         whatsapp: empresa.whatsapp ?? undefined,
         endereco: empresa.endereco ?? undefined,

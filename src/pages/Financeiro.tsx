@@ -67,7 +67,7 @@ type BoletoRow = {
   tipo?: string | null;
   valor?: number | string | null;
   vencimento?: string | null;
-  status?: string | null;
+  efi_status?: string | null;
   competencia_inicial?: string | null;
   competencia_final?: string | null;
   faixa_id?: string | null;
@@ -109,7 +109,7 @@ const FINANCEIRO_QUERY = `
       tipo
       valor
       vencimento
-      status
+      efi_status
       competencia_inicial
       competencia_final
       faixa_id
@@ -237,7 +237,7 @@ const Financeiro = () => {
         empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
         valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
         vencimento: boleto.vencimento ?? "",
-        status: boleto.status ?? "Pendente",
+        status: boleto.efi_status ?? "Pendente",
         competenciaInicial: boleto.competencia_inicial ?? undefined,
         competenciaFinal: boleto.competencia_final ?? undefined,
         faixaId: boleto.faixa_id ?? undefined,
@@ -306,7 +306,7 @@ const Financeiro = () => {
             vencimento: payload.dataVencimento || null,
             faixa_id: payload.faixaId || null,
             valor: payload.valorCalculado || null,
-            status: "Pendente",
+            efi_status: "Pendente",
             ano: payload.anoContribuicao || null,
             periodicidade: payload.periodicidade || null,
             parcelas: payload.parcelas ? Number(payload.parcelas) : null,
