@@ -53,6 +53,9 @@ import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
 
 type EmpresaLookupRow = {
   id: string;
@@ -204,6 +207,9 @@ const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | 
   if (["pendente", "emitida", "aguardando", "pending", "waiting"].includes(normalized)) return "Aguardando";
   return "Aguardando";
 };
+
+const formatCurrencyBRL = (value: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 
 const Financeiro = () => {
   const navigate = useNavigate();
@@ -579,27 +585,170 @@ const Financeiro = () => {
     return true;
   }, [boletoForm, previaBoleto, wizardStep]);
 
-  const handleExport = (formato: "PDF" | "Excel" | "CSV") => {
-    if (formato === "Excel") {
-      // Mock export with filtered data
-      const exportData = filteredBoletos.map((b) => ({
-        empresa: b.empresa,
-        tipo: b.tipo,
-        valor: b.valor,
-        vencimento: b.vencimento,
-        status: getBoletoEffectiveStatus(b),
-      }));
-      console.log("Exportando Excel com dados filtrados:", exportData);
+  const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
+    const now = new Date();
+    const arquivoBase = `financeiro-boletos-${format(now, "yyyy-MM-dd")}`;
+    const rows = filteredBoletos.map((b) => ({
+      empresa: b.empresa,
+      tipo: b.tipo,
+      valor: b.valor,
+      vencimento: b.vencimento,
+      status: getBoletoEffectiveStatus(b),
+    }));
+
+    if (rows.length === 0) {
       toast({
-        title: "Exportação Excel iniciada",
-        description: `Exportando ${filteredBoletos.length} boleto(s) filtrado(s).`,
+        title: "Nada para exportar",
+        description: "Não existem boletos para os filtros selecionados.",
       });
-    } else {
-      toast({
-        title: "Exportação iniciada",
-        description: `Relatório será exportado em ${formato}`,
-      });
+      return;
     }
+
+    if (formato === "PDF") {
+      try {
+        const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+        const verdeEscuro: [number, number, number] = [126, 140, 94];
+        const verdeClaro: [number, number, number] = [247, 248, 244];
+        const borda: [number, number, number] = [220, 231, 203];
+
+        doc.setFillColor(...verdeEscuro);
+        doc.rect(0, 0, doc.internal.pageSize.getWidth(), 60, "F");
+        doc.setFontSize(16);
+        doc.setTextColor(255, 255, 255);
+        doc.text("Relatório Financeiro de Boletos", 40, 38);
+
+        doc.setFontSize(10);
+        doc.setTextColor(90, 90, 90);
+        doc.text(`Gerado em ${format(now, "dd/MM/yyyy HH:mm")} • Total: ${rows.length} boleto(s)`, 40, 80);
+
+        autoTable(doc, {
+          startY: 95,
+          head: [["Empresa", "Tipo", "Valor", "Vencimento", "Status"]],
+          body: rows.map((row) => [
+            row.empresa,
+            row.tipo,
+            formatCurrencyBRL(row.valor),
+            row.vencimento,
+            row.status,
+          ]),
+          theme: "grid",
+          styles: {
+            fontSize: 9,
+            cellPadding: 8,
+            lineColor: borda,
+            lineWidth: 0.5,
+            textColor: [28, 28, 28],
+          },
+          headStyles: {
+            fillColor: verdeEscuro,
+            textColor: [255, 255, 255],
+            fontStyle: "bold",
+          },
+          alternateRowStyles: {
+            fillColor: verdeClaro,
+          },
+        });
+
+        doc.save(`${arquivoBase}.pdf`);
+        toast({
+          title: "PDF exportado com sucesso",
+          description: `${rows.length} boleto(s) exportado(s).`,
+        });
+      } catch (error) {
+        toast({
+          title: "Falha ao exportar PDF",
+          description: error instanceof Error ? error.message : "Não foi possível gerar o PDF.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (formato === "Excel") {
+      try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet("Boletos");
+
+        worksheet.columns = [
+          { header: "Empresa", key: "empresa", width: 42 },
+          { header: "Tipo", key: "tipo", width: 28 },
+          { header: "Valor", key: "valor", width: 16 },
+          { header: "Vencimento", key: "vencimento", width: 16 },
+          { header: "Status", key: "status", width: 18 },
+        ];
+
+        rows.forEach((row) => {
+          worksheet.addRow({
+            ...row,
+            valor: row.valor,
+          });
+        });
+
+        const headerRow = worksheet.getRow(1);
+        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        headerRow.alignment = { vertical: "middle", horizontal: "center" };
+        headerRow.height = 24;
+        headerRow.eachCell((cell) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF7E8C5E" } };
+          cell.border = {
+            top: { style: "thin", color: { argb: "FFDCE7CB" } },
+            left: { style: "thin", color: { argb: "FFDCE7CB" } },
+            bottom: { style: "thin", color: { argb: "FFDCE7CB" } },
+            right: { style: "thin", color: { argb: "FFDCE7CB" } },
+          };
+        });
+
+        worksheet.eachRow((row, rowNumber) => {
+          if (rowNumber === 1) return;
+          row.height = 22;
+          const isEven = rowNumber % 2 === 0;
+          row.eachCell((cell, colNumber) => {
+            cell.alignment = { vertical: "middle", horizontal: colNumber === 3 ? "right" : "left" };
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: isEven ? "FFF7F8F4" : "FFFFFFFF" },
+            };
+            cell.border = {
+              top: { style: "thin", color: { argb: "FFDCE7CB" } },
+              left: { style: "thin", color: { argb: "FFDCE7CB" } },
+              bottom: { style: "thin", color: { argb: "FFDCE7CB" } },
+              right: { style: "thin", color: { argb: "FFDCE7CB" } },
+            };
+          });
+        });
+
+        worksheet.getColumn("valor").numFmt = '"R$"#,##0.00';
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${arquivoBase}.xlsx`;
+        link.click();
+        URL.revokeObjectURL(url);
+
+        toast({
+          title: "Excel exportado com sucesso",
+          description: `${rows.length} boleto(s) exportado(s).`,
+        });
+      } catch (error) {
+        toast({
+          title: "Falha ao exportar Excel",
+          description: error instanceof Error ? error.message : "Não foi possível gerar o arquivo XLSX.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    toast({
+      title: "Formato não suportado",
+      description: "Exportação CSV ainda não foi implementada.",
+    });
   };
 
   const getStatusBadge = (status: string) => {
