@@ -83,8 +83,11 @@ const normalizeStatus = (status?: string | null) => {
 
 const Dashboard = () => {
   const { token } = useAuth();
+  const hoje = new Date();
   // State
   const [searchQuery, setSearchQuery] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(hoje), "yyyy-MM-dd"));
+  const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
@@ -113,10 +116,19 @@ const Dashboard = () => {
     const today = new Date();
     const rows = data?.empresas ?? [];
     const boletos = data?.financeiro_boletos ?? [];
+    const inicioPeriodo = periodoInicio ? parseISO(periodoInicio) : null;
+    const fimPeriodo = periodoFim ? parseISO(periodoFim) : null;
+    const boletosNoPeriodo = boletos.filter((b) => {
+      if (!b.vencimento) return false;
+      const vencimento = parseISO(b.vencimento);
+      if (inicioPeriodo && isBefore(vencimento, inicioPeriodo)) return false;
+      if (fimPeriodo && isAfter(vencimento, fimPeriodo)) return false;
+      return true;
+    });
     const empresasMapeadas = rows.map((empresa, index) => {
       const id = index + 1;
       const nome = empresa.nome_fantasia?.trim() || empresa.razao_social?.trim() || "Empresa sem nome";
-      const boletosEmpresa = boletos.filter((b) => b.empresa_id === empresa.id);
+      const boletosEmpresa = boletosNoPeriodo.filter((b) => b.empresa_id === empresa.id);
       const emAberto = boletosEmpresa.filter((b) => normalizeStatus(b.efi_status) !== "Pago" && normalizeStatus(b.efi_status) !== "Cancelado");
       const valorEmAberto = emAberto.reduce((acc, b) => acc + (b.valor ? Number(b.valor) : 0), 0);
       const vencidos = emAberto
@@ -193,16 +205,16 @@ const Dashboard = () => {
 
     const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
-    const boletosVencidos = boletos.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
+    const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
     const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
     const currentMonth = startOfMonth(today);
     const prevMonth = startOfMonth(subMonths(today, 1));
-    const faturadoMes = boletos.reduce((acc, b) => {
+    const faturadoMes = boletosNoPeriodo.reduce((acc, b) => {
       if (normalizeStatus(b.efi_status) !== "Pago" || !b.vencimento) return acc;
       const d = parseISO(b.vencimento);
       return d >= currentMonth ? acc + Number(b.valor || 0) : acc;
     }, 0);
-    const faturadoMesAnterior = boletos.reduce((acc, b) => {
+    const faturadoMesAnterior = boletosNoPeriodo.reduce((acc, b) => {
       if (normalizeStatus(b.efi_status) !== "Pago" || !b.vencimento) return acc;
       const d = parseISO(b.vencimento);
       return d >= prevMonth && d < currentMonth ? acc + Number(b.valor || 0) : acc;
@@ -216,7 +228,7 @@ const Dashboard = () => {
       valorEmAtraso: boletosVencidos.reduce((acc, b) => acc + Number(b.valor || 0), 0),
       qtdBoletosVencidos: boletosVencidos.length,
       empresasCriticas: empresasMapeadas.filter((e) => e.diasInadimplente > 60).length,
-      proximosVencimentos15d: boletos.filter((b) => {
+      proximosVencimentos15d: boletosNoPeriodo.filter((b) => {
         if (!b.vencimento || normalizeStatus(b.efi_status) === "Pago") return false;
         const d = parseISO(b.vencimento);
         return isAfter(d, today) && differenceInDays(d, today) <= 15;
@@ -234,7 +246,7 @@ const Dashboard = () => {
       .filter((e) => e.missingFields.length > 0);
 
     const events = [
-      ...boletos
+      ...boletosNoPeriodo
         .filter((b) => b.vencimento)
         .slice(0, 20)
         .map((b) => ({
@@ -257,7 +269,7 @@ const Dashboard = () => {
       empresasIncompletas: incompletas,
       calendarEvents: events,
     };
-  }, [data]);
+  }, [data, periodoFim, periodoInicio]);
 
   // Auto-focus on the missing field when modal opens
   useEffect(() => {
@@ -336,16 +348,45 @@ const Dashboard = () => {
                     Acompanhamento diário de adimplência e relacionamento
                   </p>
                 </div>
-                <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                  <Input
-                    type="search"
-                    placeholder="Buscar empresa..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 h-9 bg-card border-border text-sm"
-                    aria-label="Buscar empresa ou responsável"
-                  />
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <Input
+                      type="search"
+                      placeholder="Buscar empresa..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-9 h-9 bg-card border-border text-sm"
+                      aria-label="Buscar empresa ou responsável"
+                    />
+                  </div>
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+                    <Input
+                      type="date"
+                      value={periodoInicio}
+                      onChange={(e) => setPeriodoInicio(e.target.value)}
+                      className="h-8 w-full sm:w-auto"
+                      aria-label="Data inicial do período do dashboard"
+                    />
+                    <Input
+                      type="date"
+                      value={periodoFim}
+                      onChange={(e) => setPeriodoFim(e.target.value)}
+                      className="h-8 w-full sm:w-auto"
+                      aria-label="Data final do período do dashboard"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 px-2 text-xs"
+                      onClick={() => {
+                        setPeriodoInicio("");
+                        setPeriodoFim("");
+                      }}
+                    >
+                      Limpar período
+                    </Button>
+                  </div>
                 </div>
               </header>
 
