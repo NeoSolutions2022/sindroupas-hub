@@ -31,7 +31,7 @@ type DashboardEmpresaRow = {
   nome_fantasia?: string | null;
   whatsapp?: string | null;
   data_fundacao?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; aniversario?: string | null }[];
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null }[];
 };
 
@@ -55,7 +55,6 @@ const DASHBOARD_QUERY = `
         id
         nome
         whatsapp
-        aniversario
       }
       colaboradores {
         id
@@ -139,7 +138,6 @@ const Dashboard = () => {
         whatsapp: empresa.whatsapp || responsavel?.whatsapp || "",
         responsavelNome: responsavel?.nome || "",
         dataFundacao: empresa.data_fundacao || "",
-        aniversarioResponsavel: responsavel?.aniversario || "",
         proximoBoleto: proximoBoleto
           ? {
               data: proximoBoleto.vencimento || "",
