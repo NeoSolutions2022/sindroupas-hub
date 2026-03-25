@@ -239,6 +239,7 @@ const Empresas = () => {
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
@@ -479,6 +480,7 @@ const Empresas = () => {
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
+    setValidationErrors([]);
     setIsViewMode(viewMode);
     if (empresa) {
       setEditingEmpresa(empresa);
@@ -512,9 +514,14 @@ const Empresas = () => {
     setIsViewMode(false);
     setFormData({ colaboradores: [] });
     setLogoPreview("");
+    setValidationErrors([]);
     if (logoInputRef.current) {
       logoInputRef.current.value = "";
     }
+  };
+
+  const clearValidationError = (field: string) => {
+    setValidationErrors((prev) => prev.filter((item) => item !== field));
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -590,24 +597,26 @@ const Empresas = () => {
   };
 
   const handleSave = () => {
-    const requiredFields = [
-      formData.razaoSocial,
-      formData.cnpj,
-      typeof formData.associado === "boolean" ? "ok" : "",
-      formData.situacaoFinanceira,
-      formData.porte,
-      formData.dataFundacao,
+    const requiredChecks = [
+      { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
+      { key: "cnpj", label: "CNPJ", value: formData.cnpj },
+      { key: "associado", label: "Associado", value: typeof formData.associado === "boolean" ? "ok" : "" },
+      { key: "situacaoFinanceira", label: "Situação Financeira", value: formData.situacaoFinanceira },
+      { key: "porte", label: "Porte", value: formData.porte },
+      { key: "dataFundacao", label: "Fundação", value: formData.dataFundacao },
     ];
-    const hasEmpty = requiredFields.some((field) => field === undefined || field === "");
+    const missing = requiredChecks.filter((field) => field.value === undefined || field.value === "");
 
-    if (hasEmpty) {
+    if (missing.length > 0) {
+      setValidationErrors(missing.map((field) => field.key));
       toast({
         title: "Preencha os campos obrigatórios",
-        description: "Campos marcados com * são necessários para salvar.",
+        description: `Faltando: ${missing.map((field) => field.label).join(", ")}.`,
         variant: "destructive",
       });
       return;
     }
+    setValidationErrors([]);
 
     saveEmpresaMutation.mutate(
       { values: formData, id: editingEmpresa?.id ?? null },
@@ -1133,6 +1142,23 @@ const Empresas = () => {
                 </DialogHeader>
 
                 <div className="space-y-6">
+                  {validationErrors.length > 0 && !isViewMode && (
+                    <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      Campos obrigatórios pendentes:{" "}
+                      {validationErrors
+                        .map((field) =>
+                          ({
+                            razaoSocial: "Razão Social",
+                            cnpj: "CNPJ",
+                            associado: "Associado",
+                            situacaoFinanceira: "Situação Financeira",
+                            porte: "Porte",
+                            dataFundacao: "Fundação",
+                          }[field] || field),
+                        )
+                        .join(", ")}
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label>Logo da Empresa</Label>
                     <div className="flex flex-wrap items-center gap-4">
@@ -1179,7 +1205,11 @@ const Empresas = () => {
                         id="razaoSocial"
                         placeholder="Digite a razão social"
                         value={formData.razaoSocial || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, razaoSocial: e.target.value }))}
+                        onChange={(e) => {
+                          clearValidationError("razaoSocial");
+                          setFormData((prev) => ({ ...prev, razaoSocial: e.target.value }));
+                        }}
+                        className={cn(validationErrors.includes("razaoSocial") && "border-destructive focus-visible:ring-destructive")}
                         disabled={isViewMode}
                       />
                     </div>
@@ -1199,7 +1229,11 @@ const Empresas = () => {
                         id="cnpj"
                         placeholder="00.000.000/0000-00"
                         value={formData.cnpj || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }))}
+                        onChange={(e) => {
+                          clearValidationError("cnpj");
+                          setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }));
+                        }}
+                        className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
                         disabled={isViewMode}
                       />
                     </div>
@@ -1247,15 +1281,16 @@ const Empresas = () => {
                               ? "sim"
                               : "nao"
                         }
-                        onValueChange={(value) =>
+                        onValueChange={(value) => {
+                          clearValidationError("associado");
                           setFormData((prev) => ({
                             ...prev,
                             associado: value === "unset" ? undefined : value === "sim",
-                          }))
-                        }
+                          }));
+                        }}
                         disabled={isViewMode}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className={cn(validationErrors.includes("associado") && "border-destructive focus:ring-destructive")}>
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1269,18 +1304,19 @@ const Empresas = () => {
                       <Label>Situação Financeira*</Label>
                       <Select
                         value={formData.situacaoFinanceira || "unset"}
-                        onValueChange={(value) =>
+                        onValueChange={(value) => {
+                          clearValidationError("situacaoFinanceira");
                           setFormData((prev) => ({
                             ...prev,
                             situacaoFinanceira:
                               value === "unset"
                                 ? undefined
                                 : (value as Empresa["situacaoFinanceira"]),
-                          }))
-                        }
+                          }));
+                        }}
                         disabled={isViewMode}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className={cn(validationErrors.includes("situacaoFinanceira") && "border-destructive focus:ring-destructive")}>
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1294,15 +1330,16 @@ const Empresas = () => {
                       <Label>Porte*</Label>
                       <Select
                         value={formData.porte || "unset"}
-                        onValueChange={(value) =>
+                        onValueChange={(value) => {
+                          clearValidationError("porte");
                           setFormData((prev) => ({
                             ...prev,
                             porte: value === "unset" ? undefined : (value as Empresa["porte"]),
-                          }))
-                        }
+                          }));
+                        }}
                         disabled={isViewMode}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className={cn(validationErrors.includes("porte") && "border-destructive focus:ring-destructive")}>
                           <SelectValue placeholder="Selecione" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1340,7 +1377,11 @@ const Empresas = () => {
                         id="fundacao"
                         type="date"
                         value={formData.dataFundacao || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, dataFundacao: e.target.value }))}
+                        onChange={(e) => {
+                          clearValidationError("dataFundacao");
+                          setFormData((prev) => ({ ...prev, dataFundacao: e.target.value }));
+                        }}
+                        className={cn(validationErrors.includes("dataFundacao") && "border-destructive focus-visible:ring-destructive")}
                         disabled={isViewMode}
                       />
                     </div>
