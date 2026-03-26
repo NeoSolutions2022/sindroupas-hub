@@ -81,12 +81,14 @@ const normalizeStatus = (status?: string | null) => {
   return "Aguardando";
 };
 
+const FATURAMENTO_STATUSES = new Set(["Pago", "Aguardando", "Cancelado", "Inadimplente"]);
+
 const Dashboard = () => {
   const { token } = useAuth();
   const hoje = new Date();
   // State
   const [searchQuery, setSearchQuery] = useState("");
-  const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(hoje), "yyyy-MM-dd"));
+  const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
@@ -207,24 +209,28 @@ const Dashboard = () => {
 
     const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
     const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
-    const currentMonth = startOfMonth(today);
-    const prevMonth = startOfMonth(subMonths(today, 1));
-    const faturadoMes = boletosNoPeriodo.reduce((acc, b) => {
-      if (normalizeStatus(b.efi_status) !== "Pago" || !b.vencimento) return acc;
-      const d = parseISO(b.vencimento);
-      return d >= currentMonth ? acc + Number(b.valor || 0) : acc;
+    const faturadoPeriodo = boletosNoPeriodo.reduce((acc, b) => {
+      const status = normalizeStatus(b.efi_status);
+      if (!FATURAMENTO_STATUSES.has(status)) return acc;
+      return acc + Number(b.valor || 0);
     }, 0);
-    const faturadoMesAnterior = boletosNoPeriodo.reduce((acc, b) => {
-      if (normalizeStatus(b.efi_status) !== "Pago" || !b.vencimento) return acc;
+
+    const inicioComparativo = inicioPeriodo ? subMonths(inicioPeriodo, 12) : subMonths(today, 24);
+    const fimComparativo = subMonths(fimPeriodo || today, 12);
+    const faturadoComparativo = boletos.reduce((acc, b) => {
+      if (!b.vencimento) return acc;
+      const status = normalizeStatus(b.efi_status);
+      if (!FATURAMENTO_STATUSES.has(status)) return acc;
       const d = parseISO(b.vencimento);
-      return d >= prevMonth && d < currentMonth ? acc + Number(b.valor || 0) : acc;
+      if (d < inicioComparativo || d > fimComparativo) return acc;
+      return acc + Number(b.valor || 0);
     }, 0);
 
     const kpis = {
       inadimplencia: rows.length ? (empresasInadimplentesCount / rows.length) * 100 : 0,
       inadimplenciaVariacao: 0,
-      totalFaturadoMes: faturadoMes,
-      totalFaturadoVariacao: faturadoMesAnterior ? ((faturadoMes - faturadoMesAnterior) / faturadoMesAnterior) * 100 : 0,
+      totalFaturadoMes: faturadoPeriodo,
+      totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
       valorEmAtraso: boletosVencidos.reduce((acc, b) => acc + Number(b.valor || 0), 0),
       qtdBoletosVencidos: boletosVencidos.length,
       empresasCriticas: empresasMapeadas.filter((e) => e.diasInadimplente > 60).length,
