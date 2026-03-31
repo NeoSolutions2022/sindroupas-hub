@@ -65,6 +65,8 @@ type EmpresaLookupRow = {
   id: string;
   razao_social: string;
   cnpj?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
 };
@@ -151,6 +153,8 @@ const FINANCEIRO_QUERY = `
       id
       razao_social
       cnpj
+      email
+      whatsapp
       responsaveis {
         id
         nome
@@ -201,6 +205,12 @@ interface BoletoForm {
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
 }
+
+type ContactCandidate = {
+  nome?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
+};
 
 const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | "Cancelado" | "Inadimplente" => {
   const normalized = status?.trim().toLowerCase();
@@ -262,6 +272,39 @@ const DatePickerField = ({
       </PopoverContent>
     </Popover>
   );
+};
+
+const chooseBoletoContact = (
+  empresa: Pick<EmpresaLookupRow, "razao_social" | "email" | "whatsapp" | "responsaveis" | "colaboradores">,
+) => {
+  const candidates: ContactCandidate[] = [
+    ...(empresa.responsaveis ?? []),
+    ...(empresa.colaboradores ?? []),
+    {
+      nome: empresa.razao_social,
+      email: empresa.email,
+      whatsapp: empresa.whatsapp,
+    },
+  ];
+
+  const cleaned = candidates.map((candidate) => ({
+    nome: candidate.nome?.trim() || undefined,
+    email: candidate.email?.trim() || undefined,
+    whatsapp: candidate.whatsapp?.trim() || undefined,
+  }));
+
+  const withBoth = cleaned.find((candidate) => candidate.email && candidate.whatsapp);
+  if (withBoth) return withBoth;
+
+  const firstEmail = cleaned.find((candidate) => candidate.email)?.email;
+  const firstWhatsapp = cleaned.find((candidate) => candidate.whatsapp)?.whatsapp;
+  const firstNome = cleaned.find((candidate) => candidate.nome)?.nome ?? empresa.razao_social;
+
+  return {
+    nome: firstNome,
+    email: firstEmail,
+    whatsapp: firstWhatsapp,
+  };
 };
 
 const Financeiro = () => {
@@ -341,9 +384,7 @@ const Financeiro = () => {
   const mockEmpresas = useMemo(
     () =>
       data?.empresas.map((empresa) => {
-        const responsavel = empresa.responsaveis?.[0];
-        const colaborador = empresa.colaboradores?.[0];
-        const contato = responsavel ?? colaborador;
+        const contato = chooseBoletoContact(empresa);
         return {
           id: empresa.id,
           nome: empresa.razao_social,
