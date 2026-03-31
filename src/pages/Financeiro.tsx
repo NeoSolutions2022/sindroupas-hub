@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, CalendarIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -50,13 +50,16 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { createBoletoRequest, CreateBoletoPayload } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { cn } from "@/lib/utils";
 
 type EmpresaLookupRow = {
   id: string;
@@ -212,6 +215,55 @@ const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | 
 const formatCurrencyBRL = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
 
+const periodicidadeToNumero = (periodicidade?: string) => {
+  const normalized = periodicidade?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "mensal") return 1;
+  if (normalized === "trimestral") return 3;
+  if (normalized === "semestral") return 6;
+  if (normalized === "anual") return 12;
+  const numeric = Number(periodicidade);
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const DatePickerField = ({
+  value,
+  onChange,
+  placeholder = "Selecione uma data",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) => {
+  const parsedDate = value ? parseISO(value) : undefined;
+  const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className={cn(
+            "w-full justify-start text-left font-normal",
+            !value && "text-muted-foreground",
+          )}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {value ? format(selectedDate, "dd/MM/yyyy") : placeholder}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0 bg-popover" align="start">
+        <Calendar
+          mode="single"
+          selected={selectedDate}
+          onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
+          initialFocus
+        />
+      </PopoverContent>
+    </Popover>
+  );
+};
+
 const Financeiro = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
@@ -330,7 +382,7 @@ const Financeiro = () => {
       const descontoValor = parseCurrencyInput(payload.descontos);
       const baseValor = parseCurrencyInput(payload.baseCalculo);
       const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
-      const periodicidadeNumero = payload.periodicidade ? Number(payload.periodicidade) : undefined;
+      const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
       const parcelasNumero = payload.parcelas ? Number(payload.parcelas) : undefined;
 
       const boletoPayload: CreateBoletoPayload = {
@@ -1738,33 +1790,30 @@ const Financeiro = () => {
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label htmlFor="compInicial">Competência Inicial* (mm/aaaa)</Label>
-                            <Input
-                              id="compInicial"
-                              placeholder="10/2025"
+                            <Label>Competência Inicial*</Label>
+                            <DatePickerField
                               value={boletoForm.competenciaInicial}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, competenciaInicial: e.target.value })}
+                              placeholder="Selecione a competência inicial"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaInicial: value })}
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="compFinal">Competência Final* (mm/aaaa)</Label>
-                            <Input
-                              id="compFinal"
-                              placeholder="12/2025"
+                            <Label>Competência Final*</Label>
+                            <DatePickerField
                               value={boletoForm.competenciaFinal}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, competenciaFinal: e.target.value })}
+                              placeholder="Selecione a competência final"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaFinal: value })}
                             />
                           </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label htmlFor="dataVenc">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="dataVenc"
-                              placeholder="25/11/2025"
+                            <Label>Data Vencimento*</Label>
+                            <DatePickerField
                               value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
+                              placeholder="Selecione o vencimento"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
                             />
                           </div>
                           <div className="space-y-2">
@@ -1912,12 +1961,11 @@ const Financeiro = () => {
                             </Select>
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="vencimentoContrib">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="vencimentoContrib"
-                              placeholder="30/11/2025"
+                            <Label>Data Vencimento*</Label>
+                            <DatePickerField
                               value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
+                              placeholder="Selecione o vencimento"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
                             />
                           </div>
                         </div>
