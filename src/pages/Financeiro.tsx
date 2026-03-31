@@ -52,6 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
+import { createBoletoRequest, CreateBoletoPayload } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -307,32 +308,66 @@ const Financeiro = () => {
 
   const createBoletoMutation = useMutation({
     mutationFn: async (payload: BoletoForm) => {
-      await hasuraRequest({
-        query: `
-          mutation InsertBoleto($input: financeiro_boletos_insert_input!) {
-            insert_financeiro_boletos_one(object: $input) { id }
-          }
-        `,
-        variables: {
-          input: {
-            empresa_id: payload.empresaId || null,
-            tipo: payload.tipo === "contribuicao" ? "Contribuição Assistencial" : "Mensalidade (por Faixa)",
-            competencia_inicial: payload.competenciaInicial || null,
-            competencia_final: payload.competenciaFinal || null,
-            vencimento: payload.dataVencimento || null,
-            faixa_id: payload.faixaId || null,
-            valor: payload.valorCalculado || null,
-            efi_status: "Aguardando",
-            ano: payload.anoContribuicao || null,
-            periodicidade: payload.periodicidade || null,
-            parcelas: payload.parcelas ? Number(payload.parcelas) : null,
-            base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
-            percentual: payload.percentual ? Number(payload.percentual) : null,
-            descontos: payload.descontos ? Number(payload.descontos) : null,
+      const empresa = mockEmpresas.find((item) => item.id === payload.empresaId);
+      if (!empresa) {
+        throw new Error("Empresa não encontrada para emissão do boleto.");
+      }
+
+      const contato = empresa.contatoPrincipal;
+      const phoneNumber = (contato.whatsapp || "").replace(/\D/g, "");
+      if (!contato.email || !phoneNumber) {
+        throw new Error("A empresa selecionada precisa ter e-mail e WhatsApp para emissão do boleto.");
+      }
+      if (!empresa.cnpj) {
+        throw new Error("Empresa sem CNPJ. O endpoint de boletos exige cliente PJ com CNPJ ou PF com CPF.");
+      }
+
+      const valorBoleto = payload.tipo === "contribuicao" ? payload.valorCalculado : previaBoleto ?? 0;
+      if (valorBoleto <= 0) {
+        throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
+      }
+
+      const descontoValor = parseCurrencyInput(payload.descontos);
+      const baseValor = parseCurrencyInput(payload.baseCalculo);
+      const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
+      const periodicidadeNumero = payload.periodicidade ? Number(payload.periodicidade) : undefined;
+      const parcelasNumero = payload.parcelas ? Number(payload.parcelas) : undefined;
+
+      const boletoPayload: CreateBoletoPayload = {
+        empresa_id: payload.empresaId,
+        tipo: payload.tipo,
+        valor: Number(valorBoleto.toFixed(2)),
+        vencimento: payload.dataVencimento,
+        descricao:
+          payload.tipo === "contribuicao"
+            ? `Contribuição Assistencial ${payload.anoContribuicao}`
+            : "Mensalidade por faixa",
+        competencia_inicial: payload.competenciaInicial || undefined,
+        competencia_final: payload.competenciaFinal || undefined,
+        ano: payload.anoContribuicao || undefined,
+        periodicidade: Number.isFinite(periodicidadeNumero) ? periodicidadeNumero : undefined,
+        parcelas: Number.isFinite(parcelasNumero) ? parcelasNumero : undefined,
+        descontos: descontoValor || undefined,
+        percentual: percentualValor || undefined,
+        base: baseValor || undefined,
+        item_name:
+          payload.tipo === "contribuicao"
+            ? `Contribuição Assistencial ${payload.anoContribuicao}`
+            : "Mensalidade",
+        item_amount: 1,
+        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
+        message: payload.mensagemPersonalizada || undefined,
+        customer: {
+          email: contato.email,
+          phone_number: phoneNumber,
+          juridical_person: {
+            corporate_name: empresa.nome,
+            cnpj: empresa.cnpj.replace(/\D/g, ""),
           },
         },
-        token,
-      });
+      };
+
+      await createBoletoRequest(boletoPayload);
 
       if (payload.tipo === "contribuicao") {
         await hasuraRequest({
