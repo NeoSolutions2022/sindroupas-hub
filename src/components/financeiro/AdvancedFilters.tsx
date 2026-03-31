@@ -43,9 +43,9 @@ interface AdvancedFiltersProps {
 
 const statusOptions = [
   { value: "Pago", label: "Pago" },
-  { value: "Pendente", label: "Pendente" },
-  { value: "Atrasado", label: "Atrasado" },
-  { value: "Vencido", label: "Vencido" },
+  { value: "Aguardando", label: "Aguardando" },
+  { value: "Cancelado", label: "Cancelado" },
+  { value: "Inadimplente", label: "Inadimplente" },
 ];
 
 export function AdvancedFilters({

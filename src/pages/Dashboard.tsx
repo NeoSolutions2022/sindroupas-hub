@@ -1,4 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -10,17 +11,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search, MessageCircle, Phone } from "lucide-react";
 import { toast } from "sonner";
+import { differenceInDays, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
 
-// Types and data
-import { 
-  empresas, 
-  dashboardKPIs, 
-  carteiraResumo, 
-  empresasIncompletas, 
-  calendarEvents,
-  prioridadesOperacionais 
-} from "@/components/dashboard/data";
-import { formatCurrency, getWhatsappLink, getResponsavel } from "@/components/dashboard/utils";
+import { formatCurrency, getWhatsappLink } from "@/components/dashboard/utils";
 
 // Components
 import { NovasKPIs } from "@/components/dashboard/NovasKPIs";
@@ -30,9 +25,71 @@ import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
 import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
 import { ParticipacaoEventosCard } from "@/components/dashboard/ParticipacaoEventosCard";
 
+type DashboardEmpresaRow = {
+  id: string;
+  razao_social?: string | null;
+  nome_fantasia?: string | null;
+  whatsapp?: string | null;
+  data_fundacao?: string | null;
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+  colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+};
+
+type DashboardBoletoRow = {
+  id: string;
+  empresa_id?: string | null;
+  valor?: number | string | null;
+  vencimento?: string | null;
+  efi_status?: string | null;
+};
+
+const DASHBOARD_QUERY = `
+  query DashboardPage {
+    empresas(order_by: { razao_social: asc }) {
+      id
+      razao_social
+      nome_fantasia
+      whatsapp
+      data_fundacao
+      responsaveis {
+        id
+        nome
+        whatsapp
+      }
+      colaboradores {
+        id
+        nome
+        whatsapp
+      }
+    }
+    financeiro_boletos(order_by: { vencimento: desc }) {
+      id
+      empresa_id
+      valor
+      vencimento
+      efi_status
+    }
+  }
+`;
+
+const normalizeStatus = (status?: string | null) => {
+  const s = status?.trim().toLowerCase();
+  if (!s) return "Aguardando";
+  if (["pago", "paid", "liquidado", "recebido"].includes(s)) return "Pago";
+  if (["cancelado", "cancelled", "canceled"].includes(s)) return "Cancelado";
+  if (["inadimplente", "atrasado", "vencido", "overdue"].includes(s)) return "Inadimplente";
+  return "Aguardando";
+};
+
+const FATURAMENTO_STATUSES = new Set(["Pago", "Aguardando", "Cancelado", "Inadimplente"]);
+
 const Dashboard = () => {
+  const { token } = useAuth();
+  const hoje = new Date();
   // State
   const [searchQuery, setSearchQuery] = useState("");
+  const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
+  const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
@@ -47,6 +104,178 @@ const Dashboard = () => {
   const responsavelInputRef = useRef<HTMLInputElement>(null);
   const dataFundacaoInputRef = useRef<HTMLInputElement>(null);
   const aniversarioInputRef = useRef<HTMLInputElement>(null);
+
+  const { data } = useQuery({
+    queryKey: ["dashboard-page"],
+    queryFn: () =>
+      hasuraRequest<{ empresas: DashboardEmpresaRow[]; financeiro_boletos: DashboardBoletoRow[] }>({
+        query: DASHBOARD_QUERY,
+        token,
+      }),
+  });
+
+  const { empresas, prioridadesOperacionais, dashboardKPIs, carteiraResumo, empresasIncompletas, calendarEvents } = useMemo(() => {
+    const today = new Date();
+    const rows = data?.empresas ?? [];
+    const boletos = data?.financeiro_boletos ?? [];
+    const inicioPeriodo = periodoInicio ? parseISO(periodoInicio) : null;
+    const fimPeriodo = periodoFim ? parseISO(periodoFim) : null;
+    const boletosNoPeriodo = boletos.filter((b) => {
+      if (!b.vencimento) return false;
+      const vencimento = parseISO(b.vencimento);
+      if (inicioPeriodo && isBefore(vencimento, inicioPeriodo)) return false;
+      if (fimPeriodo && isAfter(vencimento, fimPeriodo)) return false;
+      return true;
+    });
+    const empresasMapeadas = rows.map((empresa, index) => {
+      const id = index + 1;
+      const nome = empresa.nome_fantasia?.trim() || empresa.razao_social?.trim() || "Empresa sem nome";
+      const boletosEmpresa = boletosNoPeriodo.filter((b) => b.empresa_id === empresa.id);
+      const emAberto = boletosEmpresa.filter((b) => normalizeStatus(b.efi_status) !== "Pago" && normalizeStatus(b.efi_status) !== "Cancelado");
+      const valorEmAberto = emAberto.reduce((acc, b) => acc + (b.valor ? Number(b.valor) : 0), 0);
+      const vencidos = emAberto
+        .filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today))
+        .sort((a, b) => parseISO(a.vencimento as string).getTime() - parseISO(b.vencimento as string).getTime());
+      const diasInadimplente = vencidos.length ? Math.max(0, differenceInDays(today, parseISO(vencidos[0].vencimento as string))) : 0;
+      const proximoBoleto = emAberto
+        .filter((b) => b.vencimento)
+        .sort((a, b) => parseISO(a.vencimento as string).getTime() - parseISO(b.vencimento as string).getTime())[0];
+      const responsavel = empresa.responsaveis?.[0];
+      return {
+        id,
+        idOriginal: empresa.id,
+        nome,
+        situacao: diasInadimplente > 0 ? "Inadimplente" : "Regular",
+        valorEmAberto,
+        diasInadimplente,
+        historico: [`${emAberto.length} boleto(s) em aberto`],
+        whatsapp: empresa.whatsapp || responsavel?.whatsapp || "",
+        responsavelNome: responsavel?.nome || "",
+        dataFundacao: empresa.data_fundacao || "",
+        proximoBoleto: proximoBoleto
+          ? {
+              data: proximoBoleto.vencimento || "",
+              status: normalizeStatus(proximoBoleto.efi_status),
+              descricao: `Boleto ${format(parseISO(proximoBoleto.vencimento || new Date().toISOString()), "MM/yyyy")}`,
+            }
+          : undefined,
+      };
+    });
+
+    const prioridadeBoletos = empresasMapeadas
+      .filter((e) => e.diasInadimplente > 0 || e.valorEmAberto > 0)
+      .sort((a, b) => b.diasInadimplente - a.diasInadimplente)
+      .slice(0, 4)
+      .map((e) => ({
+        id: e.id,
+        nome: e.nome,
+        tipo: "boleto" as const,
+        contexto: `Atraso ${e.diasInadimplente}d • ${formatCurrency(e.valorEmAberto)} em aberto`,
+        chips: [
+          { label: e.diasInadimplente > 60 ? "Crítico" : "Atenção", tipo: e.diasInadimplente > 60 ? "critico" as const : "atencao" as const },
+        ],
+      }));
+
+    const prioridadeAniversarios = empresasMapeadas
+      .filter((e) => Boolean(e.dataFundacao))
+      .map((e) => {
+        const base = parseISO(e.dataFundacao);
+        const prox = new Date(today.getFullYear(), base.getMonth(), base.getDate());
+        if (isBefore(prox, today)) prox.setFullYear(today.getFullYear() + 1);
+        return { empresa: e, dias: differenceInDays(prox, today) };
+      })
+      .filter((item) => item.dias >= 0 && item.dias <= 7)
+      .slice(0, 2)
+      .map((item) => ({
+        id: item.empresa.id,
+        nome: item.empresa.nome,
+        tipo: "aniversario" as const,
+        contexto: `Aniversário de fundação em ${item.dias} dia(s)`,
+        chips: [{ label: "Aniversário", tipo: "aniversario" as const }],
+      }));
+
+    const prioridadeSemFundacao = empresasMapeadas
+      .filter((e) => !e.dataFundacao)
+      .slice(0, 2)
+      .map((e) => ({
+        id: e.id,
+        nome: e.nome,
+        tipo: "aniversario" as const,
+        contexto: "Data de fundação não cadastrada",
+        chips: [{ label: "Cadastro incompleto", tipo: "atencao" as const }],
+      }));
+
+    const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
+
+    const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
+    const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
+    const faturadoPeriodo = boletosNoPeriodo.reduce((acc, b) => {
+      const status = normalizeStatus(b.efi_status);
+      if (!FATURAMENTO_STATUSES.has(status)) return acc;
+      return acc + Number(b.valor || 0);
+    }, 0);
+
+    const inicioComparativo = inicioPeriodo ? subMonths(inicioPeriodo, 12) : subMonths(today, 24);
+    const fimComparativo = subMonths(fimPeriodo || today, 12);
+    const faturadoComparativo = boletos.reduce((acc, b) => {
+      if (!b.vencimento) return acc;
+      const status = normalizeStatus(b.efi_status);
+      if (!FATURAMENTO_STATUSES.has(status)) return acc;
+      const d = parseISO(b.vencimento);
+      if (d < inicioComparativo || d > fimComparativo) return acc;
+      return acc + Number(b.valor || 0);
+    }, 0);
+
+    const kpis = {
+      inadimplencia: rows.length ? (empresasInadimplentesCount / rows.length) * 100 : 0,
+      inadimplenciaVariacao: 0,
+      totalFaturadoMes: faturadoPeriodo,
+      totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
+      valorEmAtraso: boletosVencidos.reduce((acc, b) => acc + Number(b.valor || 0), 0),
+      qtdBoletosVencidos: boletosVencidos.length,
+      empresasCriticas: empresasMapeadas.filter((e) => e.diasInadimplente > 60).length,
+      proximosVencimentos15d: boletosNoPeriodo.filter((b) => {
+        if (!b.vencimento || normalizeStatus(b.efi_status) === "Pago") return false;
+        const d = parseISO(b.vencimento);
+        return isAfter(d, today) && differenceInDays(d, today) <= 15;
+      }).length,
+    };
+
+    const incompletas: EmpresaIncompleta[] = empresasMapeadas
+      .map((e) => {
+        const missingFields: string[] = [];
+        if (!e.whatsapp) missingFields.push("whatsapp");
+        if (!e.responsavelNome) missingFields.push("responsavel");
+        if (!e.dataFundacao) missingFields.push("dataFundacao");
+        return { id: e.id, nome: e.nome, missingFields };
+      })
+      .filter((e) => e.missingFields.length > 0);
+
+    const events = [
+      ...boletosNoPeriodo
+        .filter((b) => b.vencimento)
+        .slice(0, 20)
+        .map((b) => ({
+          date: b.vencimento as string,
+          type: isBefore(parseISO(b.vencimento as string), today) ? ("atrasado" as const) : ("vencimento" as const),
+          label: isBefore(parseISO(b.vencimento as string), today) ? "Atrasado" : "Vencimento",
+          detail: `Boleto ${formatCurrency(Number(b.valor || 0))}`,
+        })),
+    ];
+
+    return {
+      empresas: empresasMapeadas,
+      prioridadesOperacionais: prioridades,
+      dashboardKPIs: kpis,
+      carteiraResumo: {
+        boletosEmAtraso: boletosVencidos.length,
+        empresasInadimplentes: empresasInadimplentesCount,
+        empresasEmDia: Math.max(0, rows.length - empresasInadimplentesCount),
+      },
+      empresasIncompletas: incompletas,
+      calendarEvents: events,
+    };
+  }, [data, periodoFim, periodoInicio]);
 
   // Auto-focus on the missing field when modal opens
   useEffect(() => {
@@ -72,7 +301,7 @@ const Dashboard = () => {
         p.nome.toLowerCase().includes(query) ||
         p.contexto.toLowerCase().includes(query)
     );
-  }, [searchQuery]);
+  }, [prioridadesOperacionais, searchQuery]);
 
   // Find empresa for details modal
   const selectedEmpresa = useMemo(() => {
@@ -125,16 +354,45 @@ const Dashboard = () => {
                     Acompanhamento diário de adimplência e relacionamento
                   </p>
                 </div>
-                <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                  <Input
-                    type="search"
-                    placeholder="Buscar empresa..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 h-9 bg-card border-border text-sm"
-                    aria-label="Buscar empresa ou responsável"
-                  />
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+                  <div className="relative w-full sm:w-64">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <Input
+                      type="search"
+                      placeholder="Buscar empresa..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-9 h-9 bg-card border-border text-sm"
+                      aria-label="Buscar empresa ou responsável"
+                    />
+                  </div>
+                  <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+                    <Input
+                      type="date"
+                      value={periodoInicio}
+                      onChange={(e) => setPeriodoInicio(e.target.value)}
+                      className="h-8 w-full sm:w-auto"
+                      aria-label="Data inicial do período do dashboard"
+                    />
+                    <Input
+                      type="date"
+                      value={periodoFim}
+                      onChange={(e) => setPeriodoFim(e.target.value)}
+                      className="h-8 w-full sm:w-auto"
+                      aria-label="Data final do período do dashboard"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 px-2 text-xs"
+                      onClick={() => {
+                        setPeriodoInicio("");
+                        setPeriodoFim("");
+                      }}
+                    >
+                      Limpar período
+                    </Button>
+                  </div>
                 </div>
               </header>
 
