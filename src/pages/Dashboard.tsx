@@ -9,9 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Search, MessageCircle, Phone } from "lucide-react";
+import { Search, MessageCircle, Phone, BellRing } from "lucide-react";
 import { toast } from "sonner";
-import { differenceInDays, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
+import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -91,6 +91,7 @@ const Dashboard = () => {
   const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [aniversarioNoticeOpen, setAniversarioNoticeOpen] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
   const [formData, setFormData] = useState({
@@ -114,7 +115,15 @@ const Dashboard = () => {
       }),
   });
 
-  const { empresas, prioridadesOperacionais, dashboardKPIs, carteiraResumo, empresasIncompletas, calendarEvents } = useMemo(() => {
+  const {
+    empresas,
+    prioridadesOperacionais,
+    dashboardKPIs,
+    carteiraResumo,
+    empresasIncompletas,
+    calendarEvents,
+    proximosAniversariosEmpresas,
+  } = useMemo(() => {
     const today = new Date();
     const rows = data?.empresas ?? [];
     const boletos = data?.financeiro_boletos ?? [];
@@ -251,6 +260,28 @@ const Dashboard = () => {
       })
       .filter((e) => e.missingFields.length > 0);
 
+    const aniversariosEmpresas = empresasMapeadas
+      .filter((empresa) => Boolean(empresa.dataFundacao))
+      .map((empresa) => {
+        const dataBase = parseISO(empresa.dataFundacao);
+        const proximoAniversario = new Date(today.getFullYear(), dataBase.getMonth(), dataBase.getDate());
+        if (isBefore(proximoAniversario, today)) proximoAniversario.setFullYear(today.getFullYear() + 1);
+        const anos = proximoAniversario.getFullYear() - dataBase.getFullYear();
+        const mesesParaEvento = differenceInCalendarMonths(proximoAniversario, today);
+        return {
+          id: empresa.id,
+          nome: empresa.nome,
+          data: proximoAniversario,
+          anos,
+          mesesParaEvento,
+          dataFundacaoOriginal: empresa.dataFundacao,
+        };
+      })
+      .sort((a, b) => a.data.getTime() - b.data.getTime());
+
+    const limiteTresMeses = endOfMonth(addMonths(today, 2));
+    const proximosTresMeses = aniversariosEmpresas.filter((item) => !isAfter(item.data, limiteTresMeses));
+
     const events = [
       ...boletosNoPeriodo
         .filter((b) => b.vencimento)
@@ -261,6 +292,12 @@ const Dashboard = () => {
           label: isBefore(parseISO(b.vencimento as string), today) ? "Atrasado" : "Vencimento",
           detail: `Boleto ${formatCurrency(Number(b.valor || 0))}`,
         })),
+      ...proximosTresMeses.map((item) => ({
+        date: format(item.data, "yyyy-MM-dd"),
+        type: "aniversario" as const,
+        label: "Aniversário de fundação",
+        detail: `${item.nome} • ${item.anos} ano(s)`,
+      })),
     ];
 
     return {
@@ -274,8 +311,18 @@ const Dashboard = () => {
       },
       empresasIncompletas: incompletas,
       calendarEvents: events,
+      proximosAniversariosEmpresas: proximosTresMeses,
     };
   }, [data, periodoFim, periodoInicio]);
+
+  const aniversarioNotificacao = useMemo(() => {
+    const proximo = proximosAniversariosEmpresas[0];
+    if (!proximo) return null;
+    if (proximo.mesesParaEvento <= 1) {
+      return `Ei, o dono da empresa ${proximo.nome} faz aniversário no próximo mês!`;
+    }
+    return `Ei, a empresa ${proximo.nome} vai fazer ${proximo.anos} anos daqui a dois meses!`;
+  }, [proximosAniversariosEmpresas]);
 
   // Auto-focus on the missing field when modal opens
   useEffect(() => {
@@ -410,6 +457,23 @@ const Dashboard = () => {
 
             {/* KPI extra: Participação em eventos */}
             <ParticipacaoEventosCard month={new Date().getMonth()} year={new Date().getFullYear()} />
+
+            {aniversarioNotificacao && (
+              <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <BellRing className="h-5 w-5 text-accent mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-foreground">{aniversarioNotificacao}</p>
+                      <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setAniversarioNoticeOpen(true)}>
+                    Ver detalhes
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">
@@ -566,6 +630,36 @@ const Dashboard = () => {
                     </DialogFooter>
                   </>
                 )}
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={aniversarioNoticeOpen} onOpenChange={setAniversarioNoticeOpen}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Próximos aniversários (3 meses)</DialogTitle>
+                  <DialogDescription>
+                    Lista de aniversários de fundação para acompanhamento do relacionamento.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                  {proximosAniversariosEmpresas.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Nenhum aniversário de empresa encontrado para os próximos 3 meses.</p>
+                  ) : (
+                    proximosAniversariosEmpresas.map((item) => (
+                      <div key={`aniversario-${item.id}-${format(item.data, "yyyy-MM-dd")}`} className="rounded-md border p-3">
+                        <p className="text-sm font-medium">{item.nome}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {format(item.data, "dd/MM/yyyy")} • {item.anos} ano(s)
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setAniversarioNoticeOpen(false)}>
+                    Fechar
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 

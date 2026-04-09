@@ -59,6 +59,7 @@ Crie um arquivo `.env` na raiz do projeto com:
 VITE_AUTH_URL=http://localhost:3001
 VITE_HASURA_URL=http://localhost:8080/v1/graphql
 VITE_HASURA_ADMIN_SECRET=seu_admin_secret
+VITE_BOLETOS_API_URL=http://localhost:3333
 ```
 
 > Após alterar `.env`, reinicie o `npm run dev` para o Vite recarregar as variáveis.

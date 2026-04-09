@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, CalendarIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -50,17 +50,23 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
+import { createBoletoRequest, CreateBoletoPayload } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { cn } from "@/lib/utils";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
   cnpj?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
 };
@@ -147,6 +153,8 @@ const FINANCEIRO_QUERY = `
       id
       razao_social
       cnpj
+      email
+      whatsapp
       responsaveis {
         id
         nome
@@ -198,6 +206,12 @@ interface BoletoForm {
   pesquisaContribuicaoFeita: boolean;
 }
 
+type ContactCandidate = {
+  nome?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
+};
+
 const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | "Cancelado" | "Inadimplente" => {
   const normalized = status?.trim().toLowerCase();
   if (!normalized) return "Aguardando";
@@ -210,6 +224,88 @@ const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | 
 
 const formatCurrencyBRL = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+
+const periodicidadeToNumero = (periodicidade?: string) => {
+  const normalized = periodicidade?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "mensal") return 1;
+  if (normalized === "trimestral") return 3;
+  if (normalized === "semestral") return 6;
+  if (normalized === "anual") return 12;
+  const numeric = Number(periodicidade);
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const DatePickerField = ({
+  value,
+  onChange,
+  placeholder = "Selecione uma data",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) => {
+  const parsedDate = value ? parseISO(value) : undefined;
+  const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className={cn(
+            "w-full justify-start text-left font-normal",
+            !value && "text-muted-foreground",
+          )}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {value ? format(selectedDate, "dd/MM/yyyy") : placeholder}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0 bg-popover" align="start">
+        <Calendar
+          mode="single"
+          selected={selectedDate}
+          onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
+          initialFocus
+        />
+      </PopoverContent>
+    </Popover>
+  );
+};
+
+const chooseBoletoContact = (
+  empresa: Pick<EmpresaLookupRow, "razao_social" | "email" | "whatsapp" | "responsaveis" | "colaboradores">,
+) => {
+  const candidates: ContactCandidate[] = [
+    ...(empresa.responsaveis ?? []),
+    ...(empresa.colaboradores ?? []),
+    {
+      nome: empresa.razao_social,
+      email: empresa.email,
+      whatsapp: empresa.whatsapp,
+    },
+  ];
+
+  const cleaned = candidates.map((candidate) => ({
+    nome: candidate.nome?.trim() || undefined,
+    email: candidate.email?.trim() || undefined,
+    whatsapp: candidate.whatsapp?.trim() || undefined,
+  }));
+
+  const withBoth = cleaned.find((candidate) => candidate.email && candidate.whatsapp);
+  if (withBoth) return withBoth;
+
+  const firstEmail = cleaned.find((candidate) => candidate.email)?.email;
+  const firstWhatsapp = cleaned.find((candidate) => candidate.whatsapp)?.whatsapp;
+  const firstNome = cleaned.find((candidate) => candidate.nome)?.nome ?? empresa.razao_social;
+
+  return {
+    nome: firstNome,
+    email: firstEmail,
+    whatsapp: firstWhatsapp,
+  };
+};
 
 const Financeiro = () => {
   const navigate = useNavigate();
@@ -288,9 +384,7 @@ const Financeiro = () => {
   const mockEmpresas = useMemo(
     () =>
       data?.empresas.map((empresa) => {
-        const responsavel = empresa.responsaveis?.[0];
-        const colaborador = empresa.colaboradores?.[0];
-        const contato = responsavel ?? colaborador;
+        const contato = chooseBoletoContact(empresa);
         return {
           id: empresa.id,
           nome: empresa.razao_social,
@@ -307,32 +401,66 @@ const Financeiro = () => {
 
   const createBoletoMutation = useMutation({
     mutationFn: async (payload: BoletoForm) => {
-      await hasuraRequest({
-        query: `
-          mutation InsertBoleto($input: financeiro_boletos_insert_input!) {
-            insert_financeiro_boletos_one(object: $input) { id }
-          }
-        `,
-        variables: {
-          input: {
-            empresa_id: payload.empresaId || null,
-            tipo: payload.tipo === "contribuicao" ? "Contribuição Assistencial" : "Mensalidade (por Faixa)",
-            competencia_inicial: payload.competenciaInicial || null,
-            competencia_final: payload.competenciaFinal || null,
-            vencimento: payload.dataVencimento || null,
-            faixa_id: payload.faixaId || null,
-            valor: payload.valorCalculado || null,
-            efi_status: "Aguardando",
-            ano: payload.anoContribuicao || null,
-            periodicidade: payload.periodicidade || null,
-            parcelas: payload.parcelas ? Number(payload.parcelas) : null,
-            base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
-            percentual: payload.percentual ? Number(payload.percentual) : null,
-            descontos: payload.descontos ? Number(payload.descontos) : null,
+      const empresa = mockEmpresas.find((item) => item.id === payload.empresaId);
+      if (!empresa) {
+        throw new Error("Empresa não encontrada para emissão do boleto.");
+      }
+
+      const contato = empresa.contatoPrincipal;
+      const phoneNumber = (contato.whatsapp || "").replace(/\D/g, "");
+      if (!contato.email || !phoneNumber) {
+        throw new Error("A empresa selecionada precisa ter e-mail e WhatsApp para emissão do boleto.");
+      }
+      if (!empresa.cnpj) {
+        throw new Error("Empresa sem CNPJ. O endpoint de boletos exige cliente PJ com CNPJ ou PF com CPF.");
+      }
+
+      const valorBoleto = payload.tipo === "contribuicao" ? payload.valorCalculado : previaBoleto ?? 0;
+      if (valorBoleto <= 0) {
+        throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
+      }
+
+      const descontoValor = parseCurrencyInput(payload.descontos);
+      const baseValor = parseCurrencyInput(payload.baseCalculo);
+      const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
+      const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
+      const parcelasNumero = payload.parcelas ? Number(payload.parcelas) : undefined;
+
+      const boletoPayload: CreateBoletoPayload = {
+        empresa_id: payload.empresaId,
+        tipo: payload.tipo,
+        valor: Number(valorBoleto.toFixed(2)),
+        vencimento: payload.dataVencimento,
+        descricao:
+          payload.tipo === "contribuicao"
+            ? `Contribuição Assistencial ${payload.anoContribuicao}`
+            : "Mensalidade por faixa",
+        competencia_inicial: payload.competenciaInicial || undefined,
+        competencia_final: payload.competenciaFinal || undefined,
+        ano: payload.anoContribuicao || undefined,
+        periodicidade: Number.isFinite(periodicidadeNumero) ? periodicidadeNumero : undefined,
+        parcelas: Number.isFinite(parcelasNumero) ? parcelasNumero : undefined,
+        descontos: descontoValor || undefined,
+        percentual: percentualValor || undefined,
+        base: baseValor || undefined,
+        item_name:
+          payload.tipo === "contribuicao"
+            ? `Contribuição Assistencial ${payload.anoContribuicao}`
+            : "Mensalidade",
+        item_amount: 1,
+        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
+        message: payload.mensagemPersonalizada || undefined,
+        customer: {
+          email: contato.email,
+          phone_number: phoneNumber,
+          juridical_person: {
+            corporate_name: empresa.nome,
+            cnpj: empresa.cnpj.replace(/\D/g, ""),
           },
         },
-        token,
-      });
+      };
+
+      await createBoletoRequest(boletoPayload);
 
       if (payload.tipo === "contribuicao") {
         await hasuraRequest({
@@ -1703,33 +1831,30 @@ const Financeiro = () => {
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label htmlFor="compInicial">Competência Inicial* (mm/aaaa)</Label>
-                            <Input
-                              id="compInicial"
-                              placeholder="10/2025"
+                            <Label>Competência Inicial*</Label>
+                            <DatePickerField
                               value={boletoForm.competenciaInicial}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, competenciaInicial: e.target.value })}
+                              placeholder="Selecione a competência inicial"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaInicial: value })}
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="compFinal">Competência Final* (mm/aaaa)</Label>
-                            <Input
-                              id="compFinal"
-                              placeholder="12/2025"
+                            <Label>Competência Final*</Label>
+                            <DatePickerField
                               value={boletoForm.competenciaFinal}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, competenciaFinal: e.target.value })}
+                              placeholder="Selecione a competência final"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaFinal: value })}
                             />
                           </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label htmlFor="dataVenc">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="dataVenc"
-                              placeholder="25/11/2025"
+                            <Label>Data Vencimento*</Label>
+                            <DatePickerField
                               value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
+                              placeholder="Selecione o vencimento"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
                             />
                           </div>
                           <div className="space-y-2">
@@ -1877,12 +2002,11 @@ const Financeiro = () => {
                             </Select>
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="vencimentoContrib">Data Vencimento* (dd/mm/aaaa)</Label>
-                            <Input
-                              id="vencimentoContrib"
-                              placeholder="30/11/2025"
+                            <Label>Data Vencimento*</Label>
+                            <DatePickerField
                               value={boletoForm.dataVencimento}
-                              onChange={(e) => setBoletoForm({ ...boletoForm, dataVencimento: e.target.value })}
+                              placeholder="Selecione o vencimento"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
                             />
                           </div>
                         </div>
