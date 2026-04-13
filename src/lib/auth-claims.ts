@@ -1,10 +1,10 @@
 import type { AuthUser } from "@/lib/api/auth";
 
-export type AuthProfile = {
-  isAdmin: boolean;
-  role: string;
+export type AuthSessionClaims = {
+  role: "admin" | "user" | null;
   profileCode: string | null;
   userId: string | null;
+  isAdmin: boolean;
 };
 
 type JwtPayload = Record<string, unknown>;
@@ -41,16 +41,18 @@ const getHasuraClaims = (payload: JwtPayload | null): JwtPayload => {
   return payload;
 };
 
-export const extractAuthProfile = (token?: string | null, fallbackUser?: AuthUser | null): AuthProfile => {
+export const extractAuthSessionClaims = (
+  token?: string | null,
+  fallbackUser?: AuthUser | null,
+): AuthSessionClaims => {
   const payload = token ? decodeJwtPayload(token) : null;
   const hasuraClaims = getHasuraClaims(payload);
 
-  const role =
+  const rawRole =
     toStringOrNull(payload?.role) ??
-    toStringOrNull(payload?.profile_role) ??
     toStringOrNull(hasuraClaims["x-hasura-default-role"]) ??
     toStringOrNull(fallbackUser?.role) ??
-    "user";
+    null;
 
   const userId =
     toStringOrNull(payload?.user_id) ??
@@ -62,12 +64,16 @@ export const extractAuthProfile = (token?: string | null, fallbackUser?: AuthUse
     toStringOrNull(hasuraClaims["x-hasura-profile-code"]) ??
     null;
 
-  const normalizedRole = role.toLowerCase();
+  const normalizedRole = rawRole?.toLowerCase();
+  const role: "admin" | "user" | null =
+    normalizedRole === "admin" ? "admin" : normalizedRole === "user" ? "user" : null;
 
   return {
     role,
-    isAdmin: normalizedRole === "admin" || normalizedRole === "superadmin",
+    isAdmin: role === "admin",
     profileCode,
     userId,
   };
 };
+
+export const extractAuthProfile = extractAuthSessionClaims;

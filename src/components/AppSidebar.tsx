@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Handshake, DollarSign, MessageSquare, ClipboardList } from "lucide-react";
+import { LayoutDashboard, Users, Handshake, DollarSign, MessageSquare, ClipboardList, UserCog } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -12,8 +12,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import logo from "@/assets/logo.jpeg";
+import { useAuthProfile } from "@/hooks/use-auth-profile";
 
-const items = [
+const baseItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Empresas", url: "/dashboard/empresas", icon: Users },
   { title: "Relacionamentos", url: "/dashboard/relacionamentos", icon: Handshake },
@@ -25,6 +26,12 @@ const items = [
 export function AppSidebar() {
   const { open } = useSidebar();
   const location = useLocation();
+  const { isAdmin } = useAuthProfile();
+
+  const items = [
+    ...baseItems,
+    ...(isAdmin ? [{ title: "Usuários", url: "/dashboard/admin/usuarios", icon: UserCog }] : []),
+  ];
 
   const isActive = (url: string) => {
     if (url === "/dashboard") {
