@@ -40,12 +40,14 @@ const typeBadgeColor: Record<ActivityType, string> = {
 
 const ATIVIDADES_QUERY = `
   query AtividadesPage($where: atividades_bool_exp!, $profileWhere: app_profiles_bool_exp!, $usersWhere: app_users_bool_exp!) {
-    atividades(where: $where, order_by: { date: desc }) {
+    atividades(where: $where, order_by: [{ year: desc }, { month: desc }, { occurred_on: desc }]) {
       id
-      date
-      type
+      occurred_on
+      year
+      month
+      tipo
       quantity
-      note
+      observation
       owner_user_id
       owner_user {
         id
@@ -89,10 +91,12 @@ const DELETE_ATIVIDADE = `
 
 type ActivityRow = {
   id: string;
-  date: string;
-  type: ActivityType;
+  occurred_on?: string | null;
+  year?: number | null;
+  month?: number | null;
+  tipo: ActivityType;
   quantity: number;
-  note?: string | null;
+  observation?: string | null;
   owner_user_id: string;
   owner_user?: {
     id: string;
@@ -133,22 +137,16 @@ const Atividades = () => {
   const [formQty, setFormQty] = useState("");
   const [formNote, setFormNote] = useState("");
 
-  const monthStart = `${filterYear}-${String(filterMonth + 1).padStart(2, "0")}-01`;
-  const nextMonthStart =
-    filterMonth === 11
-      ? `${filterYear + 1}-01-01`
-      : `${filterYear}-${String(filterMonth + 2).padStart(2, "0")}-01`;
-
   const { data, isLoading } = useQuery({
-    queryKey: ["atividades", { monthStart, nextMonthStart, filterType, selectedProfile, userId, isAdmin }],
+    queryKey: ["atividades", { filterMonth, filterYear, filterType, selectedProfile, userId, isAdmin }],
     queryFn: async () => {
       const whereAnd: Record<string, unknown>[] = [
-        { date: { _gte: monthStart } },
-        { date: { _lt: nextMonthStart } },
+        { year: { _eq: filterYear } },
+        { month: { _eq: filterMonth + 1 } },
       ];
 
       if (filterType !== "ALL") {
-        whereAnd.push({ type: { _eq: filterType } });
+        whereAnd.push({ tipo: { _eq: filterType } });
       }
 
       if (isAdmin) {
@@ -226,10 +224,10 @@ const Atividades = () => {
     }
 
     setEditing(a);
-    setFormType(a.type);
-    setFormDate(a.date);
+    setFormType(a.tipo);
+    setFormDate(a.occurred_on ?? new Date().toISOString().slice(0, 10));
     setFormQty(String(a.quantity));
-    setFormNote(a.note ?? "");
+    setFormNote(a.observation ?? "");
     setModalOpen(true);
   };
 
@@ -270,17 +268,19 @@ const Atividades = () => {
 
       await updateMutation.mutateAsync({
         id: editing.id,
-        set: { type: formType, date: formDate, quantity: qty, note: formNote },
+        set: { tipo: formType, occurred_on: formDate, year: filterYear, month: filterMonth + 1, quantity: qty, observation: formNote },
       });
       toast.success("Atividade atualizada!");
     } else {
       await insertMutation.mutateAsync({
         object: {
           owner_user_id: ownerUserId,
-          type: formType,
-          date: formDate,
+          tipo: formType,
+          occurred_on: formDate,
+          year: filterYear,
+          month: filterMonth + 1,
           quantity: qty,
-          note: formNote,
+          observation: formNote,
         },
       });
       toast.success("Atividade registrada!");
@@ -305,7 +305,8 @@ const Atividades = () => {
     setDeleteId(null);
   };
 
-  const formatDate = (d: string) => {
+  const formatDate = (d?: string | null) => {
+    if (!d) return "—";
     const [y, m, day] = d.split("-");
     return `${day}/${m}/${y}`;
   };
@@ -408,16 +409,16 @@ const Atividades = () => {
                     <Card key={a.id} className="border-border">
                       <CardContent className="p-4 space-y-2">
                         <div className="flex items-center justify-between">
-                          <Badge variant="outline" className={typeBadgeColor[a.type]}>
-                            {activityTypeLabels[a.type]}
+                          <Badge variant="outline" className={typeBadgeColor[a.tipo]}>
+                            {activityTypeLabels[a.tipo]}
                           </Badge>
-                          <span className="text-xs text-muted-foreground">{formatDate(a.date)}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(a.occurred_on)}</span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-lg font-bold">{a.quantity}</span>
                           <span className="text-xs text-muted-foreground">{getDirectorName(a)}</span>
                         </div>
-                        {a.note && <p className="text-xs text-muted-foreground">{a.note}</p>}
+                        {a.observation && <p className="text-xs text-muted-foreground">{a.observation}</p>}
                         <div className="flex gap-2 pt-1">
                           <Button variant="outline" size="sm" className="flex-1" onClick={() => openEdit(a)}>
                             <Pencil className="h-3 w-3 mr-1" /> Editar
@@ -446,15 +447,15 @@ const Atividades = () => {
                     <TableBody>
                       {activities.map((a) => (
                         <TableRow key={a.id}>
-                          <TableCell className="whitespace-nowrap">{formatDate(a.date)}</TableCell>
+                          <TableCell className="whitespace-nowrap">{formatDate(a.occurred_on)}</TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={typeBadgeColor[a.type]}>
-                              {activityTypeLabels[a.type]}
+                            <Badge variant="outline" className={typeBadgeColor[a.tipo]}>
+                              {activityTypeLabels[a.tipo]}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right font-medium tabular-nums">{a.quantity}</TableCell>
                           <TableCell className="text-muted-foreground">{getDirectorName(a)}</TableCell>
-                          <TableCell className="max-w-[200px] truncate text-muted-foreground">{a.note || "—"}</TableCell>
+                          <TableCell className="max-w-[200px] truncate text-muted-foreground">{a.observation || "—"}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
                               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(a)}>

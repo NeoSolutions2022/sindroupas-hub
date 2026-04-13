@@ -28,10 +28,9 @@ export function AppSidebar() {
   const location = useLocation();
   const { isAdmin } = useAuthProfile();
 
-  const items = [
-    ...baseItems,
-    ...(isAdmin ? [{ title: "Usuários", url: "/dashboard/admin/usuarios", icon: UserCog }] : []),
-  ];
+  const items = isAdmin
+    ? [...baseItems, { title: "Usuários", url: "/dashboard/admin/usuarios", icon: UserCog }]
+    : baseItems.filter((item) => item.url === "/dashboard/atividades");
 
   const isActive = (url: string) => {
     if (url === "/dashboard") {
