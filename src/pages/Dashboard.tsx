@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Search, MessageCircle, Phone, BellRing } from "lucide-react";
 import { toast } from "sonner";
 import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
@@ -23,12 +25,14 @@ import { PrioridadesOperacional, PrioridadeOperacional } from "@/components/dash
 import { CalendarioMensal } from "@/components/dashboard/CalendarioMensal";
 import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
 import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
-import { ParticipacaoEventosCard } from "@/components/dashboard/ParticipacaoEventosCard";
 
 type DashboardEmpresaRow = {
   id: string;
   razao_social?: string | null;
   nome_fantasia?: string | null;
+  cnpj?: string | null;
+  endereco?: string | null;
+  associada?: boolean | null;
   whatsapp?: string | null;
   data_fundacao?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
@@ -49,6 +53,9 @@ const DASHBOARD_QUERY = `
       id
       razao_social
       nome_fantasia
+      cnpj
+      endereco
+      associada
       whatsapp
       data_fundacao
       responsaveis {
@@ -82,6 +89,24 @@ const normalizeStatus = (status?: string | null) => {
 };
 
 const FATURAMENTO_STATUSES = new Set(["Pago", "Aguardando", "Cancelado", "Inadimplente"]);
+const MATURIDADE_BUCKETS = [
+  { key: "00 a 05 anos", min: 0, max: 5 },
+  { key: "06 a 10 anos", min: 6, max: 10 },
+  { key: "11 a 20 anos", min: 11, max: 20 },
+  { key: "21 a 99 anos", min: 21, max: 99 },
+];
+
+const normalizeMunicipio = (endereco?: string | null) => {
+  const trimmed = endereco?.trim();
+  if (!trimmed) return null;
+  const parts = trimmed
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const raw = parts[parts.length - 1];
+  if (!raw) return null;
+  return raw.toUpperCase();
+};
 
 const Dashboard = () => {
   const { token } = useAuth();
@@ -123,6 +148,7 @@ const Dashboard = () => {
     empresasIncompletas,
     calendarEvents,
     proximosAniversariosEmpresas,
+    dashboardInsights,
   } = useMemo(() => {
     const today = new Date();
     const rows = data?.empresas ?? [];
@@ -300,6 +326,32 @@ const Dashboard = () => {
       })),
     ];
 
+    const quantidadeAssociados = rows.filter((empresa) => empresa.associada === true).length;
+
+    const maturidadeDistribuicao = MATURIDADE_BUCKETS.map((bucket) => {
+      const quantidade = rows.filter((empresa) => {
+        if (!empresa.data_fundacao) return false;
+        const fundacao = parseISO(empresa.data_fundacao);
+        if (Number.isNaN(fundacao.getTime())) return false;
+        const anos = Math.max(0, differenceInDays(today, fundacao) / 365.25);
+        return anos >= bucket.min && anos <= bucket.max;
+      }).length;
+
+      return { label: bucket.key, quantidade };
+    });
+
+    const municipioRanking = rows.reduce<Record<string, number>>((acc, empresa) => {
+      const municipio = normalizeMunicipio(empresa.endereco);
+      if (!municipio) return acc;
+      acc[municipio] = (acc[municipio] || 0) + 1;
+      return acc;
+    }, {});
+
+    const municipiosTop = Object.entries(municipioRanking)
+      .map(([municipio, total]) => ({ municipio, total }))
+      .sort((a, b) => b.total - a.total || a.municipio.localeCompare(b.municipio))
+      .slice(0, 9);
+
     return {
       empresas: empresasMapeadas,
       prioridadesOperacionais: prioridades,
@@ -312,6 +364,11 @@ const Dashboard = () => {
       empresasIncompletas: incompletas,
       calendarEvents: events,
       proximosAniversariosEmpresas: proximosTresMeses,
+      dashboardInsights: {
+        quantidadeAssociados,
+        maturidadeDistribuicao,
+        municipiosTop,
+      },
     };
   }, [data, periodoFim, periodoInicio]);
 
@@ -455,8 +512,81 @@ const Dashboard = () => {
               proximosVencimentos={dashboardKPIs.proximosVencimentos15d}
             />
 
-            {/* KPI extra: Participação em eventos */}
-            <ParticipacaoEventosCard month={new Date().getMonth()} year={new Date().getFullYear()} />
+            {/* KPIs consultivos */}
+            <div className="grid gap-6 lg:grid-cols-3">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                    Quantidade de associados
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-3xl font-bold">{dashboardInsights.quantidadeAssociados}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Total de empresas associadas na base atual.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="lg:col-span-2">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                    Distribuição por maturidade
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-end min-h-[150px]">
+                    {dashboardInsights.maturidadeDistribuicao.map((item) => {
+                      const max = Math.max(...dashboardInsights.maturidadeDistribuicao.map((entry) => entry.quantidade), 1);
+                      const height = Math.max(10, Math.round((item.quantidade / max) * 100));
+                      return (
+                        <div key={item.label} className="flex flex-col items-center gap-2">
+                          <span className="text-xs font-semibold">{item.quantidade}</span>
+                          <div className="w-16 rounded-t-md bg-primary" style={{ height: `${height}px` }} />
+                          <span className="text-[11px] text-center text-muted-foreground leading-tight">{item.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                  Municípios por quantidade de empresas
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>#</TableHead>
+                      <TableHead>Município</TableHead>
+                      <TableHead className="text-right">CNPJ</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dashboardInsights.municipiosTop.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-muted-foreground">
+                          Sem dados de município para exibir.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      dashboardInsights.municipiosTop.map((item, index) => (
+                        <TableRow key={item.municipio}>
+                          <TableCell>{index + 1}.</TableCell>
+                          <TableCell>{item.municipio}</TableCell>
+                          <TableCell className="text-right">{item.total}</TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
 
             {aniversarioNotificacao && (
               <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
