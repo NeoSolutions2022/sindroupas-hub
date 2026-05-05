@@ -52,7 +52,7 @@ const ATIVIDADES_QUERY = `
       owner_user {
         id
         name
-        profile_code
+        profile_id
         profile {
           code
           label
@@ -66,7 +66,11 @@ const ATIVIDADES_QUERY = `
     app_users(where: $usersWhere, order_by: { name: asc }) {
       id
       name
-      profile_code
+      profile_id
+      profile {
+        code
+        label
+      }
     }
   }
 `;
@@ -101,13 +105,18 @@ type ActivityRow = {
   owner_user?: {
     id: string;
     name?: string | null;
-    profile_code?: string | null;
+    profile_id?: string | null;
     profile?: { code?: string | null; label?: string | null } | null;
   } | null;
 };
 
 type ProfileOption = { code: string; label: string };
-type AppUserRow = { id: string; name?: string | null; profile_code?: string | null };
+type AppUserRow = {
+  id: string;
+  name?: string | null;
+  profile_id?: string | null;
+  profile?: { code?: string | null; label?: string | null } | null;
+};
 
 type AtividadesResponse = {
   atividades: ActivityRow[];
@@ -151,7 +160,7 @@ const Atividades = () => {
 
       if (isAdmin) {
         if (selectedProfile !== "ALL") {
-          whereAnd.push({ owner_user: { profile_code: { _eq: selectedProfile } } });
+          whereAnd.push({ owner_user: { profile: { code: { _eq: selectedProfile } } } });
         }
       } else if (effectiveUserId) {
         whereAnd.push({ owner_user_id: { _eq: effectiveUserId } });
@@ -170,7 +179,7 @@ const Atividades = () => {
             : userId
               ? { id: { _eq: userId } }
               : profileCode
-                ? { profile_code: { _eq: profileCode } }
+                ? { profile: { code: { _eq: profileCode } } }
                 : { id: { _eq: "__missing_user__" } },
         },
       });
@@ -188,8 +197,9 @@ const Atividades = () => {
   const appUserByProfile = useMemo(() => {
     const map = new Map<string, AppUserRow>();
     for (const appUser of appUsers) {
-      if (appUser.profile_code && !map.has(appUser.profile_code)) {
-        map.set(appUser.profile_code, appUser);
+      const code = appUser.profile?.code;
+      if (code && !map.has(code)) {
+        map.set(code, appUser);
       }
     }
     return map;
