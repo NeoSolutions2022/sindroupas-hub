@@ -101,4 +101,29 @@ export const createBoletoRequest = async (payload: CreateBoletoPayload) => {
   return body;
 };
 
+export const getBoletoByChargeIdRequest = async (chargeId: number) => {
+  const response = await fetch(`${getBoletosApiUrl()}/boletos/${chargeId}`);
+  if (!response.ok) throw new Error("Falha ao consultar boleto.");
+  return response.json();
+};
+
+export const cancelBoletoRequest = async (chargeId: number) => {
+  const response = await fetch(`${getBoletosApiUrl()}/boletos/${chargeId}/cancelar`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) throw new Error("Falha ao cancelar boleto.");
+  return response.json();
+};
+
+export const updateBoletoDueDateRequest = async (chargeId: number, vencimento: string) => {
+  const response = await fetch(`${getBoletosApiUrl()}/boletos/${chargeId}/vencimento`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ charge_id: chargeId, vencimento }),
+  });
+  if (!response.ok) throw new Error("Falha ao alterar vencimento.");
+  return response.json();
+};
+
 export type { CreateBoletoPayload };

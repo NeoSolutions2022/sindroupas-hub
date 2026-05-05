@@ -52,7 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
-import { createBoletoRequest, CreateBoletoPayload } from "@/lib/api/boletos";
+import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -1236,6 +1236,11 @@ const Financeiro = () => {
     });
   };
 
+  const extractChargeId = (id: string) => {
+    const numeric = Number(id);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
@@ -1442,6 +1447,56 @@ const Financeiro = () => {
                                           valor: boleto.valor,
                                         });
                                         setGerarNovoOpen(true);
+                                      }}
+                                      onChangeDueDate={async () => {
+                                        const chargeId = extractChargeId(boleto.id);
+                                        if (!chargeId) {
+                                          toast({
+                                            title: "Boleto sem charge_id",
+                                            description: "Não foi possível identificar charge_id para alterar vencimento.",
+                                            variant: "destructive",
+                                          });
+                                          return;
+                                        }
+                                        const novoVencimento = window.prompt("Novo vencimento (YYYY-MM-DD):", boleto.vencimento);
+                                        if (!novoVencimento) return;
+                                        try {
+                                          await updateBoletoDueDateRequest(chargeId, novoVencimento);
+                                          toast({
+                                            title: "Vencimento atualizado",
+                                            description: `Novo vencimento definido para ${novoVencimento}.`,
+                                          });
+                                        } catch (err) {
+                                          toast({
+                                            title: "Falha ao alterar vencimento",
+                                            description: err instanceof Error ? err.message : "Tente novamente.",
+                                            variant: "destructive",
+                                          });
+                                        }
+                                      }}
+                                      onCancel={async () => {
+                                        const chargeId = extractChargeId(boleto.id);
+                                        if (!chargeId) {
+                                          toast({
+                                            title: "Boleto sem charge_id",
+                                            description: "Não foi possível identificar charge_id para cancelar.",
+                                            variant: "destructive",
+                                          });
+                                          return;
+                                        }
+                                        try {
+                                          await cancelBoletoRequest(chargeId);
+                                          toast({
+                                            title: "Boleto cancelado",
+                                            description: `Charge ${chargeId} cancelada com sucesso.`,
+                                          });
+                                        } catch (err) {
+                                          toast({
+                                            title: "Falha ao cancelar boleto",
+                                            description: err instanceof Error ? err.message : "Tente novamente.",
+                                            variant: "destructive",
+                                          });
+                                        }
                                       }}
                                     />
                                   </TableCell>
