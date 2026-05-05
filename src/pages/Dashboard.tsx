@@ -295,6 +295,7 @@ const Dashboard = () => {
         return {
           id: empresa.id,
           nome: empresa.nome,
+          responsavelNome: empresa.responsavelNome,
           data: proximoAniversario,
           anos,
           mesesParaEvento,
@@ -373,11 +374,18 @@ const Dashboard = () => {
   const aniversarioNotificacao = useMemo(() => {
     const proximo = proximosAniversariosEmpresas[0];
     if (!proximo) return null;
+    const nomeNotificacao = proximo.responsavelNome || proximo.nome;
     if (proximo.mesesParaEvento <= 1) {
-      return `Ei, o dono da empresa ${proximo.nome} faz aniversário no próximo mês!`;
+      return `Ei, o dono da empresa ${nomeNotificacao} faz aniversário no próximo mês!`;
     }
     return `Ei, a empresa ${proximo.nome} vai fazer ${proximo.anos} anos daqui a dois meses!`;
   }, [proximosAniversariosEmpresas]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const base = aniversarioNotificacao ? [aniversarioNotificacao] : [];
+    window.localStorage.setItem("sindroupas_dashboard_notifications", JSON.stringify(base.slice(0, 5)));
+  }, [aniversarioNotificacao]);
 
   // Auto-focus on the missing field when modal opens
   useEffect(() => {
@@ -475,6 +483,23 @@ const Dashboard = () => {
                 </div>
               </header>
 
+            {aniversarioNotificacao && (
+              <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <BellRing className="h-5 w-5 text-accent mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-foreground">{aniversarioNotificacao}</p>
+                      <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setAniversarioNoticeOpen(true)}>
+                    Ver detalhes
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* B) KPIs - Nova versão */}
             <NovasKPIs
               inadimplencia={dashboardKPIs.inadimplencia}
@@ -488,7 +513,7 @@ const Dashboard = () => {
             />
 
             {/* KPIs consultivos */}
-            <div className="grid gap-6 lg:grid-cols-3">
+            <div className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
@@ -499,45 +524,6 @@ const Dashboard = () => {
                   <p className="text-3xl font-bold">{dashboardInsights.quantidadeAssociados}</p>
                   <p className="text-xs text-muted-foreground mt-1">
                     Total de empresas associadas na base atual.
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                    Top municípios
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-8">#</TableHead>
-                        <TableHead>Município</TableHead>
-                        <TableHead className="text-right">Empresas</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {dashboardInsights.municipiosTop.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={3} className="text-xs text-muted-foreground">
-                            Sem dados.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        dashboardInsights.municipiosTop.slice(0, 6).map((item, index) => (
-                          <TableRow key={item.municipio}>
-                            <TableCell className="text-xs">{index + 1}</TableCell>
-                            <TableCell className="text-xs">{item.municipio}</TableCell>
-                            <TableCell className="text-right text-xs">{item.total}</TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    Formato recomendado do endereço: Rua, Número, Bairro, Município.
                   </p>
                 </CardContent>
               </Card>
@@ -566,23 +552,6 @@ const Dashboard = () => {
               </Card>
             </div>
 
-            {aniversarioNotificacao && (
-              <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-start gap-3">
-                    <BellRing className="h-5 w-5 text-accent mt-0.5" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-foreground">{aniversarioNotificacao}</p>
-                      <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
-                    </div>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setAniversarioNoticeOpen(true)}>
-                    Ver detalhes
-                  </Button>
-                </div>
-              </div>
-            )}
-
             {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">
               <PrioridadesOperacional
@@ -590,7 +559,47 @@ const Dashboard = () => {
                 onVerDetalhes={(id) => setSelectedEmpresaId(id)}
                 onAcaoPrimaria={handleAcaoPrimaria}
               />
-              <CalendarioMensal events={calendarEvents} />
+              <div className="space-y-6">
+                <CalendarioMensal events={calendarEvents} />
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                      Top municípios
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-8">#</TableHead>
+                          <TableHead>Município</TableHead>
+                          <TableHead className="text-right">Empresas</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {dashboardInsights.municipiosTop.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={3} className="text-xs text-muted-foreground">
+                              Sem dados.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          dashboardInsights.municipiosTop.slice(0, 6).map((item, index) => (
+                            <TableRow key={item.municipio}>
+                              <TableCell className="text-xs">{index + 1}</TableCell>
+                              <TableCell className="text-xs">{item.municipio}</TableCell>
+                              <TableCell className="text-right text-xs">{item.total}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      Formato recomendado do endereço: Rua, Número, Bairro, Município.
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
 
             {/* D) Resumo da Carteira + E) Empresas Incompletas */}

@@ -3,6 +3,7 @@ import { User, Bell } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
+import { useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthProfile } from "@/hooks/use-auth-profile";
 import {
@@ -28,6 +29,17 @@ export function DashboardNavbar() {
     navigate("/login", { replace: true });
   };
 
+  const notifications = useMemo(() => {
+    if (typeof window === "undefined") return [] as string[];
+    try {
+      const raw = window.localStorage.getItem("sindroupas_dashboard_notifications");
+      const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+      return parsed.slice(0, 5);
+    } catch {
+      return [] as string[];
+    }
+  }, []);
+
   return (
     <header className="sticky top-0 z-30 h-14 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
       <div className="flex h-full items-center justify-between px-4">
@@ -46,9 +58,11 @@ export function DashboardNavbar() {
             aria-label="Notificações"
           >
             <Bell className="h-[18px] w-[18px]" />
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
-              3
-            </span>
+            {notifications.length > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
+                {notifications.length}
+              </span>
+            )}
           </Button>
 
           {/* User Menu */}
@@ -78,6 +92,16 @@ export function DashboardNavbar() {
               <DropdownMenuSeparator />
               <DropdownMenuItem>{displayProfile}</DropdownMenuItem>
               <DropdownMenuItem>Configurações</DropdownMenuItem>
+              {notifications.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  {notifications.map((item, index) => (
+                    <DropdownMenuItem key={`${index}-${item}`} className="text-xs text-muted-foreground whitespace-normal">
+                      {item}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={handleLogout}>
                 Sair
