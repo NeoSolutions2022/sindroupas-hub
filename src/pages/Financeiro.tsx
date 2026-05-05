@@ -192,10 +192,11 @@ const UPDATE_BOLETO_VENCIMENTO_HASURA = `
 `;
 
 const UPDATE_BOLETO_STATUS_HASURA = `
-  mutation UpdateBoletoStatus($id: uuid!, $status: financeiro_boleto_status!) {
-    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { status: $status }) {
+  mutation UpdateBoletoStatus($id: uuid!, $status: financeiro_boleto_status!, $efi_status: String!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { status: $status, efi_status: $efi_status }) {
       id
       status
+      efi_status
     }
   }
 `;
@@ -1286,7 +1287,7 @@ const Financeiro = () => {
     await hasuraRequest({
       token,
       query: UPDATE_BOLETO_STATUS_HASURA,
-      variables: { id, status },
+      variables: { id, status, efi_status: status },
     });
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
@@ -1418,13 +1419,13 @@ const Financeiro = () => {
                                   <TableCell>{boleto.vencimento}</TableCell>
                                   <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
                                   <TableCell>
-                                    <div className="flex items-center gap-3">
-                                      <div className="text-sm">
+                                    <div className="flex items-center justify-between gap-3 w-full">
+                                      <div className="text-sm min-w-0">
                                         <div className="font-medium text-foreground">
                                           {contato?.nome || "Sem contato"}
                                         </div>
                                       </div>
-                                      <div className="flex items-center gap-1">
+                                      <div className="flex items-center gap-1 shrink-0">
                                         {whatsappLink ? (
                                           <Button
                                             variant="ghost"
