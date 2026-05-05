@@ -153,8 +153,8 @@ const Atividades = () => {
         if (selectedProfile !== "ALL") {
           whereAnd.push({ owner_user: { profile_code: { _eq: selectedProfile } } });
         }
-      } else if (userId) {
-        whereAnd.push({ owner_user_id: { _eq: userId } });
+      } else if (effectiveUserId) {
+        whereAnd.push({ owner_user_id: { _eq: effectiveUserId } });
       } else {
         whereAnd.push({ owner_user_id: { _eq: "__missing_user__" } });
       }
@@ -165,7 +165,13 @@ const Atividades = () => {
         variables: {
           where: { _and: whereAnd },
           profileWhere: {},
-          usersWhere: isAdmin ? {} : userId ? { id: { _eq: userId } } : { id: { _eq: "__missing_user__" } },
+          usersWhere: isAdmin
+            ? {}
+            : userId
+              ? { id: { _eq: userId } }
+              : profileCode
+                ? { profile_code: { _eq: profileCode } }
+                : { id: { _eq: "__missing_user__" } },
         },
       });
 
@@ -177,6 +183,7 @@ const Atividades = () => {
   const activities = data?.atividades ?? [];
   const profiles = data?.app_profiles ?? [];
   const appUsers = data?.app_users ?? [];
+  const effectiveUserId = userId ?? appUsers[0]?.id ?? null;
 
   const appUserByProfile = useMemo(() => {
     const map = new Map<string, AppUserRow>();
@@ -188,7 +195,7 @@ const Atividades = () => {
     return map;
   }, [appUsers]);
 
-  const canMutate = isAdmin || !!userId;
+  const canMutate = isAdmin || !!effectiveUserId;
 
   const insertMutation = useMutation({
     mutationFn: (variables: { object: Record<string, unknown> }) =>
@@ -217,7 +224,7 @@ const Atividades = () => {
   };
 
   const openEdit = (a: ActivityRow) => {
-    const cannotEdit = !isAdmin && a.owner_user_id !== userId;
+    const cannotEdit = !isAdmin && a.owner_user_id !== effectiveUserId;
     if (cannotEdit) {
       toast.error("Você não pode editar atividades de outro perfil.");
       return;
@@ -232,7 +239,7 @@ const Atividades = () => {
   };
 
   const resolveOwnerUserId = () => {
-    if (!isAdmin) return userId;
+    if (!isAdmin) return effectiveUserId;
 
     if (selectedProfile !== "ALL") {
       return appUserByProfile.get(selectedProfile)?.id ?? null;
@@ -260,7 +267,7 @@ const Atividades = () => {
     }
 
     if (editing) {
-      const cannotEdit = !isAdmin && editing.owner_user_id !== userId;
+      const cannotEdit = !isAdmin && editing.owner_user_id !== effectiveUserId;
       if (cannotEdit) {
         toast.error("Você não pode editar atividades de outro perfil.");
         return;
@@ -294,7 +301,7 @@ const Atividades = () => {
     const target = activities.find((item) => item.id === deleteId);
     if (!target) return;
 
-    const cannotDelete = !isAdmin && target.owner_user_id !== userId;
+    const cannotDelete = !isAdmin && target.owner_user_id !== effectiveUserId;
     if (cannotDelete) {
       toast.error("Você não pode excluir atividades de outro perfil.");
       return;

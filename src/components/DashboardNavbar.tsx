@@ -2,6 +2,9 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { User, Bell } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAuthProfile } from "@/hooks/use-auth-profile";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,6 +15,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 export function DashboardNavbar() {
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const { role, profileCode } = useAuthProfile();
+
+  const displayName = user?.name?.trim() || user?.email || "Usuário";
+  const displayRole = role === "admin" ? "Administrador" : "Usuário";
+  const displayProfile = profileCode ? `Perfil: ${profileCode}` : displayRole;
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   return (
     <header className="sticky top-0 z-30 h-14 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
       <div className="flex h-full items-center justify-between px-4">
@@ -48,22 +64,22 @@ export function DashboardNavbar() {
                   </AvatarFallback>
                 </Avatar>
                 <span className="hidden text-sm font-medium text-foreground sm:block">
-                  Admin
+                  {displayName}
                 </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48 bg-popover">
               <DropdownMenuLabel className="font-normal">
                 <div className="flex flex-col space-y-1">
-                  <p className="text-sm font-medium">Administrador</p>
-                  <p className="text-xs text-muted-foreground">admin@sindroupas.org.br</p>
+                  <p className="text-sm font-medium">{displayName}</p>
+                  <p className="text-xs text-muted-foreground">{user?.email || displayProfile}</p>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>Meu perfil</DropdownMenuItem>
+              <DropdownMenuItem>{displayProfile}</DropdownMenuItem>
               <DropdownMenuItem>Configurações</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive focus:text-destructive">
+              <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={handleLogout}>
                 Sair
               </DropdownMenuItem>
             </DropdownMenuContent>
