@@ -455,6 +455,7 @@ const Atividades = () => {
                         <TableHead>Tipo</TableHead>
                         <TableHead className="text-right">Qtd</TableHead>
                         <TableHead>Diretor</TableHead>
+                        <TableHead>Usuário</TableHead>
                         <TableHead>Observação</TableHead>
                         <TableHead className="text-right">Ações</TableHead>
                       </TableRow>
@@ -470,6 +471,7 @@ const Atividades = () => {
                           </TableCell>
                           <TableCell className="text-right font-medium tabular-nums">{a.quantity}</TableCell>
                           <TableCell className="text-muted-foreground">{getDirectorName(a)}</TableCell>
+                          <TableCell className="text-muted-foreground">{a.owner_user?.name || "—"}</TableCell>
                           <TableCell className="max-w-[200px] truncate text-muted-foreground">{a.observation || "—"}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
