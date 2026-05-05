@@ -73,6 +73,7 @@ type EmpresaLookupRow = {
 
 type BoletoRow = {
   id: string;
+  charge_id?: number | null;
   tipo?: string | null;
   valor?: number | string | null;
   vencimento?: string | null;
@@ -115,6 +116,7 @@ const FINANCEIRO_QUERY = `
   query FinanceiroPage {
     financeiro_boletos(order_by: { vencimento: desc }) {
       id
+      charge_id
       tipo
       valor
       vencimento
@@ -1237,8 +1239,11 @@ const Financeiro = () => {
   };
 
   const extractChargeId = (id: string) => {
-    const numeric = Number(id);
-    return Number.isFinite(numeric) ? numeric : null;
+    const chargeIdFromQuery = data?.financeiro_boletos.find((item) => item.id === id)?.charge_id;
+    if (typeof chargeIdFromQuery === "number" && Number.isFinite(chargeIdFromQuery)) {
+      return chargeIdFromQuery;
+    }
+    return null;
   };
 
   return (
