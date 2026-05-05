@@ -275,7 +275,7 @@ const Atividades = () => {
 
       await updateMutation.mutateAsync({
         id: editing.id,
-        set: { tipo: formType, occurred_on: formDate, year: filterYear, month: filterMonth + 1, quantity: qty, observation: formNote },
+        set: { tipo: formType, occurred_on: formDate, quantity: qty, observation: formNote },
       });
       toast.success("Atividade atualizada!");
     } else {
@@ -284,8 +284,6 @@ const Atividades = () => {
           owner_user_id: ownerUserId,
           tipo: formType,
           occurred_on: formDate,
-          year: filterYear,
-          month: filterMonth + 1,
           quantity: qty,
           observation: formNote,
         },
