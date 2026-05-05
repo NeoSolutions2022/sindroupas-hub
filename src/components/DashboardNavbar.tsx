@@ -3,7 +3,7 @@ import { User, Bell } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAuthProfile } from "@/hooks/use-auth-profile";
 import {
@@ -29,15 +29,28 @@ export function DashboardNavbar() {
     navigate("/login", { replace: true });
   };
 
-  const notifications = useMemo(() => {
-    if (typeof window === "undefined") return [] as string[];
-    try {
-      const raw = window.localStorage.getItem("sindroupas_dashboard_notifications");
-      const parsed = raw ? (JSON.parse(raw) as string[]) : [];
-      return parsed.slice(0, 5);
-    } catch {
-      return [] as string[];
-    }
+  const [notifications, setNotifications] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const loadNotifications = () => {
+      try {
+        const raw = window.localStorage.getItem("sindroupas_dashboard_notifications");
+        const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+        setNotifications(parsed.slice(0, 5));
+      } catch {
+        setNotifications([]);
+      }
+    };
+
+    loadNotifications();
+    window.addEventListener("storage", loadNotifications);
+    window.addEventListener("dashboard-notifications-updated", loadNotifications as EventListener);
+    return () => {
+      window.removeEventListener("storage", loadNotifications);
+      window.removeEventListener("dashboard-notifications-updated", loadNotifications as EventListener);
+    };
   }, []);
 
   return (
@@ -51,19 +64,36 @@ export function DashboardNavbar() {
         {/* Right side */}
         <div className="flex items-center gap-2">
           {/* Notifications */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="relative h-9 w-9 text-muted-foreground hover:text-foreground"
-            aria-label="Notificações"
-          >
-            <Bell className="h-[18px] w-[18px]" />
-            {notifications.length > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
-                {notifications.length}
-              </span>
-            )}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative h-9 w-9 text-muted-foreground hover:text-foreground"
+                aria-label="Notificações"
+              >
+                <Bell className="h-[18px] w-[18px]" />
+                {notifications.length > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
+                    {notifications.length}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80 bg-popover">
+              <DropdownMenuLabel>Notificações</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {notifications.length === 0 ? (
+                <DropdownMenuItem className="text-xs text-muted-foreground">Sem notificações no momento.</DropdownMenuItem>
+              ) : (
+                notifications.map((item, index) => (
+                  <DropdownMenuItem key={`${index}-${item}`} className="text-xs whitespace-normal text-muted-foreground">
+                    {item}
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {/* User Menu */}
           <DropdownMenu>
@@ -92,16 +122,6 @@ export function DashboardNavbar() {
               <DropdownMenuSeparator />
               <DropdownMenuItem>{displayProfile}</DropdownMenuItem>
               <DropdownMenuItem>Configurações</DropdownMenuItem>
-              {notifications.length > 0 && (
-                <>
-                  <DropdownMenuSeparator />
-                  {notifications.map((item, index) => (
-                    <DropdownMenuItem key={`${index}-${item}`} className="text-xs text-muted-foreground whitespace-normal">
-                      {item}
-                    </DropdownMenuItem>
-                  ))}
-                </>
-              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={handleLogout}>
                 Sair

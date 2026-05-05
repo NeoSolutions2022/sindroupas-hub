@@ -115,6 +115,7 @@ const Dashboard = () => {
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [aniversarioNoticeOpen, setAniversarioNoticeOpen] = useState(false);
+  const [visibleAniversarios, setVisibleAniversarios] = useState(5);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
   const [formData, setFormData] = useState({
@@ -383,9 +384,12 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const base = aniversarioNotificacao ? [aniversarioNotificacao] : [];
-    window.localStorage.setItem("sindroupas_dashboard_notifications", JSON.stringify(base.slice(0, 5)));
-  }, [aniversarioNotificacao]);
+    const base = proximosAniversariosEmpresas
+      .slice(0, 5)
+      .map((item) => `Ei, o dono da empresa ${item.responsavelNome || item.nome} faz aniversário no próximo mês!`);
+    window.localStorage.setItem("sindroupas_dashboard_notifications", JSON.stringify(base));
+    window.dispatchEvent(new Event("dashboard-notifications-updated"));
+  }, [proximosAniversariosEmpresas]);
 
   // Auto-focus on the missing field when modal opens
   useEffect(() => {
@@ -493,7 +497,14 @@ const Dashboard = () => {
                       <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => setAniversarioNoticeOpen(true)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setVisibleAniversarios(5);
+                      setAniversarioNoticeOpen(true);
+                    }}
+                  >
                     Ver detalhes
                   </Button>
                 </div>
@@ -762,17 +773,27 @@ const Dashboard = () => {
                   {proximosAniversariosEmpresas.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Nenhum aniversário de empresa encontrado para os próximos 3 meses.</p>
                   ) : (
-                    proximosAniversariosEmpresas.map((item) => (
-                      <div key={`aniversario-${item.id}-${format(item.data, "yyyy-MM-dd")}`} className="rounded-md border p-3">
-                        <p className="text-sm font-medium">{item.nome}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {format(item.data, "dd/MM/yyyy")} • {item.anos} ano(s)
-                        </p>
-                      </div>
-                    ))
+                    <div className="max-h-72 overflow-y-auto pr-1 space-y-3">
+                      {proximosAniversariosEmpresas.slice(0, visibleAniversarios).map((item) => (
+                        <div key={`aniversario-${item.id}-${format(item.data, "yyyy-MM-dd")}`} className="rounded-md border p-3">
+                          <p className="text-sm font-medium">{item.responsavelNome || item.nome}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {format(item.data, "dd/MM/yyyy")} • {item.anos} ano(s)
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
                 <DialogFooter>
+                  {visibleAniversarios < proximosAniversariosEmpresas.length && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => setVisibleAniversarios((prev) => prev + 5)}
+                    >
+                      Ver mais
+                    </Button>
+                  )}
                   <Button variant="outline" onClick={() => setAniversarioNoticeOpen(false)}>
                     Fechar
                   </Button>
