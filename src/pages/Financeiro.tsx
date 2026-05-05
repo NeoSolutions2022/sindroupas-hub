@@ -73,7 +73,8 @@ type EmpresaLookupRow = {
 
 type BoletoRow = {
   id: string;
-  charge_id?: number | null;
+  efi_charge_id?: string | null;
+  pdf_url?: string | null;
   tipo?: string | null;
   valor?: number | string | null;
   vencimento?: string | null;
@@ -116,7 +117,8 @@ const FINANCEIRO_QUERY = `
   query FinanceiroPage {
     financeiro_boletos(order_by: { vencimento: desc }) {
       id
-      charge_id
+      efi_charge_id
+      pdf_url
       tipo
       valor
       vencimento
@@ -343,10 +345,12 @@ const Financeiro = () => {
       }),
   });
 
-  const boletos = useMemo<BoletoRegistro[]>(() => {
+  const boletos = useMemo<BoletoView[]>(() => {
     return (
       data?.financeiro_boletos.map((boleto) => ({
         id: boleto.id,
+        efiChargeId: boleto.efi_charge_id ?? null,
+        pdfUrl: boleto.pdf_url ?? null,
         tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
         empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
         valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
@@ -1239,9 +1243,11 @@ const Financeiro = () => {
   };
 
   const extractChargeId = (id: string) => {
-    const chargeIdFromQuery = data?.financeiro_boletos.find((item) => item.id === id)?.charge_id;
-    if (typeof chargeIdFromQuery === "number" && Number.isFinite(chargeIdFromQuery)) {
-      return chargeIdFromQuery;
+    const chargeIdFromQuery = data?.financeiro_boletos.find((item) => item.id === id)?.efi_charge_id;
+    if (!chargeIdFromQuery) return null;
+    const parsed = Number(chargeIdFromQuery);
+    if (Number.isFinite(parsed)) {
+      return parsed;
     }
     return null;
   };
@@ -1439,9 +1445,14 @@ const Financeiro = () => {
                                       whatsappLink={whatsappLink}
                                       onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
                                       onDownload={() => {
+                                        if (boleto.pdfUrl) {
+                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
+                                          return;
+                                        }
                                         toast({
-                                          title: "Download iniciado (mock)",
-                                          description: `Boleto de ${boleto.empresa} sendo baixado.`,
+                                          title: "PDF indisponível",
+                                          description: "Este boleto não possui pdf_url para download.",
+                                          variant: "destructive",
                                         });
                                       }}
                                       onGenerateNew={() => {
@@ -2294,3 +2305,7 @@ const Financeiro = () => {
 };
 
 export default Financeiro;
+  type BoletoView = BoletoRegistro & {
+    efiChargeId?: string | null;
+    pdfUrl?: string | null;
+  };
