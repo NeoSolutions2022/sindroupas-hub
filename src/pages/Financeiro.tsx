@@ -182,6 +182,24 @@ const FINANCEIRO_QUERY = `
   }
 `;
 
+const UPDATE_BOLETO_VENCIMENTO_HASURA = `
+  mutation UpdateBoletoVencimento($id: uuid!, $vencimento: date!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { vencimento: $vencimento }) {
+      id
+      vencimento
+    }
+  }
+`;
+
+const UPDATE_BOLETO_STATUS_HASURA = `
+  mutation UpdateBoletoStatus($id: uuid!, $status: financeiro_boleto_status!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { status: $status }) {
+      id
+      status
+    }
+  }
+`;
+
 // Tipos
 interface Faixa {
   id: string;
@@ -330,6 +348,9 @@ const Financeiro = () => {
     vencimento: string;
     valor: number;
   } | null>(null);
+  const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
+  const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
+  const [newDueDate, setNewDueDate] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -1252,6 +1273,24 @@ const Financeiro = () => {
     return null;
   };
 
+  const syncDueDateInHasura = async (id: string, vencimento: string) => {
+    await hasuraRequest({
+      token,
+      query: UPDATE_BOLETO_VENCIMENTO_HASURA,
+      variables: { id, vencimento },
+    });
+    queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const syncStatusInHasura = async (id: string, status: "cancelado" | "atrasado" | "emitido" | "pago") => {
+    await hasuraRequest({
+      token,
+      query: UPDATE_BOLETO_STATUS_HASURA,
+      variables: { id, status },
+    });
+    queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
@@ -1465,30 +1504,9 @@ const Financeiro = () => {
                                         setGerarNovoOpen(true);
                                       }}
                                       onChangeDueDate={async () => {
-                                        const chargeId = extractChargeId(boleto.id);
-                                        if (!chargeId) {
-                                          toast({
-                                            title: "Boleto sem charge_id",
-                                            description: "Não foi possível identificar charge_id para alterar vencimento.",
-                                            variant: "destructive",
-                                          });
-                                          return;
-                                        }
-                                        const novoVencimento = window.prompt("Novo vencimento (YYYY-MM-DD):", boleto.vencimento);
-                                        if (!novoVencimento) return;
-                                        try {
-                                          await updateBoletoDueDateRequest(chargeId, novoVencimento);
-                                          toast({
-                                            title: "Vencimento atualizado",
-                                            description: `Novo vencimento definido para ${novoVencimento}.`,
-                                          });
-                                        } catch (err) {
-                                          toast({
-                                            title: "Falha ao alterar vencimento",
-                                            description: err instanceof Error ? err.message : "Tente novamente.",
-                                            variant: "destructive",
-                                          });
-                                        }
+                                        setSelectedBoletoForDueDate(boleto);
+                                        setNewDueDate(boleto.vencimento);
+                                        setDueDateDialogOpen(true);
                                       }}
                                       onCancel={async () => {
                                         const chargeId = extractChargeId(boleto.id);
@@ -1502,6 +1520,7 @@ const Financeiro = () => {
                                         }
                                         try {
                                           await cancelBoletoRequest(chargeId);
+                                          await syncStatusInHasura(boleto.id, "cancelado");
                                           toast({
                                             title: "Boleto cancelado",
                                             description: `Charge ${chargeId} cancelada com sucesso.`,
@@ -1575,6 +1594,52 @@ const Financeiro = () => {
                     setSelectedBoletoForNew(null);
                   }}
                 />
+
+                <Dialog open={dueDateDialogOpen} onOpenChange={setDueDateDialogOpen}>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Alterar vencimento do boleto</DialogTitle>
+                      <DialogDescription>
+                        Ajuste a data de vencimento para {selectedBoletoForDueDate?.empresa}.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                      <Label>Nova data de vencimento</Label>
+                      <Input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)}>Cancelar</Button>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedBoletoForDueDate || !newDueDate) return;
+                          const chargeId = extractChargeId(selectedBoletoForDueDate.id);
+                          if (!chargeId) {
+                            toast({
+                              title: "Boleto sem charge_id",
+                              description: "Não foi possível identificar charge_id para alterar vencimento.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          try {
+                            await updateBoletoDueDateRequest(chargeId, newDueDate);
+                            await syncDueDateInHasura(selectedBoletoForDueDate.id, newDueDate);
+                            toast({ title: "Vencimento atualizado", description: `Novo vencimento: ${newDueDate}.` });
+                            setDueDateDialogOpen(false);
+                          } catch (err) {
+                            toast({
+                              title: "Falha ao alterar vencimento",
+                              description: err instanceof Error ? err.message : "Tente novamente.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        Salvar
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </TabsContent>
 
               <TabsContent value="contribuicao" className="space-y-6">
