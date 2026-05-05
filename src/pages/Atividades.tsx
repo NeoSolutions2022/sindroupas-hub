@@ -49,6 +49,15 @@ const ATIVIDADES_QUERY = `
       quantity
       observation
       owner_user_id
+      appUserByOwnerUserId {
+        id
+        name
+        profile_id
+        profile {
+          code
+          label
+        }
+      }
       owner_user {
         id
         name
@@ -102,6 +111,12 @@ type ActivityRow = {
   quantity: number;
   observation?: string | null;
   owner_user_id: string;
+  appUserByOwnerUserId?: {
+    id: string;
+    name?: string | null;
+    profile_id?: string | null;
+    profile?: { code?: string | null; label?: string | null } | null;
+  } | null;
   owner_user?: {
     id: string;
     name?: string | null;
@@ -160,7 +175,7 @@ const Atividades = () => {
 
       if (isAdmin) {
         if (selectedProfile !== "ALL") {
-          whereAnd.push({ owner_user: { profile: { code: { _eq: selectedProfile } } } });
+          whereAnd.push({ profile: { code: { _eq: selectedProfile } } });
         }
       } else if (effectiveUserId) {
         whereAnd.push({ owner_user_id: { _eq: effectiveUserId } });
@@ -327,7 +342,7 @@ const Atividades = () => {
   };
 
   const getDirectorName = (item: ActivityRow) => {
-    return item.owner_user?.name || item.owner_user?.profile?.label || "—";
+    return item.appUserByOwnerUserId?.name || item.appUserByOwnerUserId?.profile?.label || "—";
   };
 
   const months = [
