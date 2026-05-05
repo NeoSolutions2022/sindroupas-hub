@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
-import { ImpersonationBar } from "@/components/ImpersonationBar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, MessageCircle, Phone, BellRing } from "lucide-react";
+import { MessageCircle, Phone, BellRing } from "lucide-react";
 import { toast } from "sonner";
 import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
@@ -112,7 +111,6 @@ const Dashboard = () => {
   const { token } = useAuth();
   const hoje = new Date();
   // State
-  const [searchQuery, setSearchQuery] = useState("");
   const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -396,17 +394,6 @@ const Dashboard = () => {
     }
   }, [editingEmpresa, focusField]);
 
-  // Filtered priorities based on search
-  const prioridadesFiltradas = useMemo(() => {
-    if (!searchQuery) return prioridadesOperacionais;
-    const query = searchQuery.toLowerCase();
-    return prioridadesOperacionais.filter(
-      (p) =>
-        p.nome.toLowerCase().includes(query) ||
-        p.contexto.toLowerCase().includes(query)
-    );
-  }, [prioridadesOperacionais, searchQuery]);
-
   // Find empresa for details modal
   const selectedEmpresa = useMemo(() => {
     if (!selectedEmpresaId) return null;
@@ -444,7 +431,6 @@ const Dashboard = () => {
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <DashboardNavbar />
-          <ImpersonationBar />
           <main className="flex-1 overflow-auto">
             <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto w-full">
               
@@ -459,17 +445,6 @@ const Dashboard = () => {
                   </p>
                 </div>
                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                    <Input
-                      type="search"
-                      placeholder="Buscar empresa..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 h-9 bg-card border-border text-sm"
-                      aria-label="Buscar empresa ou responsável"
-                    />
-                  </div>
                   <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
                     <Input
                       type="date"
@@ -528,7 +503,46 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
 
-              <Card className="lg:col-span-2">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                    Top municípios
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-8">#</TableHead>
+                        <TableHead>Município</TableHead>
+                        <TableHead className="text-right">Empresas</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {dashboardInsights.municipiosTop.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="text-xs text-muted-foreground">
+                            Sem dados.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        dashboardInsights.municipiosTop.slice(0, 6).map((item, index) => (
+                          <TableRow key={item.municipio}>
+                            <TableCell className="text-xs">{index + 1}</TableCell>
+                            <TableCell className="text-xs">{item.municipio}</TableCell>
+                            <TableCell className="text-right text-xs">{item.total}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Formato recomendado do endereço: Rua, Número, Bairro, Município.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
                     Distribuição por maturidade
@@ -552,42 +566,6 @@ const Dashboard = () => {
               </Card>
             </div>
 
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                  Municípios por quantidade de empresas
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>#</TableHead>
-                      <TableHead>Município</TableHead>
-                      <TableHead className="text-right">CNPJ</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {dashboardInsights.municipiosTop.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={3} className="text-muted-foreground">
-                          Sem dados de município para exibir.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      dashboardInsights.municipiosTop.map((item, index) => (
-                        <TableRow key={item.municipio}>
-                          <TableCell>{index + 1}.</TableCell>
-                          <TableCell>{item.municipio}</TableCell>
-                          <TableCell className="text-right">{item.total}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-
             {aniversarioNotificacao && (
               <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -608,7 +586,7 @@ const Dashboard = () => {
             {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">
               <PrioridadesOperacional
-                prioridades={prioridadesFiltradas}
+                prioridades={prioridadesOperacionais}
                 onVerDetalhes={(id) => setSelectedEmpresaId(id)}
                 onAcaoPrimaria={handleAcaoPrimaria}
               />
