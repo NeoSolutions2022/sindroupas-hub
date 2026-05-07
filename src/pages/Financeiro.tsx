@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, MessageCircle, Mail, CalendarIcon } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, CalendarIcon } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -362,6 +362,9 @@ const Financeiro = () => {
   const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
   const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
   const [newDueDate, setNewDueDate] = useState("");
+  const [descriptionDialogOpen, setDescriptionDialogOpen] = useState(false);
+  const [selectedBoletoForDescription, setSelectedBoletoForDescription] = useState<BoletoView | null>(null);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -1453,7 +1456,7 @@ const Financeiro = () => {
                             <TableHead>Valor</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead>Comunicação</TableHead>
+                            <TableHead>Descrição</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -1488,65 +1491,9 @@ const Financeiro = () => {
                                   <TableCell>{boleto.vencimento}</TableCell>
                                   <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
                                   <TableCell>
-                                    <div className="flex items-center justify-between gap-3 w-full">
-                                      <div className="text-sm min-w-0">
-                                        <div className="font-medium text-foreground">
-                                          {contato?.nome || "Sem contato"}
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-1 shrink-0">
-                                        {whatsappLink ? (
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            asChild
-                                          >
-                                            <a
-                                              href={whatsappLink}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              aria-label={`Abrir conversa no WhatsApp com ${contato?.nome}`}
-                                            >
-                                              <MessageCircle className="h-4 w-4 text-green-600" />
-                                            </a>
-                                          </Button>
-                                        ) : (
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            disabled
-                                          >
-                                            <MessageCircle className="h-4 w-4 text-muted-foreground" />
-                                          </Button>
-                                        )}
-                                        {contato?.email ? (
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            asChild
-                                          >
-                                            <a
-                                              href={`mailto:${contato.email}`}
-                                              aria-label={`Enviar e-mail para ${contato?.nome}`}
-                                            >
-                                              <Mail className="h-4 w-4 text-blue-600" />
-                                            </a>
-                                          </Button>
-                                        ) : (
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            disabled
-                                          >
-                                            <Mail className="h-4 w-4 text-muted-foreground" />
-                                          </Button>
-                                        )}
-                                      </div>
-                                    </div>
+                                    <span className="text-sm text-muted-foreground line-clamp-2">
+                                      {(boleto as BoletoView & { descricao?: string }).descricao || "Sem descrição"}
+                                    </span>
                                   </TableCell>
                                   <TableCell>
                                     <BoletoActionsCell
@@ -1584,12 +1531,10 @@ const Financeiro = () => {
                                         setNewDueDate(boleto.vencimento);
                                         setDueDateDialogOpen(true);
                                       }}
-                                      onDescription={async () => {
-                                        const valorAtual = (boleto as BoletoView & { descricao?: string }).descricao ?? "";
-                                        const descricao = window.prompt("Descrição/observações do boleto:", valorAtual);
-                                        if (descricao === null) return;
-                                        await syncDescricaoInHasura(boleto.id, descricao);
-                                        toast({ title: "Descrição atualizada" });
+                                      onDescription={() => {
+                                        setSelectedBoletoForDescription(boleto as BoletoView);
+                                        setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
+                                        setDescriptionDialogOpen(true);
                                       }}
                                       onCancel={async () => {
                                         const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
@@ -1716,6 +1661,36 @@ const Financeiro = () => {
                               variant: "destructive",
                             });
                           }
+                        }}
+                      >
+                        Salvar
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={descriptionDialogOpen} onOpenChange={setDescriptionDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Descrição do boleto</DialogTitle>
+                      <DialogDescription>
+                        {selectedBoletoForDescription?.empresa ? `Observações para ${selectedBoletoForDescription.empresa}` : "Edite as observações do boleto."}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <textarea
+                      className="w-full min-h-28 rounded-md border bg-background p-3 text-sm"
+                      value={descriptionDraft}
+                      onChange={(e) => setDescriptionDraft(e.target.value)}
+                      placeholder="Escreva observações sobre este boleto..."
+                    />
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)}>Cancelar</Button>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedBoletoForDescription) return;
+                          await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
+                          toast({ title: "Descrição atualizada" });
+                          setDescriptionDialogOpen(false);
                         }}
                       >
                         Salvar
