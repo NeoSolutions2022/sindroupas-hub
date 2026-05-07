@@ -365,6 +365,11 @@ const Financeiro = () => {
   const [descriptionDialogOpen, setDescriptionDialogOpen] = useState(false);
   const [selectedBoletoForDescription, setSelectedBoletoForDescription] = useState<BoletoView | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
+  const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -431,6 +436,7 @@ const Financeiro = () => {
           id: empresa.id,
           nome: empresa.razao_social,
           cnpj: empresa.cnpj ?? "",
+          qtdFuncionarios: empresa.colaboradores?.length ?? 0,
           contatoPrincipal: {
             nome: contato?.nome ?? "",
             whatsapp: contato?.whatsapp ?? "",
@@ -1545,6 +1551,10 @@ const Financeiro = () => {
                                         });
                                       }}
                                       onGenerateNew={() => {
+                                        if (regeneratedFromCancel.includes(boleto.id)) {
+                                          toast({ title: "Boleto já regenerado", description: "Este boleto cancelado já foi utilizado para gerar um novo boleto." });
+                                          return;
+                                        }
                                         setSelectedBoletoForNew({
                                           id: boleto.id,
                                           empresa: boleto.empresa,
@@ -1563,30 +1573,11 @@ const Financeiro = () => {
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
                                         setDescriptionDialogOpen(true);
                                       }}
-                                      onCancel={async () => {
-                                        const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
-                                        if (!chargeId) {
-                                          toast({
-                                            title: "Boleto sem charge_id",
-                                            description: "Não foi possível identificar charge_id para cancelar.",
-                                            variant: "destructive",
-                                          });
-                                          return;
-                                        }
-                                        try {
-                                          await cancelBoletoRequest(chargeId);
-                                          await syncStatusInHasura(boleto.id, "cancelado");
-                                          toast({
-                                            title: "Boleto cancelado",
-                                            description: `Charge ${chargeId} cancelada com sucesso.`,
-                                          });
-                                        } catch (err) {
-                                          toast({
-                                            title: "Falha ao cancelar boleto",
-                                            description: err instanceof Error ? err.message : "Tente novamente.",
-                                            variant: "destructive",
-                                          });
-                                        }
+                                      onCancel={() => {
+                                        setSelectedBoletoForCancel(boleto as BoletoView);
+                                        setCancelReason("");
+                                        setCancelAndRegenerate(false);
+                                        setCancelDialogOpen(true);
                                       }}
                                     />
                                   </TableCell>
@@ -1721,6 +1712,45 @@ const Financeiro = () => {
                         }}
                       >
                         Salvar
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Cancelar boleto</DialogTitle>
+                      <DialogDescription>Informe o motivo do cancelamento (obrigatório).</DialogDescription>
+                    </DialogHeader>
+                    <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Motivo do cancelamento" />
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={cancelAndRegenerate} onChange={(e) => setCancelAndRegenerate(e.target.checked)} />
+                      Gerar novo boleto após cancelar
+                    </label>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>Voltar</Button>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedBoletoForCancel) return;
+                          if (!cancelReason.trim()) {
+                            toast({ title: "Motivo obrigatório", variant: "destructive" });
+                            return;
+                          }
+                          const chargeId = selectedBoletoForCancel.efiChargeId ? Number(selectedBoletoForCancel.efiChargeId) : extractChargeId(selectedBoletoForCancel.id);
+                          if (!chargeId) return;
+                          await cancelBoletoRequest(chargeId);
+                          await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
+                          await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
+                          if (cancelAndRegenerate) {
+                            setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
+                            setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
+                            setGerarNovoOpen(true);
+                          }
+                          setCancelDialogOpen(false);
+                        }}
+                      >
+                        Confirmar cancelamento
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1883,7 +1913,7 @@ const Financeiro = () => {
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="minFunc">Mín Funcionários*</Label>
+                    <Label htmlFor="minFunc">Descrição (mín colaboradores)</Label>
                     <Input
                       id="minFunc"
                       type="number"
@@ -1893,7 +1923,7 @@ const Financeiro = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="maxFunc">Máx Funcionários*</Label>
+                    <Label htmlFor="maxFunc">Descrição (máx colaboradores)</Label>
                     <Input
                       id="maxFunc"
                       type="number"
@@ -2035,7 +2065,7 @@ const Financeiro = () => {
                                 }}
                               >
                                 <div className="font-medium">{empresa.nome}</div>
-                                <div className="text-sm text-muted-foreground">{empresa.cnpj}</div>
+                                <div className="text-sm text-muted-foreground">{empresa.cnpj} • {empresa.qtdFuncionarios} funcionário(s)</div>
                               </div>
                             ))}
                           </div>
