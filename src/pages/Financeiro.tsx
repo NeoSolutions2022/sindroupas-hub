@@ -622,9 +622,27 @@ const Financeiro = () => {
     pesquisaContribuicaoFeita: false,
   });
   const [empresaSearch, setEmpresaSearch] = useState("");
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [batchEmpresaIds, setBatchEmpresaIds] = useState<string[]>([]);
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
+
+  useEffect(() => {
+    const savedBatch = localStorage.getItem("financeiro:lote-empresas");
+    if (savedBatch) {
+      try {
+        const parsed = JSON.parse(savedBatch);
+        if (Array.isArray(parsed)) setBatchEmpresaIds(parsed);
+      } catch {
+        // noop
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("financeiro:lote-empresas", JSON.stringify(batchEmpresaIds));
+  }, [batchEmpresaIds]);
 
   useEffect(() => {
     if (searchParams.get("wizard") === "novo-boleto") {
@@ -727,7 +745,7 @@ const Financeiro = () => {
 
   const canProceed = useMemo(() => {
     if (wizardStep === 1) {
-      return !!(boletoForm.tipo && boletoForm.empresaId);
+      return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
     }
 
     if (wizardStep === 2) {
@@ -739,7 +757,7 @@ const Financeiro = () => {
     }
 
     return true;
-  }, [boletoForm, previaBoleto, wizardStep]);
+  }, [batchEmpresaIds.length, boletoForm, isBatchMode, previaBoleto, wizardStep]);
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -1058,6 +1076,7 @@ const Financeiro = () => {
       pesquisaContribuicaoFeita: false,
     });
     setEmpresaSearch("");
+    setIsBatchMode(false);
     setPreviaBoleto(null);
     setContribuicaoPreview("");
   };
@@ -1101,7 +1120,7 @@ const Financeiro = () => {
 
   const handleNextStep = () => {
     if (wizardStep === 1) {
-      if (!boletoForm.tipo || !boletoForm.empresaId) {
+      if (!boletoForm.tipo || (!isBatchMode && !boletoForm.empresaId) || (isBatchMode && batchEmpresaIds.length === 0)) {
         toast({
           title: "Campos obrigatórios",
           description: "Selecione o tipo de boleto e uma empresa.",
@@ -1242,26 +1261,32 @@ const Financeiro = () => {
     setContribuicaoPreview("");
   };
 
-  const handleEmitirBoleto = () => {
-    createBoletoMutation.mutate(boletoForm, {
-      onSuccess: () => {
-        toast({
-          title:
-            boletoForm.tipo === "contribuicao"
-              ? "Boleto de Contribuição Assistencial emitido com sucesso"
-              : "Boleto emitido com sucesso",
-          description: `Boleto para ${boletoForm.empresaNome} criado.`,
-        });
-        resetWizard();
-      },
-      onError: (err) => {
-        toast({
-          title: "Falha ao emitir boleto",
-          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
-          variant: "destructive",
-        });
-      },
-    });
+  const handleEmitirBoleto = async () => {
+    const targetEmpresas = isBatchMode
+      ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
+      : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+    try {
+      await Promise.all(
+        targetEmpresas.map((empresa) =>
+          createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
+        ),
+      );
+      toast({
+        title: isBatchMode
+          ? "Boletos em lote emitidos com sucesso"
+          : boletoForm.tipo === "contribuicao"
+            ? "Boleto de Contribuição Assistencial emitido com sucesso"
+            : "Boleto emitido com sucesso",
+        description: isBatchMode ? `${targetEmpresas.length} boleto(s) criado(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
+      });
+      resetWizard();
+    } catch (err) {
+      toast({
+        title: "Falha ao emitir boleto",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    }
   };
 
   const extractChargeId = (id: string) => {
@@ -1365,13 +1390,22 @@ const Financeiro = () => {
                           {filteredBoletos.length} boleto(s) encontrado(s)
                         </p>
                       </div>
-                      <Button 
-                        onClick={() => setWizardOpen(true)}
-                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
-                      >
-                        <Plus className="h-4 w-4 mr-2" />
-                        Criar boleto
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button 
+                          onClick={() => setWizardOpen(true)}
+                          className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Criar boleto
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => { setIsBatchMode(true); setWizardOpen(true); }}
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Criar boleto em lote
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -1483,7 +1517,13 @@ const Financeiro = () => {
                                     <BoletoActionsCell
                                       status={effectiveStatus}
                                       whatsappLink={whatsappLink}
-                                      onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
+                                      onDetails={() => {
+                                        if (boleto.pdfUrl) {
+                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
+                                          return;
+                                        }
+                                        navigate(`/dashboard/financeiro/${boleto.id}`);
+                                      }}
                                       onDownload={() => {
                                         if (boleto.pdfUrl) {
                                           window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
@@ -1510,7 +1550,7 @@ const Financeiro = () => {
                                         setDueDateDialogOpen(true);
                                       }}
                                       onCancel={async () => {
-                                        const chargeId = extractChargeId(boleto.id);
+                                        const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
                                         if (!chargeId) {
                                           toast({
                                             title: "Boleto sem charge_id",
@@ -1920,6 +1960,7 @@ const Financeiro = () => {
 
                     <div className="space-y-3">
                       <Label htmlFor="empresaSearch" className="text-base font-semibold">Empresa*</Label>
+                      {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
                       <div className="relative">
                         <div className="flex items-center gap-2">
                           <Building2 className="h-4 w-4 text-muted-foreground" />
@@ -1940,7 +1981,14 @@ const Financeiro = () => {
                               <div
                                 key={empresa.id}
                                 className="p-3 hover:bg-accent cursor-pointer border-b last:border-b-0"
-                                onClick={() => handleSelectEmpresa(empresa)}
+                                onClick={() => {
+                                  if (isBatchMode) {
+                                    setBatchEmpresaIds((prev) => (prev.includes(empresa.id) ? prev : [...prev, empresa.id]));
+                                    setEmpresaSearch("");
+                                    return;
+                                  }
+                                  handleSelectEmpresa(empresa);
+                                }}
                               >
                                 <div className="font-medium">{empresa.nome}</div>
                                 <div className="text-sm text-muted-foreground">{empresa.cnpj}</div>
@@ -1949,9 +1997,15 @@ const Financeiro = () => {
                           </div>
                         )}
                       </div>
-                      {boletoForm.empresaNome && (
+                      {!isBatchMode && boletoForm.empresaNome && (
                         <div className="text-sm text-muted-foreground">
                           ✓ Empresa selecionada: {boletoForm.empresaNome}
+                        </div>
+                      )}
+                      {isBatchMode && (
+                        <div className="text-sm text-muted-foreground space-y-2">
+                          <div>{batchEmpresaIds.length} empresa(s) selecionada(s).</div>
+                          <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Limpar seleção</Button>
                         </div>
                       )}
                     </div>
