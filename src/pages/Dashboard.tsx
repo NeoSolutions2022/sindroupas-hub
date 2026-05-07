@@ -245,6 +245,7 @@ const Dashboard = () => {
     const boletosInadimplentesCount = boletosNoPeriodo.filter(
       (b) => (b.efi_status || "").trim().toLowerCase() === "inadimplente",
     ).length;
+    const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
     const faturadoPeriodo = boletosNoPeriodo.reduce((acc, b) => {
       const status = normalizeStatus(b.efi_status);
       if (!FATURAMENTO_STATUSES.has(status)) return acc;
