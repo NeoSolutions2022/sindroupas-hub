@@ -79,6 +79,7 @@ type BoletoRow = {
   valor?: number | string | null;
   vencimento?: string | null;
   efi_status?: string | null;
+  descricao?: string | null;
   competencia_inicial?: string | null;
   competencia_final?: string | null;
   faixa_id?: string | null;
@@ -123,6 +124,7 @@ const FINANCEIRO_QUERY = `
       valor
       vencimento
       efi_status
+      descricao
       competencia_inicial
       competencia_final
       faixa_id
@@ -196,6 +198,15 @@ const UPDATE_BOLETO_STATUS_HASURA = `
     update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { efi_status: $efi_status }) {
       id
       efi_status
+    }
+  }
+`;
+
+const UPDATE_BOLETO_DESCRICAO_HASURA = `
+  mutation UpdateBoletoDescricao($id: uuid!, $descricao: String) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { descricao: $descricao }) {
+      id
+      descricao
     }
   }
 `;
@@ -377,6 +388,7 @@ const Financeiro = () => {
         valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
         vencimento: boleto.vencimento ?? "",
         status: normalizeBoletoStatus(boleto.efi_status),
+        descricao: boleto.descricao ?? "",
         competenciaInicial: boleto.competencia_inicial ?? undefined,
         competenciaFinal: boleto.competencia_final ?? undefined,
         faixaId: boleto.faixa_id ?? undefined,
@@ -1316,6 +1328,15 @@ const Financeiro = () => {
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
+  const syncDescricaoInHasura = async (id: string, descricao: string) => {
+    await hasuraRequest({
+      token,
+      query: UPDATE_BOLETO_DESCRICAO_HASURA,
+      variables: { id, descricao: descricao || null },
+    });
+    queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
   useEffect(() => {
     const syncOverdueStatuses = async () => {
       const overdue = boletos.filter((boleto) => {
@@ -1562,6 +1583,13 @@ const Financeiro = () => {
                                         setSelectedBoletoForDueDate(boleto);
                                         setNewDueDate(boleto.vencimento);
                                         setDueDateDialogOpen(true);
+                                      }}
+                                      onDescription={async () => {
+                                        const valorAtual = (boleto as BoletoView & { descricao?: string }).descricao ?? "";
+                                        const descricao = window.prompt("Descrição/observações do boleto:", valorAtual);
+                                        if (descricao === null) return;
+                                        await syncDescricaoInHasura(boleto.id, descricao);
+                                        toast({ title: "Descrição atualizada" });
                                       }}
                                       onCancel={async () => {
                                         const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
@@ -2442,4 +2470,5 @@ export default Financeiro;
   type BoletoView = BoletoRegistro & {
     efiChargeId?: string | null;
     pdfUrl?: string | null;
+    descricao?: string;
   };

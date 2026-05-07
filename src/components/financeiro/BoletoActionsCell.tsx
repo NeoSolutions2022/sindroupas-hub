@@ -21,6 +21,7 @@ interface BoletoActionsCellProps {
   onGenerateNew: () => void;
   onChangeDueDate?: () => void;
   onCancel?: () => void;
+  onDescription?: () => void;
   onWhatsApp?: () => void;
 }
 
@@ -32,9 +33,11 @@ export function BoletoActionsCell({
   onGenerateNew,
   onChangeDueDate,
   onCancel,
+  onDescription,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
   const isPaid = status === "Pago";
+  const isCanceled = status === "Cancelado";
 
   if (isOverdue) {
     return (
@@ -106,9 +109,20 @@ export function BoletoActionsCell({
     );
   }
 
-  // Pendente / Emitida
+  // Pendente / Emitida / Cancelada
   return (
     <div className="flex items-center justify-end gap-1">
+      {isCanceled && (
+        <Button
+          variant="default"
+          size="sm"
+          onClick={onGenerateNew}
+          className="bg-[#00A86B] hover:bg-[#00A86B]/90 text-xs h-8"
+        >
+          <RefreshCw className="h-3.5 w-3.5 mr-1" />
+          Gerar novo
+        </Button>
+      )}
       <Button variant="outline" size="sm" onClick={onDetails} className="h-8 text-xs">
         <Eye className="h-3.5 w-3.5 mr-1" />
         Detalhes
@@ -146,6 +160,7 @@ export function BoletoActionsCell({
               Cancelar boleto
             </DropdownMenuItem>
           )}
+          {onDescription && <DropdownMenuItem onClick={onDescription}>Descrição</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
