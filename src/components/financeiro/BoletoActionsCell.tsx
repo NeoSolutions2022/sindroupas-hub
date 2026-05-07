@@ -19,6 +19,8 @@ interface BoletoActionsCellProps {
   onDetails: () => void;
   onDownload: () => void;
   onGenerateNew: () => void;
+  onChangeDueDate?: () => void;
+  onCancel?: () => void;
   onWhatsApp?: () => void;
 }
 
@@ -28,6 +30,8 @@ export function BoletoActionsCell({
   onDetails,
   onDownload,
   onGenerateNew,
+  onChangeDueDate,
+  onCancel,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
   const isPaid = status === "Pago";
@@ -72,6 +76,16 @@ export function BoletoActionsCell({
               <Eye className="h-4 w-4 mr-2" />
               Detalhes
             </DropdownMenuItem>
+            {onChangeDueDate && (
+              <DropdownMenuItem onClick={onChangeDueDate}>
+                Alterar vencimento
+              </DropdownMenuItem>
+            )}
+            {onCancel && (
+              <DropdownMenuItem onClick={onCancel} className="text-destructive focus:text-destructive">
+                Cancelar boleto
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -120,6 +134,16 @@ export function BoletoActionsCell({
                 <MessageCircle className="h-4 w-4 mr-2" />
                 WhatsApp
               </a>
+            </DropdownMenuItem>
+          )}
+          {onChangeDueDate && (
+            <DropdownMenuItem onClick={onChangeDueDate}>
+              Alterar vencimento
+            </DropdownMenuItem>
+          )}
+          {onCancel && (
+            <DropdownMenuItem onClick={onCancel} className="text-destructive focus:text-destructive">
+              Cancelar boleto
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>

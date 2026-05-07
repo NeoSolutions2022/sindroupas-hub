@@ -52,7 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
-import { createBoletoRequest, CreateBoletoPayload } from "@/lib/api/boletos";
+import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -73,6 +73,8 @@ type EmpresaLookupRow = {
 
 type BoletoRow = {
   id: string;
+  efi_charge_id?: string | null;
+  pdf_url?: string | null;
   tipo?: string | null;
   valor?: number | string | null;
   vencimento?: string | null;
@@ -115,6 +117,8 @@ const FINANCEIRO_QUERY = `
   query FinanceiroPage {
     financeiro_boletos(order_by: { vencimento: desc }) {
       id
+      efi_charge_id
+      pdf_url
       tipo
       valor
       vencimento
@@ -174,6 +178,25 @@ const FINANCEIRO_QUERY = `
       min_colaboradores
       max_colaboradores
       valor_mensalidade
+    }
+  }
+`;
+
+const UPDATE_BOLETO_VENCIMENTO_HASURA = `
+  mutation UpdateBoletoVencimento($id: uuid!, $vencimento: date!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { vencimento: $vencimento }) {
+      id
+      vencimento
+    }
+  }
+`;
+
+const UPDATE_BOLETO_STATUS_HASURA = `
+  mutation UpdateBoletoStatus($id: uuid!, $status: financeiro_boleto_status!, $efi_status: String!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { status: $status, efi_status: $efi_status }) {
+      id
+      status
+      efi_status
     }
   }
 `;
@@ -326,6 +349,9 @@ const Financeiro = () => {
     vencimento: string;
     valor: number;
   } | null>(null);
+  const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
+  const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
+  const [newDueDate, setNewDueDate] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -341,10 +367,12 @@ const Financeiro = () => {
       }),
   });
 
-  const boletos = useMemo<BoletoRegistro[]>(() => {
+  const boletos = useMemo<BoletoView[]>(() => {
     return (
       data?.financeiro_boletos.map((boleto) => ({
         id: boleto.id,
+        efiChargeId: boleto.efi_charge_id ?? null,
+        pdfUrl: boleto.pdf_url ?? null,
         tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
         empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
         valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
@@ -1236,6 +1264,34 @@ const Financeiro = () => {
     });
   };
 
+  const extractChargeId = (id: string) => {
+    const chargeIdFromQuery = data?.financeiro_boletos.find((item) => item.id === id)?.efi_charge_id;
+    if (!chargeIdFromQuery) return null;
+    const parsed = Number(chargeIdFromQuery);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+    return null;
+  };
+
+  const syncDueDateInHasura = async (id: string, vencimento: string) => {
+    await hasuraRequest({
+      token,
+      query: UPDATE_BOLETO_VENCIMENTO_HASURA,
+      variables: { id, vencimento },
+    });
+    queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const syncStatusInHasura = async (id: string, status: "cancelado" | "atrasado" | "emitido" | "pago") => {
+    await hasuraRequest({
+      token,
+      query: UPDATE_BOLETO_STATUS_HASURA,
+      variables: { id, status, efi_status: status },
+    });
+    queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">
@@ -1363,13 +1419,13 @@ const Financeiro = () => {
                                   <TableCell>{boleto.vencimento}</TableCell>
                                   <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
                                   <TableCell>
-                                    <div className="flex items-center gap-3">
-                                      <div className="text-sm">
+                                    <div className="flex items-center justify-between gap-3 w-full">
+                                      <div className="text-sm min-w-0">
                                         <div className="font-medium text-foreground">
                                           {contato?.nome || "Sem contato"}
                                         </div>
                                       </div>
-                                      <div className="flex items-center gap-1">
+                                      <div className="flex items-center gap-1 shrink-0">
                                         {whatsappLink ? (
                                           <Button
                                             variant="ghost"
@@ -1429,9 +1485,14 @@ const Financeiro = () => {
                                       whatsappLink={whatsappLink}
                                       onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
                                       onDownload={() => {
+                                        if (boleto.pdfUrl) {
+                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
+                                          return;
+                                        }
                                         toast({
-                                          title: "Download iniciado (mock)",
-                                          description: `Boleto de ${boleto.empresa} sendo baixado.`,
+                                          title: "PDF indisponível",
+                                          description: "Este boleto não possui pdf_url para download.",
+                                          variant: "destructive",
                                         });
                                       }}
                                       onGenerateNew={() => {
@@ -1442,6 +1503,36 @@ const Financeiro = () => {
                                           valor: boleto.valor,
                                         });
                                         setGerarNovoOpen(true);
+                                      }}
+                                      onChangeDueDate={async () => {
+                                        setSelectedBoletoForDueDate(boleto);
+                                        setNewDueDate(boleto.vencimento);
+                                        setDueDateDialogOpen(true);
+                                      }}
+                                      onCancel={async () => {
+                                        const chargeId = extractChargeId(boleto.id);
+                                        if (!chargeId) {
+                                          toast({
+                                            title: "Boleto sem charge_id",
+                                            description: "Não foi possível identificar charge_id para cancelar.",
+                                            variant: "destructive",
+                                          });
+                                          return;
+                                        }
+                                        try {
+                                          await cancelBoletoRequest(chargeId);
+                                          await syncStatusInHasura(boleto.id, "cancelado");
+                                          toast({
+                                            title: "Boleto cancelado",
+                                            description: `Charge ${chargeId} cancelada com sucesso.`,
+                                          });
+                                        } catch (err) {
+                                          toast({
+                                            title: "Falha ao cancelar boleto",
+                                            description: err instanceof Error ? err.message : "Tente novamente.",
+                                            variant: "destructive",
+                                          });
+                                        }
                                       }}
                                     />
                                   </TableCell>
@@ -1504,6 +1595,52 @@ const Financeiro = () => {
                     setSelectedBoletoForNew(null);
                   }}
                 />
+
+                <Dialog open={dueDateDialogOpen} onOpenChange={setDueDateDialogOpen}>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Alterar vencimento do boleto</DialogTitle>
+                      <DialogDescription>
+                        Ajuste a data de vencimento para {selectedBoletoForDueDate?.empresa}.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2">
+                      <Label>Nova data de vencimento</Label>
+                      <Input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)}>Cancelar</Button>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedBoletoForDueDate || !newDueDate) return;
+                          const chargeId = extractChargeId(selectedBoletoForDueDate.id);
+                          if (!chargeId) {
+                            toast({
+                              title: "Boleto sem charge_id",
+                              description: "Não foi possível identificar charge_id para alterar vencimento.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          try {
+                            await updateBoletoDueDateRequest(chargeId, newDueDate);
+                            await syncDueDateInHasura(selectedBoletoForDueDate.id, newDueDate);
+                            toast({ title: "Vencimento atualizado", description: `Novo vencimento: ${newDueDate}.` });
+                            setDueDateDialogOpen(false);
+                          } catch (err) {
+                            toast({
+                              title: "Falha ao alterar vencimento",
+                              description: err instanceof Error ? err.message : "Tente novamente.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        Salvar
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </TabsContent>
 
               <TabsContent value="contribuicao" className="space-y-6">
@@ -2234,3 +2371,7 @@ const Financeiro = () => {
 };
 
 export default Financeiro;
+  type BoletoView = BoletoRegistro & {
+    efiChargeId?: string | null;
+    pdfUrl?: string | null;
+  };

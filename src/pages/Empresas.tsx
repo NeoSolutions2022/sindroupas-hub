@@ -33,6 +33,9 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import ExcelJS from "exceljs";
 import {
   Calendar,
   ChevronDown,
@@ -52,6 +55,12 @@ const periodoOptions = [
   { value: "associacao", label: "Associação" },
   { value: "desassociacao", label: "Desassociação" },
 ] as const;
+
+const normalizeSearchText = (value?: string | null) =>
+  (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 
 type Responsavel = {
   nome?: string;
@@ -438,13 +447,14 @@ const Empresas = () => {
 
   const filteredEmpresas = useMemo(() => {
     return empresas.filter((empresa) => {
-      const search = searchTerm.trim().toLowerCase();
+      const search = normalizeSearchText(searchTerm.trim());
       const matchesSearch =
         !search ||
-        empresa.razaoSocial.toLowerCase().includes(search) ||
-        empresa.nomeFantasia.toLowerCase().includes(search) ||
+        normalizeSearchText(empresa.razaoSocial).includes(search) ||
+        normalizeSearchText(empresa.nomeFantasia).includes(search) ||
         empresa.cnpj.replace(/\D/g, "").includes(search.replace(/\D/g, "")) ||
-        empresa.colaboradores.some((colaborador) => colaborador.nome.toLowerCase().includes(search));
+        empresa.colaboradores.some((colaborador) => normalizeSearchText(colaborador.nome).includes(search)) ||
+        normalizeSearchText(empresa.responsavel?.nome).includes(search);
 
       const matchesAssociacao =
         associationFilter === "Todas" ||
@@ -478,6 +488,43 @@ const Empresas = () => {
   }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
+
+  const handleExportEmpresas = async (type: "PDF" | "Excel") => {
+    if (type === "PDF") {
+      const doc = new jsPDF();
+      autoTable(doc, {
+        head: [["Empresa", "CNPJ", "Associada", "Situação"]],
+        body: filteredEmpresas.map((empresa) => [
+          empresa.nomeFantasia,
+          empresa.cnpj,
+          empresa.associado ? "Sim" : "Não",
+          empresa.situacaoFinanceira,
+        ]),
+      });
+      doc.save("empresas.pdf");
+      return;
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Empresas");
+    worksheet.addRow(["Empresa", "CNPJ", "Associada", "Situação"]);
+    filteredEmpresas.forEach((empresa) => {
+      worksheet.addRow([
+        empresa.nomeFantasia,
+        empresa.cnpj,
+        empresa.associado ? "Sim" : "Não",
+        empresa.situacaoFinanceira,
+      ]);
+    });
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "empresas.xlsx";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
     setValidationErrors([]);
@@ -696,10 +743,20 @@ const Empresas = () => {
                 <h1 className="text-2xl md:text-3xl font-bold text-[#1C1C1C]">Empresas</h1>
                 <p className="text-sm text-muted-foreground">Gestão de associadas, status financeiro e equipes</p>
               </div>
-              <Button onClick={() => handleOpenDialog()} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90 w-full sm:w-auto" aria-label="Cadastrar nova empresa">
-                <Plus className="mr-2 h-4 w-4" />
-                Cadastrar Empresa
-              </Button>
+              <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => handleExportEmpresas("PDF")}>
+                  <Download className="h-3.5 w-3.5" />
+                  PDF
+                </Button>
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => handleExportEmpresas("Excel")}>
+                  <Download className="h-3.5 w-3.5" />
+                  Excel
+                </Button>
+                <Button onClick={() => handleOpenDialog()} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90 w-full sm:w-auto" aria-label="Cadastrar nova empresa">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Cadastrar Empresa
+                </Button>
+              </div>
             </div>
 
             {isLoading && (
