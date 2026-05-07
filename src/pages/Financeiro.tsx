@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, CalendarIcon } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -1457,13 +1457,14 @@ const Financeiro = () => {
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Descrição</TableHead>
+                            <TableHead>Comunicação</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {filteredBoletos.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                                 Nenhum boleto encontrado com os filtros aplicados.
                               </TableCell>
                             </TableRow>
@@ -1494,6 +1495,32 @@ const Financeiro = () => {
                                     <span className="text-sm text-muted-foreground line-clamp-2">
                                       {(boleto as BoletoView & { descricao?: string }).descricao || "Sem descrição"}
                                     </span>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex items-center gap-1">
+                                      {whatsappLink ? (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                          <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label={`Abrir WhatsApp de ${contato?.nome || boleto.empresa}`}>
+                                            <MessageCircle className="h-4 w-4 text-green-600" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                          <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                                        </Button>
+                                      )}
+                                      {contato?.email ? (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                          <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                            <Mail className="h-4 w-4 text-blue-600" />
+                                          </a>
+                                        </Button>
+                                      ) : (
+                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                          <Mail className="h-4 w-4 text-muted-foreground" />
+                                        </Button>
+                                      )}
+                                    </div>
                                   </TableCell>
                                   <TableCell>
                                     <BoletoActionsCell
