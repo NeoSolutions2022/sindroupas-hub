@@ -219,6 +219,7 @@ interface Faixa {
   min: number;
   max: number;
   valor: number;
+  descricao?: string;
 }
 
 interface BoletoForm {
@@ -549,12 +550,13 @@ const Financeiro = () => {
         min: faixa.min_colaboradores ?? 0,
         max: faixa.max_colaboradores ?? 0,
         valor: faixa.valor_mensalidade !== undefined && faixa.valor_mensalidade !== null ? Number(faixa.valor_mensalidade) : 0,
+        descricao: faixa.label ?? "",
       })) ?? []
     );
   }, [data?.faixas]);
 
   const saveFaixaMutation = useMutation({
-    mutationFn: async (payload: { id?: string; min: number; max: number; valor: number }) => {
+    mutationFn: async (payload: { id?: string; min: number; max: number; valor: number; descricao?: string }) => {
       if (payload.id) {
         await hasuraRequest({
           query: `
@@ -568,6 +570,7 @@ const Financeiro = () => {
               min_colaboradores: payload.min,
               max_colaboradores: payload.max,
               valor_mensalidade: payload.valor,
+              label: payload.descricao ?? null,
             },
           },
           token,
@@ -586,6 +589,7 @@ const Financeiro = () => {
             min_colaboradores: payload.min,
             max_colaboradores: payload.max,
             valor_mensalidade: payload.valor,
+            label: payload.descricao ?? null,
           },
         },
         token,
@@ -619,7 +623,7 @@ const Financeiro = () => {
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
-  const [faixaForm, setFaixaForm] = useState({ min: "", max: "", valor: "" });
+  const [faixaForm, setFaixaForm] = useState({ min: "", max: "", valor: "", descricao: "" });
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -984,32 +988,28 @@ const Financeiro = () => {
         min: faixa.min.toString(),
         max: faixa.max.toString(),
         valor: faixa.valor.toString(),
+        descricao: faixa.descricao ?? "",
       });
     } else {
       setFaixaToEdit(null);
-      setFaixaForm({ min: "", max: "", valor: "" });
+      setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
     }
     setFaixaDialogOpen(true);
   };
 
   const handleSaveFaixa = () => {
-    const min = parseInt(faixaForm.min);
-    const max = parseInt(faixaForm.max);
-    const valor = parseFloat(faixaForm.valor);
-
-    if (isNaN(min) || isNaN(max) || isNaN(valor)) {
-      toast({
-        title: "Erro",
-        description: "Todos os campos são obrigatórios e devem ser números válidos.",
-        variant: "destructive",
-      });
+    if (!faixaForm.descricao.trim()) {
+      toast({ title: "Erro", description: "A descrição da faixa é obrigatória.", variant: "destructive" });
       return;
     }
+    const min = faixaForm.min ? parseInt(faixaForm.min) : 0;
+    const max = faixaForm.max ? parseInt(faixaForm.max) : 0;
+    const valor = parseFloat(faixaForm.valor);
 
-    if (min >= max) {
+    if (isNaN(valor)) {
       toast({
         title: "Erro",
-        description: "O valor mínimo deve ser menor que o máximo.",
+        description: "O valor da faixa é obrigatório.",
         variant: "destructive",
       });
       return;
@@ -1032,7 +1032,7 @@ const Financeiro = () => {
     }
 
     saveFaixaMutation.mutate(
-      { id: faixaToEdit?.id, min, max, valor },
+      { id: faixaToEdit?.id, min, max, valor, descricao: faixaForm.descricao },
       {
         onSuccess: () => {
           toast({
@@ -1042,7 +1042,7 @@ const Financeiro = () => {
               : "A nova faixa foi criada com sucesso.",
           });
           setFaixaDialogOpen(false);
-          setFaixaForm({ min: "", max: "", valor: "" });
+          setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
           setFaixaToEdit(null);
         },
         onError: (err) => {
@@ -1917,12 +1917,21 @@ const Financeiro = () => {
                 <DialogHeader>
                   <DialogTitle>{faixaToEdit ? "Editar Faixa" : "Nova Faixa"}</DialogTitle>
                   <DialogDescription>
-                    Defina o intervalo de funcionários e o valor correspondente.
+                    Defina a descrição da faixa e o valor correspondente.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="minFunc">Descrição (mín colaboradores)</Label>
+                    <Label htmlFor="faixaDescricao">Descrição*</Label>
+                    <Input
+                      id="faixaDescricao"
+                      placeholder="Ex: Faixa Comércio Varejista"
+                      value={faixaForm.descricao}
+                      onChange={(e) => setFaixaForm({ ...faixaForm, descricao: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="minFunc">Mín Funcionários (opcional)</Label>
                     <Input
                       id="minFunc"
                       type="number"
@@ -1932,7 +1941,7 @@ const Financeiro = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="maxFunc">Descrição (máx colaboradores)</Label>
+                    <Label htmlFor="maxFunc">Máx Funcionários (opcional)</Label>
                     <Input
                       id="maxFunc"
                       type="number"
