@@ -242,7 +242,9 @@ const Dashboard = () => {
     const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
     const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
-    const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
+    const boletosInadimplentesCount = boletosNoPeriodo.filter(
+      (b) => (b.efi_status || "").trim().toLowerCase() === "inadimplente",
+    ).length;
     const faturadoPeriodo = boletosNoPeriodo.reduce((acc, b) => {
       const status = normalizeStatus(b.efi_status);
       if (!FATURAMENTO_STATUSES.has(status)) return acc;
@@ -261,7 +263,7 @@ const Dashboard = () => {
     }, 0);
 
     const kpis = {
-      inadimplencia: rows.length ? (empresasInadimplentesCount / rows.length) * 100 : 0,
+      inadimplencia: boletosNoPeriodo.length ? (boletosInadimplentesCount / boletosNoPeriodo.length) * 100 : 0,
       inadimplenciaVariacao: 0,
       totalFaturadoMes: faturadoPeriodo,
       totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
