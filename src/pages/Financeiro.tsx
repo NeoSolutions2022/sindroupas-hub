@@ -192,10 +192,9 @@ const UPDATE_BOLETO_VENCIMENTO_HASURA = `
 `;
 
 const UPDATE_BOLETO_STATUS_HASURA = `
-  mutation UpdateBoletoStatus($id: uuid!, $status: financeiro_boleto_status!, $efi_status: String!) {
-    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { status: $status, efi_status: $efi_status }) {
+  mutation UpdateBoletoStatus($id: uuid!, $efi_status: String!) {
+    update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { efi_status: $efi_status }) {
       id
-      status
       efi_status
     }
   }
@@ -1308,14 +1307,29 @@ const Financeiro = () => {
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
-  const syncStatusInHasura = async (id: string, status: "cancelado" | "atrasado" | "emitido" | "pago") => {
+  const syncStatusInHasura = async (id: string, efiStatus: "cancelado" | "inadimplente" | "emitido" | "pago") => {
     await hasuraRequest({
       token,
       query: UPDATE_BOLETO_STATUS_HASURA,
-      variables: { id, status, efi_status: status },
+      variables: { id, efi_status: efiStatus },
     });
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
+
+  useEffect(() => {
+    const syncOverdueStatuses = async () => {
+      const overdue = boletos.filter((boleto) => {
+        const normalized = normalizeBoletoStatus(boleto.status).toLowerCase();
+        if (["pago", "cancelado", "inadimplente"].includes(normalized)) return false;
+        const due = parseVencimento(boleto.vencimento);
+        return !!(due && isBefore(due, new Date()));
+      });
+      if (overdue.length === 0) return;
+      await Promise.all(overdue.map((boleto) => syncStatusInHasura(boleto.id, "inadimplente")));
+    };
+    void syncOverdueStatuses();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boletos]);
 
   return (
     <SidebarProvider>
