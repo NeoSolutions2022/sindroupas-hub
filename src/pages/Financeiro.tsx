@@ -64,6 +64,7 @@ import { cn } from "@/lib/utils";
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
   whatsapp?: string | null;
@@ -158,6 +159,7 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      qtd_funcionarios
       cnpj
       email
       whatsapp
@@ -436,7 +438,7 @@ const Financeiro = () => {
           id: empresa.id,
           nome: empresa.razao_social,
           cnpj: empresa.cnpj ?? "",
-          qtdFuncionarios: empresa.colaboradores?.length ?? 0,
+          qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
           contatoPrincipal: {
             nome: contato?.nome ?? "",
             whatsapp: contato?.whatsapp ?? "",
@@ -644,6 +646,7 @@ const Financeiro = () => {
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [batchEmpresaIds, setBatchEmpresaIds] = useState<string[]>([]);
+  const [batchFaixaId, setBatchFaixaId] = useState("");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
@@ -1116,6 +1119,12 @@ const Financeiro = () => {
       emp.nome.toLowerCase().includes(empresaSearch.toLowerCase()) ||
       emp.cnpj.includes(empresaSearch)
   );
+  const empresasDaFaixaSelecionada = useMemo(() => {
+    if (!batchFaixaId) return [];
+    const faixa = faixas.find((item) => item.id === batchFaixaId);
+    if (!faixa) return [];
+    return mockEmpresas.filter((emp) => emp.qtdFuncionarios >= faixa.min && emp.qtdFuncionarios <= faixa.max);
+  }, [batchFaixaId, faixas, mockEmpresas]);
 
   const parseCurrencyInput = (value: string) => {
     if (!value) return 0;
@@ -2035,6 +2044,37 @@ const Financeiro = () => {
                     <div className="space-y-3">
                       <Label htmlFor="empresaSearch" className="text-base font-semibold">Empresa*</Label>
                       {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
+                      {isBatchMode && (
+                        <div className="space-y-2 rounded-md border p-3">
+                          <Label>Selecionar faixa para lote</Label>
+                          <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); }}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Escolha uma faixa" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {faixas.map((faixa) => (
+                                <SelectItem key={faixa.id} value={faixa.id}>
+                                  {faixa.min}–{faixa.max} ({faixa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {batchFaixaId && (
+                            <div className="space-y-2 max-h-48 overflow-auto">
+                              {empresasDaFaixaSelecionada.map((empresa) => (
+                                <label key={empresa.id} className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={batchEmpresaIds.includes(empresa.id)}
+                                    onChange={(e) => setBatchEmpresaIds((prev) => e.target.checked ? [...prev, empresa.id] : prev.filter((id) => id !== empresa.id))}
+                                  />
+                                  {empresa.nome} ({empresa.qtdFuncionarios} func.)
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="relative">
                         <div className="flex items-center gap-2">
                           <Building2 className="h-4 w-4 text-muted-foreground" />
