@@ -19,6 +19,7 @@ import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
 import Relacionamentos from "./pages/Relacionamentos";
 import NotFound from "./pages/NotFound";
+import AdminAppUsers from "./pages/AdminAppUsers";
 
 const queryClient = new QueryClient();
 
@@ -103,6 +104,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Atividades />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/dashboard/admin/usuarios"
+              element={
+                <ProtectedRoute>
+                  <AdminAppUsers />
                 </ProtectedRoute>
               }
             />

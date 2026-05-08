@@ -3,13 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
-import { ImpersonationBar } from "@/components/ImpersonationBar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Search, MessageCircle, Phone, BellRing } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { MessageCircle, Phone, BellRing } from "lucide-react";
 import { toast } from "sonner";
 import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
@@ -23,12 +24,14 @@ import { PrioridadesOperacional, PrioridadeOperacional } from "@/components/dash
 import { CalendarioMensal } from "@/components/dashboard/CalendarioMensal";
 import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
 import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
-import { ParticipacaoEventosCard } from "@/components/dashboard/ParticipacaoEventosCard";
 
 type DashboardEmpresaRow = {
   id: string;
   razao_social?: string | null;
   nome_fantasia?: string | null;
+  cnpj?: string | null;
+  endereco?: string | null;
+  associada?: boolean | null;
   whatsapp?: string | null;
   data_fundacao?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
@@ -49,6 +52,9 @@ const DASHBOARD_QUERY = `
       id
       razao_social
       nome_fantasia
+      cnpj
+      endereco
+      associada
       whatsapp
       data_fundacao
       responsaveis {
@@ -82,16 +88,34 @@ const normalizeStatus = (status?: string | null) => {
 };
 
 const FATURAMENTO_STATUSES = new Set(["Pago", "Aguardando", "Cancelado", "Inadimplente"]);
+const MATURIDADE_BUCKETS = [
+  { key: "00 a 05 anos", min: 0, max: 5 },
+  { key: "06 a 10 anos", min: 6, max: 10 },
+  { key: "11 a 20 anos", min: 11, max: 20 },
+  { key: "21 a 99 anos", min: 21, max: 99 },
+];
+
+const normalizeMunicipio = (endereco?: string | null) => {
+  const trimmed = endereco?.trim();
+  if (!trimmed) return null;
+  const parts = trimmed
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const raw = parts[parts.length - 1];
+  if (!raw) return null;
+  return raw.toUpperCase();
+};
 
 const Dashboard = () => {
   const { token } = useAuth();
   const hoje = new Date();
   // State
-  const [searchQuery, setSearchQuery] = useState("");
   const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [aniversarioNoticeOpen, setAniversarioNoticeOpen] = useState(false);
+  const [visibleAniversarios, setVisibleAniversarios] = useState(5);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
   const [formData, setFormData] = useState({
@@ -123,6 +147,7 @@ const Dashboard = () => {
     empresasIncompletas,
     calendarEvents,
     proximosAniversariosEmpresas,
+    dashboardInsights,
   } = useMemo(() => {
     const today = new Date();
     const rows = data?.empresas ?? [];
@@ -217,6 +242,9 @@ const Dashboard = () => {
     const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
     const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
+    const boletosInadimplentesCount = boletosNoPeriodo.filter(
+      (b) => (b.efi_status || "").trim().toLowerCase() === "inadimplente",
+    ).length;
     const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
     const faturadoPeriodo = boletosNoPeriodo.reduce((acc, b) => {
       const status = normalizeStatus(b.efi_status);
@@ -236,7 +264,7 @@ const Dashboard = () => {
     }, 0);
 
     const kpis = {
-      inadimplencia: rows.length ? (empresasInadimplentesCount / rows.length) * 100 : 0,
+      inadimplencia: boletosNoPeriodo.length ? (boletosInadimplentesCount / boletosNoPeriodo.length) * 100 : 0,
       inadimplenciaVariacao: 0,
       totalFaturadoMes: faturadoPeriodo,
       totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
@@ -271,6 +299,7 @@ const Dashboard = () => {
         return {
           id: empresa.id,
           nome: empresa.nome,
+          responsavelNome: empresa.responsavelNome,
           data: proximoAniversario,
           anos,
           mesesParaEvento,
@@ -300,6 +329,32 @@ const Dashboard = () => {
       })),
     ];
 
+    const quantidadeAssociados = rows.filter((empresa) => empresa.associada === true).length;
+
+    const maturidadeDistribuicao = MATURIDADE_BUCKETS.map((bucket) => {
+      const quantidade = rows.filter((empresa) => {
+        if (!empresa.data_fundacao) return false;
+        const fundacao = parseISO(empresa.data_fundacao);
+        if (Number.isNaN(fundacao.getTime())) return false;
+        const anos = Math.max(0, differenceInDays(today, fundacao) / 365.25);
+        return anos >= bucket.min && anos <= bucket.max;
+      }).length;
+
+      return { label: bucket.key, quantidade };
+    });
+
+    const municipioRanking = rows.reduce<Record<string, number>>((acc, empresa) => {
+      const municipio = normalizeMunicipio(empresa.endereco);
+      if (!municipio) return acc;
+      acc[municipio] = (acc[municipio] || 0) + 1;
+      return acc;
+    }, {});
+
+    const municipiosTop = Object.entries(municipioRanking)
+      .map(([municipio, total]) => ({ municipio, total }))
+      .sort((a, b) => b.total - a.total || a.municipio.localeCompare(b.municipio))
+      .slice(0, 9);
+
     return {
       empresas: empresasMapeadas,
       prioridadesOperacionais: prioridades,
@@ -312,16 +367,31 @@ const Dashboard = () => {
       empresasIncompletas: incompletas,
       calendarEvents: events,
       proximosAniversariosEmpresas: proximosTresMeses,
+      dashboardInsights: {
+        quantidadeAssociados,
+        maturidadeDistribuicao,
+        municipiosTop,
+      },
     };
   }, [data, periodoFim, periodoInicio]);
 
   const aniversarioNotificacao = useMemo(() => {
     const proximo = proximosAniversariosEmpresas[0];
     if (!proximo) return null;
+    const nomeNotificacao = proximo.responsavelNome || proximo.nome;
     if (proximo.mesesParaEvento <= 1) {
-      return `Ei, o dono da empresa ${proximo.nome} faz aniversário no próximo mês!`;
+      return `Ei, o dono da empresa ${nomeNotificacao} faz aniversário no próximo mês!`;
     }
     return `Ei, a empresa ${proximo.nome} vai fazer ${proximo.anos} anos daqui a dois meses!`;
+  }, [proximosAniversariosEmpresas]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const base = proximosAniversariosEmpresas
+      .slice(0, 5)
+      .map((item) => `Ei, o dono da empresa ${item.responsavelNome || item.nome} faz aniversário no próximo mês!`);
+    window.localStorage.setItem("sindroupas_dashboard_notifications", JSON.stringify(base));
+    window.dispatchEvent(new Event("dashboard-notifications-updated"));
   }, [proximosAniversariosEmpresas]);
 
   // Auto-focus on the missing field when modal opens
@@ -338,17 +408,6 @@ const Dashboard = () => {
       }, 100);
     }
   }, [editingEmpresa, focusField]);
-
-  // Filtered priorities based on search
-  const prioridadesFiltradas = useMemo(() => {
-    if (!searchQuery) return prioridadesOperacionais;
-    const query = searchQuery.toLowerCase();
-    return prioridadesOperacionais.filter(
-      (p) =>
-        p.nome.toLowerCase().includes(query) ||
-        p.contexto.toLowerCase().includes(query)
-    );
-  }, [prioridadesOperacionais, searchQuery]);
 
   // Find empresa for details modal
   const selectedEmpresa = useMemo(() => {
@@ -387,7 +446,6 @@ const Dashboard = () => {
         <AppSidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <DashboardNavbar />
-          <ImpersonationBar />
           <main className="flex-1 overflow-auto">
             <div className="p-4 md:p-6 space-y-5 max-w-[1400px] mx-auto w-full">
               
@@ -402,17 +460,6 @@ const Dashboard = () => {
                   </p>
                 </div>
                 <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                    <Input
-                      type="search"
-                      placeholder="Buscar empresa..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 h-9 bg-card border-border text-sm"
-                      aria-label="Buscar empresa ou responsável"
-                    />
-                  </div>
                   <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
                     <Input
                       type="date"
@@ -443,6 +490,30 @@ const Dashboard = () => {
                 </div>
               </header>
 
+            {aniversarioNotificacao && (
+              <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <BellRing className="h-5 w-5 text-accent mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-foreground">{aniversarioNotificacao}</p>
+                      <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setVisibleAniversarios(5);
+                      setAniversarioNoticeOpen(true);
+                    }}
+                  >
+                    Ver detalhes
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* B) KPIs - Nova versão */}
             <NovasKPIs
               inadimplencia={dashboardKPIs.inadimplencia}
@@ -455,34 +526,94 @@ const Dashboard = () => {
               proximosVencimentos={dashboardKPIs.proximosVencimentos15d}
             />
 
-            {/* KPI extra: Participação em eventos */}
-            <ParticipacaoEventosCard month={new Date().getMonth()} year={new Date().getFullYear()} />
+            {/* KPIs consultivos */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                    Quantidade de associados
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-3xl font-bold">{dashboardInsights.quantidadeAssociados}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Total de empresas associadas na base atual.
+                  </p>
+                </CardContent>
+              </Card>
 
-            {aniversarioNotificacao && (
-              <div className="rounded-xl border border-accent/30 bg-accent/5 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-start gap-3">
-                    <BellRing className="h-5 w-5 text-accent mt-0.5" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-foreground">{aniversarioNotificacao}</p>
-                      <p className="text-xs text-muted-foreground">Com base nas próximas datas de fundação das empresas.</p>
-                    </div>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                    Distribuição por maturidade
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-end min-h-[150px]">
+                    {dashboardInsights.maturidadeDistribuicao.map((item) => {
+                      const max = Math.max(...dashboardInsights.maturidadeDistribuicao.map((entry) => entry.quantidade), 1);
+                      const height = Math.max(10, Math.round((item.quantidade / max) * 100));
+                      return (
+                        <div key={item.label} className="flex flex-col items-center gap-2">
+                          <span className="text-xs font-semibold">{item.quantidade}</span>
+                          <div className="w-16 rounded-t-md bg-primary" style={{ height: `${height}px` }} />
+                          <span className="text-[11px] text-center text-muted-foreground leading-tight">{item.label}</span>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => setAniversarioNoticeOpen(true)}>
-                    Ver detalhes
-                  </Button>
-                </div>
-              </div>
-            )}
+                </CardContent>
+              </Card>
+            </div>
 
             {/* C) Split: Prioridades (left) + Calendário (right) */}
             <div className="grid gap-6 lg:grid-cols-2">
               <PrioridadesOperacional
-                prioridades={prioridadesFiltradas}
+                prioridades={prioridadesOperacionais}
                 onVerDetalhes={(id) => setSelectedEmpresaId(id)}
                 onAcaoPrimaria={handleAcaoPrimaria}
               />
-              <CalendarioMensal events={calendarEvents} />
+              <div className="space-y-6">
+                <CalendarioMensal events={calendarEvents} />
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                      Top municípios
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-8">#</TableHead>
+                          <TableHead>Município</TableHead>
+                          <TableHead className="text-right">Empresas</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {dashboardInsights.municipiosTop.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={3} className="text-xs text-muted-foreground">
+                              Sem dados.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          dashboardInsights.municipiosTop.slice(0, 6).map((item, index) => (
+                            <TableRow key={item.municipio}>
+                              <TableCell className="text-xs">{index + 1}</TableCell>
+                              <TableCell className="text-xs">{item.municipio}</TableCell>
+                              <TableCell className="text-right text-xs">{item.total}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      Formato recomendado do endereço: Rua, Número, Bairro, Município.
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
 
             {/* D) Resumo da Carteira + E) Empresas Incompletas */}
@@ -645,17 +776,27 @@ const Dashboard = () => {
                   {proximosAniversariosEmpresas.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Nenhum aniversário de empresa encontrado para os próximos 3 meses.</p>
                   ) : (
-                    proximosAniversariosEmpresas.map((item) => (
-                      <div key={`aniversario-${item.id}-${format(item.data, "yyyy-MM-dd")}`} className="rounded-md border p-3">
-                        <p className="text-sm font-medium">{item.nome}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {format(item.data, "dd/MM/yyyy")} • {item.anos} ano(s)
-                        </p>
-                      </div>
-                    ))
+                    <div className="max-h-72 overflow-y-auto pr-1 space-y-3">
+                      {proximosAniversariosEmpresas.slice(0, visibleAniversarios).map((item) => (
+                        <div key={`aniversario-${item.id}-${format(item.data, "yyyy-MM-dd")}`} className="rounded-md border p-3">
+                          <p className="text-sm font-medium">{item.responsavelNome || item.nome}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {format(item.data, "dd/MM/yyyy")} • {item.anos} ano(s)
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
                 <DialogFooter>
+                  {visibleAniversarios < proximosAniversariosEmpresas.length && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => setVisibleAniversarios((prev) => prev + 5)}
+                    >
+                      Ver mais
+                    </Button>
+                  )}
                   <Button variant="outline" onClick={() => setAniversarioNoticeOpen(false)}>
                     Fechar
                   </Button>

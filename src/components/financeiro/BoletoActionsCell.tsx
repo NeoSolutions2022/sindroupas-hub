@@ -19,6 +19,9 @@ interface BoletoActionsCellProps {
   onDetails: () => void;
   onDownload: () => void;
   onGenerateNew: () => void;
+  onChangeDueDate?: () => void;
+  onCancel?: () => void;
+  onDescription?: () => void;
   onWhatsApp?: () => void;
 }
 
@@ -28,9 +31,13 @@ export function BoletoActionsCell({
   onDetails,
   onDownload,
   onGenerateNew,
+  onChangeDueDate,
+  onCancel,
+  onDescription,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
   const isPaid = status === "Pago";
+  const isCanceled = status === "Cancelado";
 
   if (isOverdue) {
     return (
@@ -72,6 +79,16 @@ export function BoletoActionsCell({
               <Eye className="h-4 w-4 mr-2" />
               Detalhes
             </DropdownMenuItem>
+            {onChangeDueDate && (
+              <DropdownMenuItem onClick={onChangeDueDate}>
+                Alterar vencimento
+              </DropdownMenuItem>
+            )}
+            {onCancel && (
+              <DropdownMenuItem onClick={onCancel} className="text-destructive focus:text-destructive">
+                Cancelar boleto
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -92,9 +109,20 @@ export function BoletoActionsCell({
     );
   }
 
-  // Pendente / Emitida
+  // Pendente / Emitida / Cancelada
   return (
     <div className="flex items-center justify-end gap-1">
+      {isCanceled && (
+        <Button
+          variant="default"
+          size="sm"
+          onClick={onGenerateNew}
+          className="bg-[#00A86B] hover:bg-[#00A86B]/90 text-xs h-8"
+        >
+          <RefreshCw className="h-3.5 w-3.5 mr-1" />
+          Gerar novo
+        </Button>
+      )}
       <Button variant="outline" size="sm" onClick={onDetails} className="h-8 text-xs">
         <Eye className="h-3.5 w-3.5 mr-1" />
         Detalhes
@@ -122,6 +150,17 @@ export function BoletoActionsCell({
               </a>
             </DropdownMenuItem>
           )}
+          {onChangeDueDate && (
+            <DropdownMenuItem onClick={onChangeDueDate}>
+              Alterar vencimento
+            </DropdownMenuItem>
+          )}
+          {onCancel && (
+            <DropdownMenuItem onClick={onCancel} className="text-destructive focus:text-destructive">
+              Cancelar boleto
+            </DropdownMenuItem>
+          )}
+          {onDescription && <DropdownMenuItem onClick={onDescription}>Descrição</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
