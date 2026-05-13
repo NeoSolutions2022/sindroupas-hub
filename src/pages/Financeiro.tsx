@@ -64,6 +64,7 @@ import { cn } from "@/lib/utils";
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
@@ -159,6 +160,7 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      observacoes
       qtd_funcionarios
       cnpj
       email
@@ -191,6 +193,7 @@ const EMPRESAS_POR_FAIXA_QUERY = `
     empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
       id
       razao_social
+      observacoes
       cnpj
       qtd_funcionarios
       email
@@ -1456,6 +1459,24 @@ const Financeiro = () => {
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
+  const appendObservacaoEmpresa = async (empresaNome: string, comentario: string) => {
+    const empresa = data?.empresas.find((item) => item.razao_social === empresaNome);
+    if (!empresa || !comentario.trim()) return;
+    const stamp = format(new Date(), "dd/MM/yyyy HH:mm");
+    const historicoAtual = (empresa.observacoes ?? "").trim();
+    const novoHistorico = [`[${stamp}] ${comentario.trim()}`, historicoAtual].filter(Boolean).join("\n---\n");
+    await hasuraRequest({
+      query: `
+        mutation UpdateEmpresaObservacoes($id: uuid!, $observacoes: String) {
+          update_empresas_by_pk(pk_columns: { id: $id }, _set: { observacoes: $observacoes }) { id }
+        }
+      `,
+      variables: { id: empresa.id, observacoes: novoHistorico },
+      token,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
   useEffect(() => {
     const syncOverdueStatuses = async () => {
       const overdue = boletos.filter((boleto) => {
@@ -1824,6 +1845,10 @@ const Financeiro = () => {
                           try {
                             setIsSavingDescription(true);
                             await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForDescription.empresa,
+                              `Boleto (${selectedBoletoForDescription.id}): ${descriptionDraft}`,
+                            );
                             toast({ title: "Descrição atualizada" });
                             setDescriptionDialogOpen(false);
                           } finally {
@@ -1865,6 +1890,10 @@ const Financeiro = () => {
                             await cancelBoletoRequest(chargeId);
                             await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
                             await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForCancel.empresa,
+                              `Cancelamento de boleto (${selectedBoletoForCancel.id}): ${cancelReason}`,
+                            );
                             if (cancelAndRegenerate) {
                               setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
                               setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
@@ -2187,6 +2216,16 @@ const Financeiro = () => {
                           </Select>
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
+                                >
+                                  Selecionar todas
+                                </Button>
+                              )}
                               {isLoadingEmpresasPorFaixa && (
                                 <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
                               )}

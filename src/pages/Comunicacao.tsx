@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -33,6 +34,8 @@ import {
 } from "@/components/ui/select";
 import { Plus, Mail, MessageCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
 
 type NotificacaoStatus = "enviado" | "entregue" | "lido";
 
@@ -65,7 +68,10 @@ const mockNotificacoesInicial: Notificacao[] = [
 ];
 
 const Comunicacao = () => {
+  const { token } = useAuth();
   const [notificacoes, setNotificacoes] = useState<Notificacao[]>(mockNotificacoesInicial);
+  const [empresaFiltroObs, setEmpresaFiltroObs] = useState("");
+  const [novaObservacaoByEmpresa, setNovaObservacaoByEmpresa] = useState<Record<string, string>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [novaNotificacao, setNovaNotificacao] = useState({
     empresa: "",
@@ -74,6 +80,22 @@ const Comunicacao = () => {
     linkFormulario: "",
   });
   const { toast } = useToast();
+  const { data: empresasData, refetch: refetchEmpresas } = useQuery({
+    queryKey: ["comunicacao-empresas-observacoes"],
+    queryFn: () =>
+      hasuraRequest<{ empresas: { id: string; razao_social: string; observacoes?: string | null }[] }>({
+        query: `
+          query ComunicacaoEmpresas {
+            empresas(order_by: { razao_social: asc }) {
+              id
+              razao_social
+              observacoes
+            }
+          }
+        `,
+        token,
+      }),
+  });
 
   const handleEnviarNotificacao = () => {
     if (!novaNotificacao.empresa || !novaNotificacao.mensagem) {
@@ -141,6 +163,31 @@ const Comunicacao = () => {
     ) : (
       <Mail className="h-4 w-4" />
     );
+  };
+
+  const empresasFiltradasObs = (empresasData?.empresas ?? []).filter((empresa) =>
+    empresa.razao_social.toLowerCase().includes(empresaFiltroObs.toLowerCase()),
+  );
+
+  const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null) => {
+    const novaObservacao = (novaObservacaoByEmpresa[empresaId] ?? "").trim();
+    if (!novaObservacao) return;
+    const stamp = new Date().toLocaleString("pt-BR");
+    const novoHistorico = [`[${stamp}] ${novaObservacao.trim()}`, (observacoesAtuais ?? "").trim()]
+      .filter(Boolean)
+      .join("\n---\n");
+    await hasuraRequest({
+      query: `
+        mutation AtualizarObservacoesEmpresa($id: uuid!, $observacoes: String) {
+          update_empresas_by_pk(pk_columns: { id: $id }, _set: { observacoes: $observacoes }) { id }
+        }
+      `,
+      variables: { id: empresaId, observacoes: novoHistorico },
+      token,
+    });
+    setNovaObservacaoByEmpresa((prev) => ({ ...prev, [empresaId]: "" }));
+    await refetchEmpresas();
+    toast({ title: "Observação adicionada" });
   };
 
   return (
@@ -260,6 +307,47 @@ const Comunicacao = () => {
                         </TableCell>
                         <TableCell className="max-w-xs truncate">{notificacao.mensagem}</TableCell>
                         <TableCell>{getStatusBadge(notificacao.status)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Histórico de Contato por Empresa</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Input
+                  placeholder="Filtrar empresa..."
+                  value={empresaFiltroObs}
+                  onChange={(e) => setEmpresaFiltroObs(e.target.value)}
+                />
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Empresa</TableHead>
+                      <TableHead>Observações (Histórico)</TableHead>
+                      <TableHead>Nova observação</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {empresasFiltradasObs.map((empresa) => (
+                      <TableRow key={empresa.id}>
+                        <TableCell className="font-medium">{empresa.razao_social}</TableCell>
+                        <TableCell className="whitespace-pre-wrap text-sm">{empresa.observacoes || "-"}</TableCell>
+                        <TableCell className="space-y-2 min-w-[280px]">
+                          <Textarea
+                            value={novaObservacaoByEmpresa[empresa.id] ?? ""}
+                            onChange={(e) => setNovaObservacaoByEmpresa((prev) => ({ ...prev, [empresa.id]: e.target.value }))}
+                            placeholder="Adicionar nova entrada no histórico..."
+                            rows={3}
+                          />
+                          <Button size="sm" onClick={() => handleAdicionarObservacao(empresa.id, empresa.observacoes)}>
+                            Adicionar
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
