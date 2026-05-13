@@ -923,11 +923,11 @@ export default function Relacionamentos() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateModalOpen(false)}>
+            <Button variant="outline" onClick={() => setIsCreateModalOpen(false)} disabled={saveRelacionamentoMutation.isPending}>
               Cancelar
             </Button>
-            <Button onClick={handleCreate} disabled={!formNome || !formStatus}>
-              Salvar
+            <Button onClick={handleCreate} disabled={!formNome || !formStatus || saveRelacionamentoMutation.isPending}>
+              {saveRelacionamentoMutation.isPending ? "Salvando..." : "Salvar"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -947,8 +947,9 @@ export default function Relacionamentos() {
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteRelacionamentoMutation.isPending}
             >
-              Excluir
+              {deleteRelacionamentoMutation.isPending ? "Excluindo..." : "Excluir"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

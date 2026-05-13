@@ -1606,12 +1606,12 @@ const Empresas = () => {
                   </div>
 
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={handleCloseDialog}>
+                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending}>
                       Cancelar
                     </Button>
                     {!isViewMode && (
-                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90">
-                        Salvar
+                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending}>
+                        {saveEmpresaMutation.isPending ? "Salvando..." : "Salvar"}
                       </Button>
                     )}
                   </div>
@@ -1634,8 +1634,8 @@ const Empresas = () => {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
-                    Excluir
+                  <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700" disabled={deleteEmpresaMutation.isPending}>
+                    {deleteEmpresaMutation.isPending ? "Excluindo..." : "Excluir"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

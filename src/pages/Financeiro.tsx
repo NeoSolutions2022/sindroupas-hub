@@ -50,7 +50,7 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
@@ -240,6 +240,7 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  valorOverride?: number;
 }
 
 type ContactCandidate = {
@@ -363,16 +364,20 @@ const Financeiro = () => {
     valor: number;
   } | null>(null);
   const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
+  const [isUpdatingDueDate, setIsUpdatingDueDate] = useState(false);
   const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
   const [newDueDate, setNewDueDate] = useState("");
   const [descriptionDialogOpen, setDescriptionDialogOpen] = useState(false);
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
   const [selectedBoletoForDescription, setSelectedBoletoForDescription] = useState<BoletoView | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [isCancellingBoleto, setIsCancellingBoleto] = useState(false);
   const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
+  const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -466,7 +471,9 @@ const Financeiro = () => {
         throw new Error("Empresa sem CNPJ. O endpoint de boletos exige cliente PJ com CNPJ ou PF com CPF.");
       }
 
-      const valorBoleto = payload.tipo === "contribuicao" ? payload.valorCalculado : previaBoleto ?? 0;
+      const valorBoleto = payload.tipo === "contribuicao"
+        ? payload.valorCalculado
+        : payload.valorOverride ?? previaBoleto ?? 0;
       if (valorBoleto <= 0) {
         throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
       }
@@ -1294,12 +1301,62 @@ const Financeiro = () => {
     const targetEmpresas = isBatchMode
       ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
       : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+    const buildCompetencias = (inicio: string, fim: string) => {
+      const start = startOfMonth(parseISO(inicio));
+      const end = startOfMonth(parseISO(fim));
+      if (!isValid(start) || !isValid(end) || isAfter(start, end)) return [] as string[];
+      const competencias: string[] = [];
+      let cursor = start;
+      while (!isAfter(cursor, end)) {
+        competencias.push(format(cursor, "yyyy-MM-dd"));
+        cursor = addMonths(cursor, 1);
+      }
+      return competencias;
+    };
+
     try {
-      await Promise.all(
-        targetEmpresas.map((empresa) =>
-          createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
-        ),
-      );
+      setIsEmittingBoletos(true);
+      if (boletoForm.tipo === "mensalidade") {
+        const competencias = buildCompetencias(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+        if (competencias.length === 0) {
+          throw new Error("Competências inválidas. Verifique as datas inicial e final.");
+        }
+
+        if (boletoForm.unificarCompetencias === "Sim") {
+          const valorUnificado = (previaBoleto ?? 0) * competencias.length;
+          await Promise.all(
+            targetEmpresas.map((empresa) =>
+              createBoletoMutation.mutateAsync({
+                ...boletoForm,
+                empresaId: empresa.id,
+                empresaNome: empresa.nome,
+                valorOverride: valorUnificado,
+              }),
+            ),
+          );
+        } else {
+          await Promise.all(
+            targetEmpresas.flatMap((empresa) =>
+              competencias.map((competencia) =>
+                createBoletoMutation.mutateAsync({
+                  ...boletoForm,
+                  empresaId: empresa.id,
+                  empresaNome: empresa.nome,
+                  competenciaInicial: competencia,
+                  competenciaFinal: competencia,
+                  valorOverride: previaBoleto ?? 0,
+                }),
+              ),
+            ),
+          );
+        }
+      } else {
+        await Promise.all(
+          targetEmpresas.map((empresa) =>
+            createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
+          ),
+        );
+      }
       toast({
         title: isBatchMode
           ? "Boletos em lote emitidos com sucesso"
@@ -1315,6 +1372,8 @@ const Financeiro = () => {
         description: err instanceof Error ? err.message : "Tente novamente em instantes.",
         variant: "destructive",
       });
+    } finally {
+      setIsEmittingBoletos(false);
     }
   };
 
@@ -1663,8 +1722,9 @@ const Financeiro = () => {
                       <Input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)} disabled={isUpdatingDueDate}>Cancelar</Button>
                       <Button
+                        disabled={isUpdatingDueDate}
                         onClick={async () => {
                           if (!selectedBoletoForDueDate || !newDueDate) return;
                           const chargeId = extractChargeId(selectedBoletoForDueDate.id);
@@ -1677,6 +1737,7 @@ const Financeiro = () => {
                             return;
                           }
                           try {
+                            setIsUpdatingDueDate(true);
                             await updateBoletoDueDateRequest(chargeId, newDueDate);
                             await syncDueDateInHasura(selectedBoletoForDueDate.id, newDueDate);
                             toast({ title: "Vencimento atualizado", description: `Novo vencimento: ${newDueDate}.` });
@@ -1687,10 +1748,12 @@ const Financeiro = () => {
                               description: err instanceof Error ? err.message : "Tente novamente.",
                               variant: "destructive",
                             });
+                          } finally {
+                            setIsUpdatingDueDate(false);
                           }
                         }}
                       >
-                        Salvar
+                        {isUpdatingDueDate ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1711,16 +1774,22 @@ const Financeiro = () => {
                       placeholder="Escreva observações sobre este boleto..."
                     />
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)} disabled={isSavingDescription}>Cancelar</Button>
                       <Button
+                        disabled={isSavingDescription}
                         onClick={async () => {
                           if (!selectedBoletoForDescription) return;
-                          await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
-                          toast({ title: "Descrição atualizada" });
-                          setDescriptionDialogOpen(false);
+                          try {
+                            setIsSavingDescription(true);
+                            await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
+                            toast({ title: "Descrição atualizada" });
+                            setDescriptionDialogOpen(false);
+                          } finally {
+                            setIsSavingDescription(false);
+                          }
                         }}
                       >
-                        Salvar
+                        {isSavingDescription ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1738,8 +1807,9 @@ const Financeiro = () => {
                       Gerar novo boleto após cancelar
                     </label>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>Voltar</Button>
+                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={isCancellingBoleto}>Voltar</Button>
                       <Button
+                        disabled={isCancellingBoleto}
                         onClick={async () => {
                           if (!selectedBoletoForCancel) return;
                           if (!cancelReason.trim()) {
@@ -1748,18 +1818,23 @@ const Financeiro = () => {
                           }
                           const chargeId = selectedBoletoForCancel.efiChargeId ? Number(selectedBoletoForCancel.efiChargeId) : extractChargeId(selectedBoletoForCancel.id);
                           if (!chargeId) return;
-                          await cancelBoletoRequest(chargeId);
-                          await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
-                          await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
-                          if (cancelAndRegenerate) {
-                            setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
-                            setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
-                            setGerarNovoOpen(true);
+                          try {
+                            setIsCancellingBoleto(true);
+                            await cancelBoletoRequest(chargeId);
+                            await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
+                            await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
+                            if (cancelAndRegenerate) {
+                              setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
+                              setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
+                              setGerarNovoOpen(true);
+                            }
+                            setCancelDialogOpen(false);
+                          } finally {
+                            setIsCancellingBoleto(false);
                           }
-                          setCancelDialogOpen(false);
                         }}
                       >
-                        Confirmar cancelamento
+                        {isCancellingBoleto ? "Cancelando..." : "Confirmar cancelamento"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -2531,8 +2606,8 @@ const Financeiro = () => {
                         Próximo
                       </Button>
                     ) : (
-                      <Button onClick={handleEmitirBoleto} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                        Emitir
+                      <Button onClick={handleEmitirBoleto} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
                       </Button>
                     )}
                   </div>
