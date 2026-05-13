@@ -186,6 +186,31 @@ const FINANCEIRO_QUERY = `
   }
 `;
 
+const EMPRESAS_POR_FAIXA_QUERY = `
+  query EmpresasPorFaixa($faixaId: uuid!) {
+    empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
+      id
+      razao_social
+      cnpj
+      qtd_funcionarios
+      email
+      whatsapp
+      responsaveis {
+        id
+        nome
+        whatsapp
+        email
+      }
+      colaboradores {
+        id
+        nome
+        whatsapp
+        email
+      }
+    }
+  }
+`;
+
 const UPDATE_BOLETO_VENCIMENTO_HASURA = `
   mutation UpdateBoletoVencimento($id: uuid!, $vencimento: date!) {
     update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { vencimento: $vencimento }) {
@@ -662,6 +687,17 @@ const Financeiro = () => {
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
 
+  const { data: empresasPorFaixaData, isLoading: isLoadingEmpresasPorFaixa } = useQuery({
+    queryKey: ["empresas-por-faixa", batchFaixaId],
+    enabled: isBatchMode && !!batchFaixaId,
+    queryFn: () =>
+      hasuraRequest<{ empresas: EmpresaLookupRow[] }>({
+        query: EMPRESAS_POR_FAIXA_QUERY,
+        variables: { faixaId: batchFaixaId },
+        token,
+      }),
+  });
+
   useEffect(() => {
     const savedBatch = localStorage.getItem("financeiro:lote-empresas");
     if (savedBatch) {
@@ -1128,10 +1164,16 @@ const Financeiro = () => {
   );
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
-    const faixa = faixas.find((item) => item.id === batchFaixaId);
-    if (!faixa) return [];
-    return mockEmpresas.filter((emp) => emp.qtdFuncionarios >= faixa.min && emp.qtdFuncionarios <= faixa.max);
-  }, [batchFaixaId, faixas, mockEmpresas]);
+    return (
+      empresasPorFaixaData?.empresas.map((empresa) => ({
+        id: empresa.id,
+        nome: empresa.razao_social,
+        cnpj: empresa.cnpj ?? "",
+        qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
+        contatoPrincipal: chooseBoletoContact(empresa),
+      })) ?? []
+    );
+  }, [batchFaixaId, empresasPorFaixaData?.empresas]);
 
   const parseCurrencyInput = (value: string) => {
     if (!value) return 0;
@@ -2145,7 +2187,13 @@ const Financeiro = () => {
                           </Select>
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
-                              {empresasDaFaixaSelecionada.map((empresa) => (
+                              {isLoadingEmpresasPorFaixa && (
+                                <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length === 0 && (
+                                <p className="text-sm text-muted-foreground">Nenhuma empresa encontrada para a faixa selecionada.</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.map((empresa) => (
                                 <label key={empresa.id} className="flex items-center gap-2 text-sm">
                                   <input
                                     type="checkbox"
