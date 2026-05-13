@@ -55,6 +55,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
 type StatusParceiro = "Ativo" | "Em avaliação" | "Encerrado";
@@ -148,6 +149,8 @@ export default function Relacionamentos() {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(50);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [formTipo, setFormTipo] = useState<TipoRelacionamento>("Parceiro");
@@ -331,6 +334,11 @@ export default function Relacionamentos() {
     setFormContrapartidas("");
     setFormObservacoes("");
   };
+
+  const paginatedRelacionamentos = useMemo(() => {
+    const start = (tablePage - 1) * tablePageSize;
+    return filteredRelacionamentos.slice(start, start + tablePageSize);
+  }, [filteredRelacionamentos, tablePage, tablePageSize]);
 
   const handleCreate = () => {
     saveRelacionamentoMutation.mutate(
@@ -545,7 +553,7 @@ export default function Relacionamentos() {
                       Nenhum relacionamento encontrado
                     </Card>
                   ) : (
-                    filteredRelacionamentos.map((r) => (
+                    paginatedRelacionamentos.map((r) => (
                       <Card key={r.id} className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
@@ -646,7 +654,7 @@ export default function Relacionamentos() {
                             </TableCell>
                           </TableRow>
                         ) : (
-                          filteredRelacionamentos.map((r) => (
+                          paginatedRelacionamentos.map((r) => (
                             <TableRow key={r.id}>
                               <TableCell>
                                 <Badge variant={getTipoBadgeVariant(r.tipo)}>{r.tipo}</Badge>
@@ -748,6 +756,7 @@ export default function Relacionamentos() {
                         )}
                       </TableBody>
                       </Table>
+                      <TablePagination page={tablePage} pageSize={tablePageSize} total={filteredRelacionamentos.length} onPageChange={setTablePage} onPageSizeChange={(size) => { setTablePageSize(size); setTablePage(1); }} />
                     </div>
                   </TooltipProvider>
                 </Card>

@@ -31,6 +31,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
@@ -242,6 +243,8 @@ const Empresas = () => {
   const [periodoTipo, setPeriodoTipo] = useState<typeof periodoOptions[number]["value"]>("fundacao");
   const [periodoInicio, setPeriodoInicio] = useState("");
   const [periodoFim, setPeriodoFim] = useState("");
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(50);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
@@ -494,6 +497,10 @@ const Empresas = () => {
   }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
+  const paginatedEmpresas = useMemo(() => {
+    const start = (tablePage - 1) * tablePageSize;
+    return filteredEmpresas.slice(start, start + tablePageSize);
+  }, [filteredEmpresas, tablePage, tablePageSize]);
 
   const handleExportEmpresas = async (type: "PDF" | "Excel") => {
     if (type === "PDF") {
@@ -1090,7 +1097,7 @@ const Empresas = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredEmpresas.map((empresa) => {
+                        {paginatedEmpresas.map((empresa) => {
                           const contato = getContatoPrincipal(empresa);
                           return (
                             <TableRow

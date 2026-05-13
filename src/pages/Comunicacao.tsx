@@ -36,6 +36,7 @@ import { Plus, Mail, MessageCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 type NotificacaoStatus = "enviado" | "entregue" | "lido";
 
@@ -73,6 +74,10 @@ const Comunicacao = () => {
   const [empresaFiltroObs, setEmpresaFiltroObs] = useState("");
   const [novaObservacaoByEmpresa, setNovaObservacaoByEmpresa] = useState<Record<string, string>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [notifPage, setNotifPage] = useState(1);
+  const [notifPageSize, setNotifPageSize] = useState(50);
+  const [obsPage, setObsPage] = useState(1);
+  const [obsPageSize, setObsPageSize] = useState(50);
   const [novaNotificacao, setNovaNotificacao] = useState({
     empresa: "",
     canal: "WhatsApp" as "WhatsApp" | "E-mail",
@@ -168,6 +173,9 @@ const Comunicacao = () => {
   const empresasFiltradasObs = (empresasData?.empresas ?? []).filter((empresa) =>
     empresa.razao_social.toLowerCase().includes(empresaFiltroObs.toLowerCase()),
   );
+
+  const paginatedNotificacoes = notificacoes.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
+  const paginatedObs = empresasFiltradasObs.slice((obsPage - 1) * obsPageSize, obsPage * obsPageSize);
 
   const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null) => {
     const novaObservacao = (novaObservacaoByEmpresa[empresaId] ?? "").trim();
@@ -295,7 +303,7 @@ const Comunicacao = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {notificacoes.map((notificacao) => (
+                    {paginatedNotificacoes.map((notificacao) => (
                       <TableRow key={notificacao.id}>
                         <TableCell>{notificacao.data}</TableCell>
                         <TableCell className="font-medium">{notificacao.empresa}</TableCell>
@@ -311,6 +319,7 @@ const Comunicacao = () => {
                     ))}
                   </TableBody>
                 </Table>
+                <TablePagination page={notifPage} pageSize={notifPageSize} total={notificacoes.length} onPageChange={setNotifPage} onPageSizeChange={(size) => { setNotifPageSize(size); setNotifPage(1); }} />
               </CardContent>
             </Card>
 
@@ -333,7 +342,7 @@ const Comunicacao = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {empresasFiltradasObs.map((empresa) => (
+                    {paginatedObs.map((empresa) => (
                       <TableRow key={empresa.id}>
                         <TableCell className="font-medium">{empresa.razao_social}</TableCell>
                         <TableCell className="whitespace-pre-wrap text-sm">{empresa.observacoes || "-"}</TableCell>
@@ -352,6 +361,7 @@ const Comunicacao = () => {
                     ))}
                   </TableBody>
                 </Table>
+                <TablePagination page={obsPage} pageSize={obsPageSize} total={empresasFiltradasObs.length} onPageChange={setObsPage} onPageSizeChange={(size) => { setObsPageSize(size); setObsPage(1); }} />
               </CardContent>
             </Card>
           </main>
