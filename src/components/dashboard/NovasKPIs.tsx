@@ -4,7 +4,6 @@ import {
   AlertTriangle, 
   CalendarClock, 
   CheckCircle2,
-  Receipt,
   Clock
 } from "lucide-react";
 
@@ -58,8 +57,6 @@ const KPICard = ({ label, valor, helper, helperTipo = "neutro", icone, destaque 
 interface NovasKPIsProps {
   inadimplencia: number;
   inadimplenciaVariacao: number;
-  totalFaturadoMes: number;
-  totalFaturadoVariacao: number;
   valorEmAtraso: number;
   qtdBoletosVencidos: number;
   empresasCriticas: number;
@@ -69,8 +66,6 @@ interface NovasKPIsProps {
 export const NovasKPIs = ({
   inadimplencia,
   inadimplenciaVariacao,
-  totalFaturadoMes,
-  totalFaturadoVariacao,
   valorEmAtraso,
   qtdBoletosVencidos,
   empresasCriticas,
@@ -99,14 +94,6 @@ export const NovasKPIs = ({
           helper={formatVariacao(inadimplenciaVariacao)}
           helperTipo={inadimplenciaVariacao <= 0 ? "positivo" : "negativo"}
           icone={<CheckCircle2 className="h-5 w-5 text-accent" />}
-        />
-        
-        <KPICard
-          label="Total faturado"
-          valor={formatCurrency(totalFaturadoMes)}
-          helper={formatVariacao(totalFaturadoVariacao)}
-          helperTipo={totalFaturadoVariacao >= 0 ? "positivo" : "negativo"}
-          icone={<Receipt className="h-5 w-5 text-accent" />}
         />
         
         <KPICard
