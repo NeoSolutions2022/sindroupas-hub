@@ -448,13 +448,19 @@ const Empresas = () => {
   const filteredEmpresas = useMemo(() => {
     return empresas.filter((empresa) => {
       const search = normalizeSearchText(searchTerm.trim());
+      const searchTokens = search.split(/\s+/).filter(Boolean);
+      const empresaSearchBlob = normalizeSearchText([
+        empresa.razaoSocial,
+        empresa.nomeFantasia,
+        empresa.responsavel?.nome,
+        ...empresa.colaboradores.map((colaborador) => colaborador.nome),
+      ].join(" "));
+      const cnpjDigits = empresa.cnpj.replace(/\D/g, "");
+      const searchDigits = search.replace(/\D/g, "");
       const matchesSearch =
         !search ||
-        normalizeSearchText(empresa.razaoSocial).includes(search) ||
-        normalizeSearchText(empresa.nomeFantasia).includes(search) ||
-        empresa.cnpj.replace(/\D/g, "").includes(search.replace(/\D/g, "")) ||
-        empresa.colaboradores.some((colaborador) => normalizeSearchText(colaborador.nome).includes(search)) ||
-        normalizeSearchText(empresa.responsavel?.nome).includes(search);
+        searchTokens.every((token) => empresaSearchBlob.includes(token)) ||
+        (!!searchDigits && cnpjDigits.includes(searchDigits));
 
       const matchesAssociacao =
         associationFilter === "Todas" ||
