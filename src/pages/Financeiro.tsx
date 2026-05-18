@@ -60,6 +60,7 @@ import ExcelJS from "exceljs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 type EmpresaLookupRow = {
   id: string;
@@ -658,7 +659,13 @@ const Financeiro = () => {
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
-  const [faixaForm, setFaixaForm] = useState({ min: "", max: "", valor: "", descricao: "" });
+  const [faixaForm, setFaixaForm] = useState({ valor: "", descricao: "" });
+  const [boletosPage, setBoletosPage] = useState(1);
+  const [boletosPageSize, setBoletosPageSize] = useState(50);
+  const [comunicacaoDialogOpen, setComunicacaoDialogOpen] = useState(false);
+  const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
+  const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
+  const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -835,7 +842,12 @@ const Financeiro = () => {
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
     const arquivoBase = `financeiro-boletos-${format(now, "yyyy-MM-dd")}`;
-    const rows = filteredBoletos.map((b) => ({
+    const paginatedBoletos = useMemo(() => {
+    const start = (boletosPage - 1) * boletosPageSize;
+    return filteredBoletos.slice(start, start + boletosPageSize);
+  }, [filteredBoletos, boletosPage, boletosPageSize]);
+
+  const rows = filteredBoletos.map((b) => ({
       empresa: b.empresa,
       tipo: b.tipo,
       valor: b.valor,
@@ -1031,14 +1043,12 @@ const Financeiro = () => {
     if (faixa) {
       setFaixaToEdit(faixa);
       setFaixaForm({
-        min: faixa.min.toString(),
-        max: faixa.max.toString(),
         valor: faixa.valor.toString(),
         descricao: faixa.descricao ?? "",
       });
     } else {
       setFaixaToEdit(null);
-      setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+      setFaixaForm({ valor: "", descricao: "" });
     }
     setFaixaDialogOpen(true);
   };
@@ -1048,8 +1058,6 @@ const Financeiro = () => {
       toast({ title: "Erro", description: "A descrição da faixa é obrigatória.", variant: "destructive" });
       return;
     }
-    const min = faixaForm.min ? parseInt(faixaForm.min) : 0;
-    const max = faixaForm.max ? parseInt(faixaForm.max) : 0;
     const valor = parseFloat(faixaForm.valor);
 
     if (isNaN(valor)) {
@@ -1061,24 +1069,8 @@ const Financeiro = () => {
       return;
     }
 
-    // Verificar sobreposição
-    const hasOverlap = faixas.some((f) => {
-      if (faixaToEdit && f.id === faixaToEdit.id) return false;
-      return (min >= f.min && min <= f.max) || (max >= f.min && max <= f.max) ||
-             (min <= f.min && max >= f.max);
-    });
-
-    if (hasOverlap) {
-      toast({
-        title: "Erro",
-        description: "Esta faixa se sobrepõe a uma faixa existente.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     saveFaixaMutation.mutate(
-      { id: faixaToEdit?.id, min, max, valor, descricao: faixaForm.descricao },
+      { id: faixaToEdit?.id, min: 0, max: 0, valor, descricao: faixaForm.descricao },
       {
         onSuccess: () => {
           toast({
@@ -1088,7 +1080,7 @@ const Financeiro = () => {
               : "A nova faixa foi criada com sucesso.",
           });
           setFaixaDialogOpen(false);
-          setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+          setFaixaForm({ valor: "", descricao: "" });
           setFaixaToEdit(null);
         },
         onError: (err) => {
@@ -1606,7 +1598,7 @@ const Financeiro = () => {
                               </TableCell>
                             </TableRow>
                           ) : (
-                            filteredBoletos.map((boleto) => {
+                            paginatedBoletos.map((boleto) => {
                               const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
@@ -1648,7 +1640,7 @@ const Financeiro = () => {
                                       )}
                                       {contato?.email ? (
                                         <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
                                             <Mail className="h-4 w-4 text-blue-600" />
                                           </a>
                                         </Button>
@@ -1704,6 +1696,16 @@ const Financeiro = () => {
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
                                         setDescriptionDialogOpen(true);
                                       }}
+                                      onCommunication={() => {
+                                        setSelectedEmpresaComunicacao(boleto.empresa);
+                                        setComunicacaoDialogOpen(true);
+                                      }}
+                                      onEditCompany={() => {
+                                        const empresaRow = data?.empresas.find((e) => e.razao_social === boleto.empresa);
+                                        if (!empresaRow) return;
+                                        setEmpresaEditDraft({ id: empresaRow.id, razao_social: empresaRow.razao_social, email: empresaRow.email ?? "", whatsapp: empresaRow.whatsapp ?? "" });
+                                        setEditEmpresaDialogOpen(true);
+                                      }}
                                       onCancel={() => {
                                         setSelectedBoletoForCancel(boleto as BoletoView);
                                         setCancelReason("");
@@ -1718,6 +1720,7 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
@@ -1972,6 +1975,7 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
@@ -2051,6 +2055,7 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
@@ -2074,26 +2079,6 @@ const Financeiro = () => {
                       placeholder="Ex: Faixa Comércio Varejista"
                       value={faixaForm.descricao}
                       onChange={(e) => setFaixaForm({ ...faixaForm, descricao: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="minFunc">Mín Funcionários (opcional)</Label>
-                    <Input
-                      id="minFunc"
-                      type="number"
-                      placeholder="Ex: 1"
-                      value={faixaForm.min}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, min: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxFunc">Máx Funcionários (opcional)</Label>
-                    <Input
-                      id="maxFunc"
-                      type="number"
-                      placeholder="Ex: 20"
-                      value={faixaForm.max}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, max: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -2698,6 +2683,33 @@ const Financeiro = () => {
                       </Button>
                     )}
                   </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={comunicacaoDialogOpen} onOpenChange={setComunicacaoDialogOpen}>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader><DialogTitle>Histórico de comunicação - {selectedEmpresaComunicacao}</DialogTitle></DialogHeader>
+                <div className="text-sm whitespace-pre-wrap">{data?.empresas.find((e) => e.razao_social === selectedEmpresaComunicacao)?.observacoes || "Sem histórico."}</div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={editEmpresaDialogOpen} onOpenChange={setEditEmpresaDialogOpen}>
+              <DialogContent className="max-w-md">
+                <DialogHeader><DialogTitle>Editar dados da empresa</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <Input value={empresaEditDraft?.razao_social || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, razao_social: e.target.value } : p)} placeholder="Razão social" />
+                  <Input value={empresaEditDraft?.email || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, email: e.target.value } : p)} placeholder="E-mail" />
+                  <Input value={empresaEditDraft?.whatsapp || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, whatsapp: e.target.value } : p)} placeholder="WhatsApp" />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setEditEmpresaDialogOpen(false)}>Cancelar</Button>
+                  <Button onClick={async () => {
+                    if (!empresaEditDraft) return;
+                    await hasuraRequest({ query: `mutation UpdateEmpresaRapido($id: uuid!, $razao: String!, $email: String, $whatsapp: String) { update_empresas_by_pk(pk_columns: {id: $id}, _set: { razao_social: $razao, email: $email, whatsapp: $whatsapp }) { id } }`, variables: { id: empresaEditDraft.id, razao: empresaEditDraft.razao_social, email: empresaEditDraft.email || null, whatsapp: empresaEditDraft.whatsapp || null }, token });
+                    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+                    setEditEmpresaDialogOpen(false);
+                  }}>Salvar</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
