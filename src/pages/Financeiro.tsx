@@ -823,6 +823,11 @@ const Financeiro = () => {
     return [...historicoContribuicao].slice(-5).reverse();
   }, [historicoContribuicao]);
 
+  const paginatedBoletos = useMemo(() => {
+    const start = (boletosPage - 1) * boletosPageSize;
+    return filteredBoletos.slice(start, start + boletosPageSize);
+  }, [filteredBoletos, boletosPage, boletosPageSize]);
+
   const canProceed = useMemo(() => {
     if (wizardStep === 1) {
       return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
@@ -842,12 +847,7 @@ const Financeiro = () => {
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
     const arquivoBase = `financeiro-boletos-${format(now, "yyyy-MM-dd")}`;
-    const paginatedBoletos = useMemo(() => {
-    const start = (boletosPage - 1) * boletosPageSize;
-    return filteredBoletos.slice(start, start + boletosPageSize);
-  }, [filteredBoletos, boletosPage, boletosPageSize]);
-
-  const rows = filteredBoletos.map((b) => ({
+    const rows = filteredBoletos.map((b) => ({
       empresa: b.empresa,
       tipo: b.tipo,
       valor: b.valor,
@@ -1720,7 +1720,6 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
-                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
