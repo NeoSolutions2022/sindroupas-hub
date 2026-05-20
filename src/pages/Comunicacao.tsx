@@ -202,7 +202,31 @@ const Comunicacao = () => {
     empresa.razao_social.toLowerCase().includes(empresaFiltroObs.toLowerCase()),
   );
 
+
+  const historicoWhatsapp = (empresasData?.empresas ?? []).flatMap((empresa) => {
+    const raw = empresa.observacoes ?? "";
+    if (!raw.trim()) return [] as { id: string; data: string; empresa: string; mensagem: string; canal: "WhatsApp"; status: NotificacaoStatus }[];
+    return raw
+      .split("\n---\n")
+      .map((entry, index) => ({ entry: entry.trim(), index }))
+      .filter(({ entry }) => /whatsapp|evolution|notificação enviada/i.test(entry))
+      .map(({ entry, index }) => {
+        const dateMatch = entry.match(/^\[(.*?)\]/);
+        const data = dateMatch?.[1] ?? "-";
+        const mensagem = entry.replace(/^\[.*?\]\s*/, "");
+        return {
+          id: `${empresa.id}-${index}`,
+          data,
+          empresa: empresa.razao_social,
+          mensagem,
+          canal: "WhatsApp" as const,
+          status: "entregue" as NotificacaoStatus,
+        };
+      });
+  });
+
   const paginatedNotificacoes = notificacoes.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
+  const paginatedHistoricoWhatsapp = historicoWhatsapp.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
   const paginatedObs = empresasFiltradasObs.slice((obsPage - 1) * obsPageSize, obsPage * obsPageSize);
 
   const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null, notaDireta?: string) => {
@@ -328,7 +352,7 @@ const Comunicacao = () => {
 
             <Card>
               <CardHeader>
-                <CardTitle>Histórico de Mensagens Enviadas</CardTitle>
+                <CardTitle>Histórico de Mensagens (WhatsApp)</CardTitle>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -342,7 +366,7 @@ const Comunicacao = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {paginatedNotificacoes.map((notificacao) => (
+                    {paginatedHistoricoWhatsapp.map((notificacao) => (
                       <TableRow key={notificacao.id}>
                         <TableCell>{notificacao.data}</TableCell>
                         <TableCell className="font-medium">{notificacao.empresa}</TableCell>
@@ -358,7 +382,7 @@ const Comunicacao = () => {
                     ))}
                   </TableBody>
                 </Table>
-                <TablePagination page={notifPage} pageSize={notifPageSize} total={notificacoes.length} onPageChange={setNotifPage} onPageSizeChange={(size) => { setNotifPageSize(size); setNotifPage(1); }} />
+                <TablePagination page={notifPage} pageSize={notifPageSize} total={historicoWhatsapp.length} onPageChange={setNotifPage} onPageSizeChange={(size) => { setNotifPageSize(size); setNotifPage(1); }} />
               </CardContent>
             </Card>
 
