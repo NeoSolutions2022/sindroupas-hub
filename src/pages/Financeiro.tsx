@@ -664,6 +664,8 @@ const Financeiro = () => {
   const [boletosPageSize, setBoletosPageSize] = useState(50);
   const [comunicacaoDialogOpen, setComunicacaoDialogOpen] = useState(false);
   const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
+  const [novaNotaComunicacao, setNovaNotaComunicacao] = useState("");
+  const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
   const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
   const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
 
@@ -1698,6 +1700,7 @@ const Financeiro = () => {
                                       }}
                                       onCommunication={() => {
                                         setSelectedEmpresaComunicacao(boleto.empresa);
+                                        setNovaNotaComunicacao("");
                                         setComunicacaoDialogOpen(true);
                                       }}
                                       onEditCompany={() => {
@@ -2695,7 +2698,42 @@ const Financeiro = () => {
             <Dialog open={comunicacaoDialogOpen} onOpenChange={setComunicacaoDialogOpen}>
               <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
                 <DialogHeader><DialogTitle>Histórico de comunicação - {selectedEmpresaComunicacao}</DialogTitle></DialogHeader>
-                <div className="text-sm whitespace-pre-wrap">{data?.empresas.find((e) => e.razao_social === selectedEmpresaComunicacao)?.observacoes || "Sem histórico."}</div>
+                <div className="space-y-3">
+                  <div className="text-sm whitespace-pre-wrap rounded-md border p-3 bg-muted/20">
+                    {data?.empresas.find((e) => e.razao_social === selectedEmpresaComunicacao)?.observacoes || "Sem histórico."}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="nova-nota-comunicacao">Nova nota</Label>
+                    <textarea
+                      id="nova-nota-comunicacao"
+                      className="w-full min-h-24 rounded-md border bg-background p-3 text-sm"
+                      placeholder="Adicione uma observação de contato..."
+                      value={novaNotaComunicacao}
+                      onChange={(e) => setNovaNotaComunicacao(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setComunicacaoDialogOpen(false)} disabled={isSavingNotaComunicacao}>
+                    Fechar
+                  </Button>
+                  <Button
+                    disabled={isSavingNotaComunicacao || !novaNotaComunicacao.trim()}
+                    onClick={async () => {
+                      if (!selectedEmpresaComunicacao || !novaNotaComunicacao.trim()) return;
+                      try {
+                        setIsSavingNotaComunicacao(true);
+                        await appendObservacaoEmpresa(selectedEmpresaComunicacao, novaNotaComunicacao.trim());
+                        setNovaNotaComunicacao("");
+                        toast({ title: "Nota adicionada ao histórico" });
+                      } finally {
+                        setIsSavingNotaComunicacao(false);
+                      }
+                    }}
+                  >
+                    {isSavingNotaComunicacao ? "Salvando..." : "Adicionar nota"}
+                  </Button>
+                </DialogFooter>
               </DialogContent>
             </Dialog>
 
