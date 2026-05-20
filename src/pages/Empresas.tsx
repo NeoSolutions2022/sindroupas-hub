@@ -957,7 +957,7 @@ const Empresas = () => {
                     Nenhuma empresa encontrada com os filtros selecionados.
                   </Card>
                 ) : (
-                  filteredEmpresas.map((empresa) => {
+                  paginatedEmpresas.map((empresa) => {
                     const contato = getContatoPrincipal(empresa);
                     return (
                       <Card 
@@ -1071,6 +1071,16 @@ const Empresas = () => {
                     );
                   })
                 )}
+                <TablePagination
+                  page={tablePage}
+                  pageSize={tablePageSize}
+                  total={filteredEmpresas.length}
+                  onPageChange={setTablePage}
+                  onPageSizeChange={(size) => {
+                    setTablePageSize(size);
+                    setTablePage(1);
+                  }}
+                />
               </div>
             ) : (
               /* Desktop Table View */

@@ -1720,6 +1720,16 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination
+                        page={boletosPage}
+                        pageSize={boletosPageSize}
+                        total={filteredBoletos.length}
+                        onPageChange={setBoletosPage}
+                        onPageSizeChange={(size) => {
+                          setBoletosPageSize(size);
+                          setBoletosPage(1);
+                        }}
+                      />
                     </div>
                   </CardContent>
                 </Card>
@@ -1974,7 +1984,6 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
-                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
@@ -2012,8 +2021,7 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Mín Funcionários</TableHead>
-                            <TableHead>Máx Funcionários</TableHead>
+                            <TableHead>Label</TableHead>
                             <TableHead>Valor (R$)</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
@@ -2021,15 +2029,14 @@ const Financeiro = () => {
                         <TableBody>
                           {faixas.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={4} className="text-center text-muted-foreground">
+                              <TableCell colSpan={3} className="text-center text-muted-foreground">
                                 Nenhuma faixa cadastrada
                               </TableCell>
                             </TableRow>
                           ) : (
                             faixas.map((faixa) => (
                               <TableRow key={faixa.id}>
-                                <TableCell>{faixa.min}</TableCell>
-                                <TableCell>{faixa.max}</TableCell>
+                                <TableCell>{faixa.descricao || "—"}</TableCell>
                                 <TableCell>R$ {faixa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                                 <TableCell className="text-right space-x-2">
                                   <Button
@@ -2054,7 +2061,6 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
-                      <TablePagination page={boletosPage} pageSize={boletosPageSize} total={filteredBoletos.length} onPageChange={setBoletosPage} onPageSizeChange={(size) => { setBoletosPageSize(size); setBoletosPage(1); }} />
                     </div>
                   </CardContent>
                 </Card>
