@@ -51,3 +51,6 @@ export const getAuthUrl = () => getEnvValue("VITE_AUTH_URL").replace(/\/$/, "");
 export const getHasuraUrl = () => getEnvValue("VITE_HASURA_URL");
 export const getHasuraAdminSecret = () => getEnvValue("VITE_HASURA_ADMIN_SECRET");
 export const getBoletosApiUrl = () => getEnvValue("VITE_BOLETOS_API_URL").replace(/\/$/, "");
+export const getEvolutionApiUrl = () => getEnvValue("VITE_EVOLUTION_API_URL").replace(/\/$/, "");
+export const getEvolutionInstance = () => getEnvValue("VITE_EVOLUTION_INSTANCE");
+export const getEvolutionApiKey = () => getEnvValue("VITE_EVOLUTION_API_KEY");

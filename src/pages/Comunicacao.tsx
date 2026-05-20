@@ -37,6 +37,7 @@ import { useToast } from "@/hooks/use-toast";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
 import { TablePagination } from "@/components/ui/table-pagination";
+import { sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type NotificacaoStatus = "enviado" | "entregue" | "lido";
 
@@ -84,17 +85,20 @@ const Comunicacao = () => {
     mensagem: "",
     linkFormulario: "",
   });
+  const [isSending, setIsSending] = useState(false);
   const { toast } = useToast();
   const { data: empresasData, refetch: refetchEmpresas } = useQuery({
     queryKey: ["comunicacao-empresas-observacoes"],
     queryFn: () =>
-      hasuraRequest<{ empresas: { id: string; razao_social: string; observacoes?: string | null }[] }>({
+      hasuraRequest<{ empresas: { id: string; razao_social: string; observacoes?: string | null; whatsapp?: string | null; email?: string | null }[] }>({
         query: `
           query ComunicacaoEmpresas {
             empresas(order_by: { razao_social: asc }) {
               id
               razao_social
               observacoes
+              whatsapp
+              email
             }
           }
         `,
@@ -102,7 +106,7 @@ const Comunicacao = () => {
       }),
   });
 
-  const handleEnviarNotificacao = () => {
+  const handleEnviarNotificacao = async () => {
     if (!novaNotificacao.empresa || !novaNotificacao.mensagem) {
       toast({
         title: "Erro",
@@ -121,6 +125,18 @@ const Comunicacao = () => {
       novaNotificacao.empresa
     );
 
+    const empresaSelecionada = (empresasData?.empresas ?? []).find((item) => item.razao_social === novaNotificacao.empresa);
+    if (!empresaSelecionada) {
+      toast({ title: "Empresa não encontrada", variant: "destructive" });
+      return;
+    }
+
+    const number = (empresaSelecionada.whatsapp ?? "").replace(/\D/g, "");
+    if (!number) {
+      toast({ title: "WhatsApp da empresa ausente", description: "Cadastre o WhatsApp da empresa para envio.", variant: "destructive" });
+      return;
+    }
+
     const novaNotif: Notificacao = {
       id: notificacoes.length + 1,
       empresa: novaNotificacao.empresa,
@@ -129,23 +145,30 @@ const Comunicacao = () => {
       status: "enviado",
       data: new Date().toISOString().split("T")[0],
     };
-
-    setNotificacoes([novaNotif, ...notificacoes]);
-
-    // Simular mudança de status após 3s
-    setTimeout(() => {
-      setNotificacoes((prev) =>
-        prev.map((n) => (n.id === novaNotif.id ? { ...n, status: "entregue" } : n))
+    try {
+      setIsSending(true);
+      await sendEvolutionTextRequest({ number, text: mensagemComPlaceholder });
+      setNotificacoes((prev) => [{ ...novaNotif, status: "entregue" }, ...prev]);
+      await handleAdicionarObservacao(
+        empresaSelecionada.id,
+        empresaSelecionada.observacoes,
+        `Notificação enviada via Evolution (${novaNotificacao.canal}): ${mensagemComPlaceholder}`,
       );
-    }, 3000);
-
-    toast({
-      title: "Notificação enviada",
-      description: `Mensagem enviada para ${novaNotificacao.empresa} via ${novaNotificacao.canal}`,
-    });
-
-    setNovaNotificacao({ empresa: "", canal: "WhatsApp", mensagem: "", linkFormulario: "" });
-    setDialogOpen(false);
+      toast({
+        title: "Notificação enviada",
+        description: `Mensagem enviada para ${novaNotificacao.empresa} via Evolution API`,
+      });
+      setNovaNotificacao({ empresa: "", canal: "WhatsApp", mensagem: "", linkFormulario: "" });
+      setDialogOpen(false);
+    } catch (err) {
+      toast({
+        title: "Falha no envio",
+        description: err instanceof Error ? err.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const getStatusBadge = (status: NotificacaoStatus) => {
@@ -177,8 +200,8 @@ const Comunicacao = () => {
   const paginatedNotificacoes = notificacoes.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
   const paginatedObs = empresasFiltradasObs.slice((obsPage - 1) * obsPageSize, obsPage * obsPageSize);
 
-  const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null) => {
-    const novaObservacao = (novaObservacaoByEmpresa[empresaId] ?? "").trim();
+  const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null, notaDireta?: string) => {
+    const novaObservacao = (notaDireta ?? novaObservacaoByEmpresa[empresaId] ?? "").trim();
     if (!novaObservacao) return;
     const stamp = new Date().toLocaleString("pt-BR");
     const novoHistorico = [`[${stamp}] ${novaObservacao.trim()}`, (observacoesAtuais ?? "").trim()]
@@ -224,14 +247,23 @@ const Comunicacao = () => {
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
                       <Label htmlFor="empresa">Empresa</Label>
-                      <Input
-                        id="empresa"
-                        placeholder="Nome da empresa"
+                      <Select
                         value={novaNotificacao.empresa}
-                        onChange={(e) =>
-                          setNovaNotificacao({ ...novaNotificacao, empresa: e.target.value })
+                        onValueChange={(value) =>
+                          setNovaNotificacao({ ...novaNotificacao, empresa: value })
                         }
-                      />
+                      >
+                        <SelectTrigger id="empresa">
+                          <SelectValue placeholder="Selecione uma empresa" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(empresasData?.empresas ?? []).map((empresa) => (
+                            <SelectItem key={empresa.id} value={empresa.razao_social}>
+                              {empresa.razao_social}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="canal">Canal de Envio</Label>
@@ -281,7 +313,9 @@ const Comunicacao = () => {
                     <Button variant="outline" onClick={() => setDialogOpen(false)}>
                       Cancelar
                     </Button>
-                    <Button onClick={handleEnviarNotificacao}>Enviar</Button>
+                    <Button onClick={handleEnviarNotificacao} disabled={isSending}>
+                      {isSending ? "Enviando..." : "Enviar"}
+                    </Button>
                   </div>
                 </DialogContent>
               </Dialog>
