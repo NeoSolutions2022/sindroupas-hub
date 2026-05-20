@@ -80,11 +80,12 @@ const Comunicacao = () => {
   const [obsPage, setObsPage] = useState(1);
   const [obsPageSize, setObsPageSize] = useState(50);
   const [novaNotificacao, setNovaNotificacao] = useState({
-    empresa: "",
+    empresas: [] as string[],
     canal: "WhatsApp" as "WhatsApp" | "E-mail",
     mensagem: "",
     linkFormulario: "",
   });
+  const [empresaBuscaEnvio, setEmpresaBuscaEnvio] = useState("");
   const [isSending, setIsSending] = useState(false);
   const { toast } = useToast();
   const { data: empresasData, refetch: refetchEmpresas } = useQuery({
@@ -107,7 +108,7 @@ const Comunicacao = () => {
   });
 
   const handleEnviarNotificacao = async () => {
-    if (!novaNotificacao.empresa || !novaNotificacao.mensagem) {
+    if (novaNotificacao.empresas.length === 0 || !novaNotificacao.mensagem) {
       toast({
         title: "Erro",
         description: "Preencha todos os campos obrigatórios",
@@ -120,57 +121,48 @@ const Comunicacao = () => {
       ? `${novaNotificacao.mensagem} ${novaNotificacao.linkFormulario}`
       : novaNotificacao.mensagem;
 
-    const mensagemComPlaceholder = mensagemCompleta.replace(
-      /{{empresa}}/g,
-      novaNotificacao.empresa
-    );
+    const mensagemComPlaceholder = mensagemCompleta;
 
-    const empresaSelecionada = (empresasData?.empresas ?? []).find((item) => item.razao_social === novaNotificacao.empresa);
-    if (!empresaSelecionada) {
-      toast({ title: "Empresa não encontrada", variant: "destructive" });
-      return;
-    }
-
-    const normalizeWhatsappToE164BR = (raw?: string | null) => {
-      const digits = (raw ?? "").replace(/\D/g, "");
-      if (!digits) return "";
-      return digits.startsWith("55") ? digits : `55${digits}`;
-    };
-    const number = normalizeWhatsappToE164BR(empresaSelecionada.whatsapp);
-    if (!number) {
-      toast({ title: "WhatsApp da empresa ausente", description: "Cadastre o WhatsApp da empresa para envio.", variant: "destructive" });
-      return;
-    }
-
-    const novaNotif: Notificacao = {
-      id: notificacoes.length + 1,
-      empresa: novaNotificacao.empresa,
-      canal: novaNotificacao.canal,
-      mensagem: mensagemComPlaceholder,
-      status: "enviado",
-      data: new Date().toISOString().split("T")[0],
-    };
     try {
       setIsSending(true);
-      await sendEvolutionTextRequest({ number, text: mensagemComPlaceholder });
-      setNotificacoes((prev) => [{ ...novaNotif, status: "entregue" }, ...prev]);
-      await handleAdicionarObservacao(
-        empresaSelecionada.id,
-        empresaSelecionada.observacoes,
-        `Notificação enviada via Evolution (${novaNotificacao.canal}): ${mensagemComPlaceholder}`,
-      );
+      const alvoEmpresas = novaNotificacao.empresas.includes("__TODAS__")
+        ? (empresasData?.empresas ?? [])
+        : (empresasData?.empresas ?? []).filter((item) => novaNotificacao.empresas.includes(item.razao_social));
+
+      for (const empresaSelecionada of alvoEmpresas) {
+        const mensagemEmpresa = mensagemComPlaceholder.replace(/{{empresa}}/g, empresaSelecionada.razao_social);
+        const normalizeWhatsappToE164BR = (raw?: string | null) => {
+          const digits = (raw ?? "").replace(/\D/g, "");
+          if (!digits) return "";
+          return digits.startsWith("55") ? digits : `55${digits}`;
+        };
+        const number = normalizeWhatsappToE164BR(empresaSelecionada.whatsapp);
+        if (!number) continue;
+
+        await sendEvolutionTextRequest({ number, text: mensagemEmpresa });
+        const novaNotif: Notificacao = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          empresa: empresaSelecionada.razao_social,
+          canal: novaNotificacao.canal,
+          mensagem: mensagemEmpresa,
+          status: "entregue",
+          data: new Date().toISOString().split("T")[0],
+        };
+        setNotificacoes((prev) => [novaNotif, ...prev]);
+        await handleAdicionarObservacao(
+          empresaSelecionada.id,
+          empresaSelecionada.observacoes,
+          `Notificação enviada via Evolution (${novaNotificacao.canal}): ${mensagemEmpresa}`,
+        );
+      }
+
       toast({
         title: "Notificação enviada",
-        description: `Mensagem enviada para ${novaNotificacao.empresa} via Evolution API`,
+        description: `Mensagens enviadas para ${alvoEmpresas.length} empresa(s) via Evolution API`,
       });
-      setNovaNotificacao({ empresa: "", canal: "WhatsApp", mensagem: "", linkFormulario: "" });
+      setNovaNotificacao({ empresas: [], canal: "WhatsApp", mensagem: "", linkFormulario: "" });
+      setEmpresaBuscaEnvio("");
       setDialogOpen(false);
-    } catch (err) {
-      toast({
-        title: "Falha no envio",
-        description: err instanceof Error ? err.message : "Tente novamente.",
-        variant: "destructive",
-      });
     } finally {
       setIsSending(false);
     }
@@ -275,24 +267,45 @@ const Comunicacao = () => {
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="empresa">Empresa</Label>
-                      <Select
-                        value={novaNotificacao.empresa}
-                        onValueChange={(value) =>
-                          setNovaNotificacao({ ...novaNotificacao, empresa: value })
-                        }
-                      >
-                        <SelectTrigger id="empresa">
-                          <SelectValue placeholder="Selecione uma empresa" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(empresasData?.empresas ?? []).map((empresa) => (
-                            <SelectItem key={empresa.id} value={empresa.razao_social}>
-                              {empresa.razao_social}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Label>Empresas</Label>
+                      <Input
+                        placeholder="Buscar empresa..."
+                        value={empresaBuscaEnvio}
+                        onChange={(e) => setEmpresaBuscaEnvio(e.target.value)}
+                      />
+                      <div className="max-h-44 overflow-auto rounded-md border p-2 space-y-2">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={novaNotificacao.empresas.includes("__TODAS__")}
+                            onChange={(e) => setNovaNotificacao((prev) => ({
+                              ...prev,
+                              empresas: e.target.checked ? ["__TODAS__"] : [],
+                            }))}
+                          />
+                          Todas as empresas
+                        </label>
+                        {(empresasData?.empresas ?? [])
+                          .filter((empresa) => empresa.razao_social.toLowerCase().includes(empresaBuscaEnvio.toLowerCase()))
+                          .map((empresa) => {
+                            const checked = novaNotificacao.empresas.includes(empresa.razao_social);
+                            return (
+                              <label key={empresa.id} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={checked || novaNotificacao.empresas.includes("__TODAS__")}
+                                  onChange={(e) => setNovaNotificacao((prev) => ({
+                                    ...prev,
+                                    empresas: e.target.checked
+                                      ? [...prev.empresas.filter((x) => x !== "__TODAS__"), empresa.razao_social]
+                                      : prev.empresas.filter((x) => x !== empresa.razao_social && x !== "__TODAS__"),
+                                  }))}
+                                />
+                                {empresa.razao_social}
+                              </label>
+                            );
+                          })}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="canal">Canal de Envio</Label>
