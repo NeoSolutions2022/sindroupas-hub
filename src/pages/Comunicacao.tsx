@@ -131,7 +131,12 @@ const Comunicacao = () => {
       return;
     }
 
-    const number = (empresaSelecionada.whatsapp ?? "").replace(/\D/g, "");
+    const normalizeWhatsappToE164BR = (raw?: string | null) => {
+      const digits = (raw ?? "").replace(/\D/g, "");
+      if (!digits) return "";
+      return digits.startsWith("55") ? digits : `55${digits}`;
+    };
+    const number = normalizeWhatsappToE164BR(empresaSelecionada.whatsapp);
     if (!number) {
       toast({ title: "WhatsApp da empresa ausente", description: "Cadastre o WhatsApp da empresa para envio.", variant: "destructive" });
       return;
