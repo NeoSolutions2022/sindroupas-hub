@@ -1198,6 +1198,16 @@ const Empresas = () => {
                     {filteredEmpresas.length === 0 && (
                       <p className="py-6 text-center text-muted-foreground">Nenhuma empresa encontrada com os filtros selecionados.</p>
                     )}
+                    <TablePagination
+                      page={tablePage}
+                      pageSize={tablePageSize}
+                      total={filteredEmpresas.length}
+                      onPageChange={setTablePage}
+                      onPageSizeChange={(size) => {
+                        setTablePageSize(size);
+                        setTablePage(1);
+                      }}
+                    />
                   </div>
                 </CardContent>
               </Card>
