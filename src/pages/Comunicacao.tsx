@@ -87,6 +87,7 @@ const Comunicacao = () => {
   });
   const [empresaBuscaEnvio, setEmpresaBuscaEnvio] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isCadenciado, setIsCadenciado] = useState(true);
   const { toast } = useToast();
   const { data: empresasData, refetch: refetchEmpresas } = useQuery({
     queryKey: ["comunicacao-empresas-observacoes"],
@@ -128,8 +129,11 @@ const Comunicacao = () => {
       const alvoEmpresas = novaNotificacao.empresas.includes("__TODAS__")
         ? (empresasData?.empresas ?? [])
         : (empresasData?.empresas ?? []).filter((item) => novaNotificacao.empresas.includes(item.razao_social));
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const getDelayMs = () => 60_000 + Math.floor(Math.random() * 60_000); // 1-2 min
 
-      for (const empresaSelecionada of alvoEmpresas) {
+      for (let index = 0; index < alvoEmpresas.length; index += 1) {
+        const empresaSelecionada = alvoEmpresas[index];
         const mensagemEmpresa = mensagemComPlaceholder.replace(/{{empresa}}/g, empresaSelecionada.razao_social);
         const normalizeWhatsappToE164BR = (raw?: string | null) => {
           const digits = (raw ?? "").replace(/\D/g, "");
@@ -154,6 +158,17 @@ const Comunicacao = () => {
           empresaSelecionada.observacoes,
           `Notificação enviada via Evolution (${novaNotificacao.canal}): ${mensagemEmpresa}`,
         );
+
+        const hasNext = index < alvoEmpresas.length - 1;
+        if (isCadenciado && hasNext) {
+          const delayMs = getDelayMs();
+          const delayMin = Math.round((delayMs / 60_000) * 10) / 10;
+          toast({
+            title: "Cadência ativa",
+            description: `Próximo envio para outro contato em ~${delayMin} min.`,
+          });
+          await wait(delayMs);
+        }
       }
 
       toast({
@@ -324,6 +339,14 @@ const Comunicacao = () => {
                         </SelectContent>
                       </Select>
                     </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={isCadenciado}
+                        onChange={(e) => setIsCadenciado(e.target.checked)}
+                      />
+                      Cadenciar envios (1–2 min entre contatos)
+                    </label>
                     <div className="space-y-2">
                       <Label htmlFor="mensagem">Mensagem</Label>
                       <Textarea
