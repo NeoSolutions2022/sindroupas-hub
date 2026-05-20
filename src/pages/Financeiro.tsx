@@ -50,7 +50,7 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
@@ -60,10 +60,12 @@ import ExcelJS from "exceljs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
@@ -159,6 +161,7 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      observacoes
       qtd_funcionarios
       cnpj
       email
@@ -182,6 +185,32 @@ const FINANCEIRO_QUERY = `
       min_colaboradores
       max_colaboradores
       valor_mensalidade
+    }
+  }
+`;
+
+const EMPRESAS_POR_FAIXA_QUERY = `
+  query EmpresasPorFaixa($faixaId: uuid!) {
+    empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
+      id
+      razao_social
+      observacoes
+      cnpj
+      qtd_funcionarios
+      email
+      whatsapp
+      responsaveis {
+        id
+        nome
+        whatsapp
+        email
+      }
+      colaboradores {
+        id
+        nome
+        whatsapp
+        email
+      }
     }
   }
 `;
@@ -240,6 +269,7 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  valorOverride?: number;
 }
 
 type ContactCandidate = {
@@ -363,16 +393,20 @@ const Financeiro = () => {
     valor: number;
   } | null>(null);
   const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
+  const [isUpdatingDueDate, setIsUpdatingDueDate] = useState(false);
   const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
   const [newDueDate, setNewDueDate] = useState("");
   const [descriptionDialogOpen, setDescriptionDialogOpen] = useState(false);
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
   const [selectedBoletoForDescription, setSelectedBoletoForDescription] = useState<BoletoView | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [isCancellingBoleto, setIsCancellingBoleto] = useState(false);
   const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
+  const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -466,7 +500,9 @@ const Financeiro = () => {
         throw new Error("Empresa sem CNPJ. O endpoint de boletos exige cliente PJ com CNPJ ou PF com CPF.");
       }
 
-      const valorBoleto = payload.tipo === "contribuicao" ? payload.valorCalculado : previaBoleto ?? 0;
+      const valorBoleto = payload.tipo === "contribuicao"
+        ? payload.valorCalculado
+        : payload.valorOverride ?? previaBoleto ?? 0;
       if (valorBoleto <= 0) {
         throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
       }
@@ -623,7 +659,15 @@ const Financeiro = () => {
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
-  const [faixaForm, setFaixaForm] = useState({ min: "", max: "", valor: "", descricao: "" });
+  const [faixaForm, setFaixaForm] = useState({ valor: "", descricao: "" });
+  const [boletosPage, setBoletosPage] = useState(1);
+  const [boletosPageSize, setBoletosPageSize] = useState(50);
+  const [comunicacaoDialogOpen, setComunicacaoDialogOpen] = useState(false);
+  const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
+  const [novaNotaComunicacao, setNovaNotaComunicacao] = useState("");
+  const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
+  const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
+  const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -654,6 +698,17 @@ const Financeiro = () => {
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
+
+  const { data: empresasPorFaixaData, isLoading: isLoadingEmpresasPorFaixa } = useQuery({
+    queryKey: ["empresas-por-faixa", batchFaixaId],
+    enabled: isBatchMode && !!batchFaixaId,
+    queryFn: () =>
+      hasuraRequest<{ empresas: EmpresaLookupRow[] }>({
+        query: EMPRESAS_POR_FAIXA_QUERY,
+        variables: { faixaId: batchFaixaId },
+        token,
+      }),
+  });
 
   useEffect(() => {
     const savedBatch = localStorage.getItem("financeiro:lote-empresas");
@@ -769,6 +824,11 @@ const Financeiro = () => {
   const ultimasContribuicoes = useMemo(() => {
     return [...historicoContribuicao].slice(-5).reverse();
   }, [historicoContribuicao]);
+
+  const paginatedBoletos = useMemo(() => {
+    const start = (boletosPage - 1) * boletosPageSize;
+    return filteredBoletos.slice(start, start + boletosPageSize);
+  }, [filteredBoletos, boletosPage, boletosPageSize]);
 
   const canProceed = useMemo(() => {
     if (wizardStep === 1) {
@@ -985,14 +1045,12 @@ const Financeiro = () => {
     if (faixa) {
       setFaixaToEdit(faixa);
       setFaixaForm({
-        min: faixa.min.toString(),
-        max: faixa.max.toString(),
         valor: faixa.valor.toString(),
         descricao: faixa.descricao ?? "",
       });
     } else {
       setFaixaToEdit(null);
-      setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+      setFaixaForm({ valor: "", descricao: "" });
     }
     setFaixaDialogOpen(true);
   };
@@ -1002,8 +1060,6 @@ const Financeiro = () => {
       toast({ title: "Erro", description: "A descrição da faixa é obrigatória.", variant: "destructive" });
       return;
     }
-    const min = faixaForm.min ? parseInt(faixaForm.min) : 0;
-    const max = faixaForm.max ? parseInt(faixaForm.max) : 0;
     const valor = parseFloat(faixaForm.valor);
 
     if (isNaN(valor)) {
@@ -1015,24 +1071,8 @@ const Financeiro = () => {
       return;
     }
 
-    // Verificar sobreposição
-    const hasOverlap = faixas.some((f) => {
-      if (faixaToEdit && f.id === faixaToEdit.id) return false;
-      return (min >= f.min && min <= f.max) || (max >= f.min && max <= f.max) ||
-             (min <= f.min && max >= f.max);
-    });
-
-    if (hasOverlap) {
-      toast({
-        title: "Erro",
-        description: "Esta faixa se sobrepõe a uma faixa existente.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     saveFaixaMutation.mutate(
-      { id: faixaToEdit?.id, min, max, valor, descricao: faixaForm.descricao },
+      { id: faixaToEdit?.id, min: 0, max: 0, valor, descricao: faixaForm.descricao },
       {
         onSuccess: () => {
           toast({
@@ -1042,7 +1082,7 @@ const Financeiro = () => {
               : "A nova faixa foi criada com sucesso.",
           });
           setFaixaDialogOpen(false);
-          setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+          setFaixaForm({ valor: "", descricao: "" });
           setFaixaToEdit(null);
         },
         onError: (err) => {
@@ -1121,10 +1161,16 @@ const Financeiro = () => {
   );
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
-    const faixa = faixas.find((item) => item.id === batchFaixaId);
-    if (!faixa) return [];
-    return mockEmpresas.filter((emp) => emp.qtdFuncionarios >= faixa.min && emp.qtdFuncionarios <= faixa.max);
-  }, [batchFaixaId, faixas, mockEmpresas]);
+    return (
+      empresasPorFaixaData?.empresas.map((empresa) => ({
+        id: empresa.id,
+        nome: empresa.razao_social,
+        cnpj: empresa.cnpj ?? "",
+        qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
+        contatoPrincipal: chooseBoletoContact(empresa),
+      })) ?? []
+    );
+  }, [batchFaixaId, empresasPorFaixaData?.empresas]);
 
   const parseCurrencyInput = (value: string) => {
     if (!value) return 0;
@@ -1294,12 +1340,62 @@ const Financeiro = () => {
     const targetEmpresas = isBatchMode
       ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
       : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+    const buildCompetencias = (inicio: string, fim: string) => {
+      const start = startOfMonth(parseISO(inicio));
+      const end = startOfMonth(parseISO(fim));
+      if (!isValid(start) || !isValid(end) || isAfter(start, end)) return [] as string[];
+      const competencias: string[] = [];
+      let cursor = start;
+      while (!isAfter(cursor, end)) {
+        competencias.push(format(cursor, "yyyy-MM-dd"));
+        cursor = addMonths(cursor, 1);
+      }
+      return competencias;
+    };
+
     try {
-      await Promise.all(
-        targetEmpresas.map((empresa) =>
-          createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
-        ),
-      );
+      setIsEmittingBoletos(true);
+      if (boletoForm.tipo === "mensalidade") {
+        const competencias = buildCompetencias(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+        if (competencias.length === 0) {
+          throw new Error("Competências inválidas. Verifique as datas inicial e final.");
+        }
+
+        if (boletoForm.unificarCompetencias === "Sim") {
+          const valorUnificado = (previaBoleto ?? 0) * competencias.length;
+          await Promise.all(
+            targetEmpresas.map((empresa) =>
+              createBoletoMutation.mutateAsync({
+                ...boletoForm,
+                empresaId: empresa.id,
+                empresaNome: empresa.nome,
+                valorOverride: valorUnificado,
+              }),
+            ),
+          );
+        } else {
+          await Promise.all(
+            targetEmpresas.flatMap((empresa) =>
+              competencias.map((competencia) =>
+                createBoletoMutation.mutateAsync({
+                  ...boletoForm,
+                  empresaId: empresa.id,
+                  empresaNome: empresa.nome,
+                  competenciaInicial: competencia,
+                  competenciaFinal: competencia,
+                  valorOverride: previaBoleto ?? 0,
+                }),
+              ),
+            ),
+          );
+        }
+      } else {
+        await Promise.all(
+          targetEmpresas.map((empresa) =>
+            createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
+          ),
+        );
+      }
       toast({
         title: isBatchMode
           ? "Boletos em lote emitidos com sucesso"
@@ -1315,6 +1411,8 @@ const Financeiro = () => {
         description: err instanceof Error ? err.message : "Tente novamente em instantes.",
         variant: "destructive",
       });
+    } finally {
+      setIsEmittingBoletos(false);
     }
   };
 
@@ -1353,6 +1451,24 @@ const Financeiro = () => {
       variables: { id, descricao: descricao || null },
     });
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const appendObservacaoEmpresa = async (empresaNome: string, comentario: string) => {
+    const empresa = data?.empresas.find((item) => item.razao_social === empresaNome);
+    if (!empresa || !comentario.trim()) return;
+    const stamp = format(new Date(), "dd/MM/yyyy HH:mm");
+    const historicoAtual = (empresa.observacoes ?? "").trim();
+    const novoHistorico = [`[${stamp}] ${comentario.trim()}`, historicoAtual].filter(Boolean).join("\n---\n");
+    await hasuraRequest({
+      query: `
+        mutation UpdateEmpresaObservacoes($id: uuid!, $observacoes: String) {
+          update_empresas_by_pk(pk_columns: { id: $id }, _set: { observacoes: $observacoes }) { id }
+        }
+      `,
+      variables: { id: empresa.id, observacoes: novoHistorico },
+      token,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
   useEffect(() => {
@@ -1484,7 +1600,7 @@ const Financeiro = () => {
                               </TableCell>
                             </TableRow>
                           ) : (
-                            filteredBoletos.map((boleto) => {
+                            paginatedBoletos.map((boleto) => {
                               const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
@@ -1526,7 +1642,7 @@ const Financeiro = () => {
                                       )}
                                       {contato?.email ? (
                                         <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
                                             <Mail className="h-4 w-4 text-blue-600" />
                                           </a>
                                         </Button>
@@ -1582,6 +1698,17 @@ const Financeiro = () => {
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
                                         setDescriptionDialogOpen(true);
                                       }}
+                                      onCommunication={() => {
+                                        setSelectedEmpresaComunicacao(boleto.empresa);
+                                        setNovaNotaComunicacao("");
+                                        setComunicacaoDialogOpen(true);
+                                      }}
+                                      onEditCompany={() => {
+                                        const empresaRow = data?.empresas.find((e) => e.razao_social === boleto.empresa);
+                                        if (!empresaRow) return;
+                                        setEmpresaEditDraft({ id: empresaRow.id, razao_social: empresaRow.razao_social, email: empresaRow.email ?? "", whatsapp: empresaRow.whatsapp ?? "" });
+                                        setEditEmpresaDialogOpen(true);
+                                      }}
                                       onCancel={() => {
                                         setSelectedBoletoForCancel(boleto as BoletoView);
                                         setCancelReason("");
@@ -1596,6 +1723,16 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination
+                        page={boletosPage}
+                        pageSize={boletosPageSize}
+                        total={filteredBoletos.length}
+                        onPageChange={setBoletosPage}
+                        onPageSizeChange={(size) => {
+                          setBoletosPageSize(size);
+                          setBoletosPage(1);
+                        }}
+                      />
                     </div>
                   </CardContent>
                 </Card>
@@ -1663,8 +1800,9 @@ const Financeiro = () => {
                       <Input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)} disabled={isUpdatingDueDate}>Cancelar</Button>
                       <Button
+                        disabled={isUpdatingDueDate}
                         onClick={async () => {
                           if (!selectedBoletoForDueDate || !newDueDate) return;
                           const chargeId = extractChargeId(selectedBoletoForDueDate.id);
@@ -1677,6 +1815,7 @@ const Financeiro = () => {
                             return;
                           }
                           try {
+                            setIsUpdatingDueDate(true);
                             await updateBoletoDueDateRequest(chargeId, newDueDate);
                             await syncDueDateInHasura(selectedBoletoForDueDate.id, newDueDate);
                             toast({ title: "Vencimento atualizado", description: `Novo vencimento: ${newDueDate}.` });
@@ -1687,10 +1826,12 @@ const Financeiro = () => {
                               description: err instanceof Error ? err.message : "Tente novamente.",
                               variant: "destructive",
                             });
+                          } finally {
+                            setIsUpdatingDueDate(false);
                           }
                         }}
                       >
-                        Salvar
+                        {isUpdatingDueDate ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1711,16 +1852,26 @@ const Financeiro = () => {
                       placeholder="Escreva observações sobre este boleto..."
                     />
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)} disabled={isSavingDescription}>Cancelar</Button>
                       <Button
+                        disabled={isSavingDescription}
                         onClick={async () => {
                           if (!selectedBoletoForDescription) return;
-                          await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
-                          toast({ title: "Descrição atualizada" });
-                          setDescriptionDialogOpen(false);
+                          try {
+                            setIsSavingDescription(true);
+                            await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForDescription.empresa,
+                              `Boleto (${selectedBoletoForDescription.id}): ${descriptionDraft}`,
+                            );
+                            toast({ title: "Descrição atualizada" });
+                            setDescriptionDialogOpen(false);
+                          } finally {
+                            setIsSavingDescription(false);
+                          }
                         }}
                       >
-                        Salvar
+                        {isSavingDescription ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1738,8 +1889,9 @@ const Financeiro = () => {
                       Gerar novo boleto após cancelar
                     </label>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>Voltar</Button>
+                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={isCancellingBoleto}>Voltar</Button>
                       <Button
+                        disabled={isCancellingBoleto}
                         onClick={async () => {
                           if (!selectedBoletoForCancel) return;
                           if (!cancelReason.trim()) {
@@ -1748,18 +1900,27 @@ const Financeiro = () => {
                           }
                           const chargeId = selectedBoletoForCancel.efiChargeId ? Number(selectedBoletoForCancel.efiChargeId) : extractChargeId(selectedBoletoForCancel.id);
                           if (!chargeId) return;
-                          await cancelBoletoRequest(chargeId);
-                          await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
-                          await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
-                          if (cancelAndRegenerate) {
-                            setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
-                            setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
-                            setGerarNovoOpen(true);
+                          try {
+                            setIsCancellingBoleto(true);
+                            await cancelBoletoRequest(chargeId);
+                            await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
+                            await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForCancel.empresa,
+                              `Cancelamento de boleto (${selectedBoletoForCancel.id}): ${cancelReason}`,
+                            );
+                            if (cancelAndRegenerate) {
+                              setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
+                              setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
+                              setGerarNovoOpen(true);
+                            }
+                            setCancelDialogOpen(false);
+                          } finally {
+                            setIsCancellingBoleto(false);
                           }
-                          setCancelDialogOpen(false);
                         }}
                       >
-                        Confirmar cancelamento
+                        {isCancellingBoleto ? "Cancelando..." : "Confirmar cancelamento"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1863,8 +2024,7 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Mín Funcionários</TableHead>
-                            <TableHead>Máx Funcionários</TableHead>
+                            <TableHead>Label</TableHead>
                             <TableHead>Valor (R$)</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
@@ -1872,15 +2032,14 @@ const Financeiro = () => {
                         <TableBody>
                           {faixas.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={4} className="text-center text-muted-foreground">
+                              <TableCell colSpan={3} className="text-center text-muted-foreground">
                                 Nenhuma faixa cadastrada
                               </TableCell>
                             </TableRow>
                           ) : (
                             faixas.map((faixa) => (
                               <TableRow key={faixa.id}>
-                                <TableCell>{faixa.min}</TableCell>
-                                <TableCell>{faixa.max}</TableCell>
+                                <TableCell>{faixa.descricao || "—"}</TableCell>
                                 <TableCell>R$ {faixa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                                 <TableCell className="text-right space-x-2">
                                   <Button
@@ -1928,26 +2087,6 @@ const Financeiro = () => {
                       placeholder="Ex: Faixa Comércio Varejista"
                       value={faixaForm.descricao}
                       onChange={(e) => setFaixaForm({ ...faixaForm, descricao: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="minFunc">Mín Funcionários (opcional)</Label>
-                    <Input
-                      id="minFunc"
-                      type="number"
-                      placeholder="Ex: 1"
-                      value={faixaForm.min}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, min: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxFunc">Máx Funcionários (opcional)</Label>
-                    <Input
-                      id="maxFunc"
-                      type="number"
-                      placeholder="Ex: 20"
-                      value={faixaForm.max}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, max: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -2070,7 +2209,23 @@ const Financeiro = () => {
                           </Select>
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
-                              {empresasDaFaixaSelecionada.map((empresa) => (
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
+                                >
+                                  Selecionar todas
+                                </Button>
+                              )}
+                              {isLoadingEmpresasPorFaixa && (
+                                <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length === 0 && (
+                                <p className="text-sm text-muted-foreground">Nenhuma empresa encontrada para a faixa selecionada.</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.map((empresa) => (
                                 <label key={empresa.id} className="flex items-center gap-2 text-sm">
                                   <input
                                     type="checkbox"
@@ -2531,11 +2686,73 @@ const Financeiro = () => {
                         Próximo
                       </Button>
                     ) : (
-                      <Button onClick={handleEmitirBoleto} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                        Emitir
+                      <Button onClick={handleEmitirBoleto} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
                       </Button>
                     )}
                   </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={comunicacaoDialogOpen} onOpenChange={setComunicacaoDialogOpen}>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader><DialogTitle>Histórico de comunicação - {selectedEmpresaComunicacao}</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <div className="text-sm whitespace-pre-wrap rounded-md border p-3 bg-muted/20">
+                    {data?.empresas.find((e) => e.razao_social === selectedEmpresaComunicacao)?.observacoes || "Sem histórico."}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="nova-nota-comunicacao">Nova nota</Label>
+                    <textarea
+                      id="nova-nota-comunicacao"
+                      className="w-full min-h-24 rounded-md border bg-background p-3 text-sm"
+                      placeholder="Adicione uma observação de contato..."
+                      value={novaNotaComunicacao}
+                      onChange={(e) => setNovaNotaComunicacao(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setComunicacaoDialogOpen(false)} disabled={isSavingNotaComunicacao}>
+                    Fechar
+                  </Button>
+                  <Button
+                    disabled={isSavingNotaComunicacao || !novaNotaComunicacao.trim()}
+                    onClick={async () => {
+                      if (!selectedEmpresaComunicacao || !novaNotaComunicacao.trim()) return;
+                      try {
+                        setIsSavingNotaComunicacao(true);
+                        await appendObservacaoEmpresa(selectedEmpresaComunicacao, novaNotaComunicacao.trim());
+                        setNovaNotaComunicacao("");
+                        toast({ title: "Nota adicionada ao histórico" });
+                      } finally {
+                        setIsSavingNotaComunicacao(false);
+                      }
+                    }}
+                  >
+                    {isSavingNotaComunicacao ? "Salvando..." : "Adicionar nota"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={editEmpresaDialogOpen} onOpenChange={setEditEmpresaDialogOpen}>
+              <DialogContent className="max-w-md">
+                <DialogHeader><DialogTitle>Editar dados da empresa</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <Input value={empresaEditDraft?.razao_social || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, razao_social: e.target.value } : p)} placeholder="Razão social" />
+                  <Input value={empresaEditDraft?.email || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, email: e.target.value } : p)} placeholder="E-mail" />
+                  <Input value={empresaEditDraft?.whatsapp || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, whatsapp: e.target.value } : p)} placeholder="WhatsApp" />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setEditEmpresaDialogOpen(false)}>Cancelar</Button>
+                  <Button onClick={async () => {
+                    if (!empresaEditDraft) return;
+                    await hasuraRequest({ query: `mutation UpdateEmpresaRapido($id: uuid!, $razao: String!, $email: String, $whatsapp: String) { update_empresas_by_pk(pk_columns: {id: $id}, _set: { razao_social: $razao, email: $email, whatsapp: $whatsapp }) { id } }`, variables: { id: empresaEditDraft.id, razao: empresaEditDraft.razao_social, email: empresaEditDraft.email || null, whatsapp: empresaEditDraft.whatsapp || null }, token });
+                    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+                    setEditEmpresaDialogOpen(false);
+                  }}>Salvar</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>

@@ -31,6 +31,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/ui/table-pagination";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
@@ -242,6 +243,8 @@ const Empresas = () => {
   const [periodoTipo, setPeriodoTipo] = useState<typeof periodoOptions[number]["value"]>("fundacao");
   const [periodoInicio, setPeriodoInicio] = useState("");
   const [periodoFim, setPeriodoFim] = useState("");
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(50);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
@@ -448,13 +451,19 @@ const Empresas = () => {
   const filteredEmpresas = useMemo(() => {
     return empresas.filter((empresa) => {
       const search = normalizeSearchText(searchTerm.trim());
+      const searchTokens = search.split(/\s+/).filter(Boolean);
+      const empresaSearchBlob = normalizeSearchText([
+        empresa.razaoSocial,
+        empresa.nomeFantasia,
+        empresa.responsavel?.nome,
+        ...empresa.colaboradores.map((colaborador) => colaborador.nome),
+      ].join(" "));
+      const cnpjDigits = empresa.cnpj.replace(/\D/g, "");
+      const searchDigits = search.replace(/\D/g, "");
       const matchesSearch =
         !search ||
-        normalizeSearchText(empresa.razaoSocial).includes(search) ||
-        normalizeSearchText(empresa.nomeFantasia).includes(search) ||
-        empresa.cnpj.replace(/\D/g, "").includes(search.replace(/\D/g, "")) ||
-        empresa.colaboradores.some((colaborador) => normalizeSearchText(colaborador.nome).includes(search)) ||
-        normalizeSearchText(empresa.responsavel?.nome).includes(search);
+        searchTokens.every((token) => empresaSearchBlob.includes(token)) ||
+        (!!searchDigits && cnpjDigits.includes(searchDigits));
 
       const matchesAssociacao =
         associationFilter === "Todas" ||
@@ -488,6 +497,10 @@ const Empresas = () => {
   }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
+  const paginatedEmpresas = useMemo(() => {
+    const start = (tablePage - 1) * tablePageSize;
+    return filteredEmpresas.slice(start, start + tablePageSize);
+  }, [filteredEmpresas, tablePage, tablePageSize]);
 
   const handleExportEmpresas = async (type: "PDF" | "Excel") => {
     if (type === "PDF") {
@@ -944,7 +957,7 @@ const Empresas = () => {
                     Nenhuma empresa encontrada com os filtros selecionados.
                   </Card>
                 ) : (
-                  filteredEmpresas.map((empresa) => {
+                  paginatedEmpresas.map((empresa) => {
                     const contato = getContatoPrincipal(empresa);
                     return (
                       <Card 
@@ -1058,6 +1071,16 @@ const Empresas = () => {
                     );
                   })
                 )}
+                <TablePagination
+                  page={tablePage}
+                  pageSize={tablePageSize}
+                  total={filteredEmpresas.length}
+                  onPageChange={setTablePage}
+                  onPageSizeChange={(size) => {
+                    setTablePageSize(size);
+                    setTablePage(1);
+                  }}
+                />
               </div>
             ) : (
               /* Desktop Table View */
@@ -1084,7 +1107,7 @@ const Empresas = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredEmpresas.map((empresa) => {
+                        {paginatedEmpresas.map((empresa) => {
                           const contato = getContatoPrincipal(empresa);
                           return (
                             <TableRow
@@ -1175,6 +1198,16 @@ const Empresas = () => {
                     {filteredEmpresas.length === 0 && (
                       <p className="py-6 text-center text-muted-foreground">Nenhuma empresa encontrada com os filtros selecionados.</p>
                     )}
+                    <TablePagination
+                      page={tablePage}
+                      pageSize={tablePageSize}
+                      total={filteredEmpresas.length}
+                      onPageChange={setTablePage}
+                      onPageSizeChange={(size) => {
+                        setTablePageSize(size);
+                        setTablePage(1);
+                      }}
+                    />
                   </div>
                 </CardContent>
               </Card>
@@ -1606,12 +1639,12 @@ const Empresas = () => {
                   </div>
 
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={handleCloseDialog}>
+                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending}>
                       Cancelar
                     </Button>
                     {!isViewMode && (
-                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90">
-                        Salvar
+                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending}>
+                        {saveEmpresaMutation.isPending ? "Salvando..." : "Salvar"}
                       </Button>
                     )}
                   </div>
@@ -1634,8 +1667,8 @@ const Empresas = () => {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
-                    Excluir
+                  <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700" disabled={deleteEmpresaMutation.isPending}>
+                    {deleteEmpresaMutation.isPending ? "Excluindo..." : "Excluir"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
