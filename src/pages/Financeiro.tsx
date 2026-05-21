@@ -502,9 +502,9 @@ const Financeiro = () => {
 
       const valorBoleto = payload.tipo === "contribuicao"
         ? payload.valorCalculado
-        : payload.valorOverride ?? previaBoleto ?? 0;
+        : payload.valorOverride ?? previaBoleto ?? getValorFaixa(payload.faixaId);
       if (valorBoleto <= 0) {
-        throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
+        throw new Error("Valor do boleto inválido. Selecione uma faixa com valor válido.");
       }
 
       const descontoValor = parseCurrencyInput(payload.descontos);
@@ -590,6 +590,11 @@ const Financeiro = () => {
       })) ?? []
     );
   }, [data?.faixas]);
+
+  const getValorFaixa = (faixaId?: string) => {
+    if (!faixaId) return 0;
+    return faixas.find((f) => f.id === faixaId)?.valor ?? 0;
+  };
 
   const saveFaixaMutation = useMutation({
     mutationFn: async (payload: { id?: string; min: number; max: number; valor: number; descricao?: string }) => {
@@ -1205,10 +1210,10 @@ const Financeiro = () => {
       }
     } else if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        if (previaBoleto === null) {
+        if (!boletoForm.competenciaInicial || !boletoForm.competenciaFinal || !boletoForm.dataVencimento || !boletoForm.faixaId) {
           toast({
-            title: "Pesquisa obrigatória",
-            description: "Clique em 'Pesquisar' antes de avançar.",
+            title: "Campos obrigatórios",
+            description: "Preencha competências, vencimento e faixa para avançar.",
             variant: "destructive",
           });
           return;
@@ -1362,7 +1367,7 @@ const Financeiro = () => {
         }
 
         if (boletoForm.unificarCompetencias === "Sim") {
-          const valorUnificado = (previaBoleto ?? 0) * competencias.length;
+          const valorUnificado = (previaBoleto ?? getValorFaixa(boletoForm.faixaId)) * competencias.length;
           await Promise.all(
             targetEmpresas.map((empresa) =>
               createBoletoMutation.mutateAsync({
@@ -1383,7 +1388,7 @@ const Financeiro = () => {
                   empresaNome: empresa.nome,
                   competenciaInicial: competencia,
                   competenciaFinal: competencia,
-                  valorOverride: previaBoleto ?? 0,
+                  valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
                 }),
               ),
             ),
