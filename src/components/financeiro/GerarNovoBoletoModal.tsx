@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -30,7 +31,7 @@ interface GerarNovoBoletoModalProps {
     vencimento: string;
     valor: number;
   } | null;
-  onGenerate: (boletoId: string, novaData: Date) => void;
+  onGenerate: (boletoId: string, novaData: Date, novoValor: number) => void;
 }
 
 export function GerarNovoBoletoModal({
@@ -43,17 +44,29 @@ export function GerarNovoBoletoModal({
   const [novaData, setNovaData] = useState<Date | undefined>(
     addDays(new Date(), 30)
   );
+  const [novoValor, setNovoValor] = useState("");
 
   const handleGenerate = () => {
     if (!boleto || !novaData) return;
 
-    onGenerate(boleto.id, novaData);
+    const valorNumerico = Number(novoValor || boleto.valor);
+    if (!Number.isFinite(valorNumerico) || valorNumerico <= 0) {
+      toast({
+        title: "Valor inválido",
+        description: "Informe um valor maior que zero para gerar o boleto.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    onGenerate(boleto.id, novaData, valorNumerico);
     toast({
       title: "Novo boleto gerado (mock)",
       description: `Boleto para ${boleto.empresa} com vencimento em ${format(novaData, "dd/MM/yyyy")}`,
     });
     onOpenChange(false);
     setNovaData(addDays(new Date(), 30));
+    setNovoValor("");
   };
 
   if (!boleto) return null;
@@ -89,6 +102,18 @@ export function GerarNovoBoletoModal({
             <p className="font-medium">
               R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
             </p>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-sm text-muted-foreground">Novo valor (opcional)</Label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={novoValor}
+              onChange={(e) => setNovoValor(e.target.value)}
+              placeholder={`${boleto.valor.toFixed(2)}`}
+            />
           </div>
 
           <div className="space-y-2 pt-2">

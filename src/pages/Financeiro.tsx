@@ -1747,7 +1747,7 @@ const Financeiro = () => {
                   open={gerarNovoOpen}
                   onOpenChange={setGerarNovoOpen}
                   boleto={selectedBoletoForNew}
-                  onGenerate={(boletoId, novaData) => {
+                  onGenerate={(boletoId, novaData, novoValor) => {
                     const original = boletos.find((b) => b.id === boletoId);
                     if (original) {
                       const empresaMatch = data?.empresas.find(
@@ -1770,6 +1770,7 @@ const Financeiro = () => {
                         percentual: original.percentual ? String(original.percentual) : "",
                         descontos: original.descontos ? String(original.descontos) : "",
                         valorCalculado: original.valor,
+                        valorOverride: novoValor,
                         pesquisaContribuicaoFeita: true,
                       };
                       createBoletoMutation.mutate(payload, {
