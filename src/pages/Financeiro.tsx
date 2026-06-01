@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -595,6 +595,29 @@ const Financeiro = () => {
     if (!faixaId) return 0;
     return faixas.find((f) => f.id === faixaId)?.valor ?? 0;
   };
+  const getCompetenciasCount = (inicio?: string, fim?: string) => {
+    if (!inicio || !fim) return 0;
+    const start = startOfMonth(parseISO(inicio));
+    const end = startOfMonth(parseISO(fim));
+    if (!isValid(start) || !isValid(end) || isAfter(start, end)) return 0;
+    let cursor = start;
+    let total = 0;
+    while (!isAfter(cursor, end)) {
+      total += 1;
+      cursor = addMonths(cursor, 1);
+    }
+    return total;
+  };
+
+  const getMensalidadePreview = () => {
+    const valorFaixa = getValorFaixa(boletoForm.faixaId);
+    const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+    return {
+      meses,
+      valorMensal: valorFaixa,
+      valorTotal: valorFaixa * Math.max(meses, 1),
+    };
+  };
 
   const saveFaixaMutation = useMutation({
     mutationFn: async (payload: { id?: string; min: number; max: number; valor: number; descricao?: string }) => {
@@ -842,14 +865,14 @@ const Financeiro = () => {
 
     if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        return previaBoleto !== null;
+        return !!(boletoForm.competenciaInicial && boletoForm.competenciaFinal && boletoForm.dataVencimento && boletoForm.faixaId);
       }
 
-      return boletoForm.pesquisaContribuicaoFeita && boletoForm.valorCalculado > 0;
+      return false;
     }
 
     return true;
-  }, [batchEmpresaIds.length, boletoForm, isBatchMode, previaBoleto, wizardStep]);
+  }, [batchEmpresaIds.length, boletoForm, isBatchMode, wizardStep]);
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -2183,12 +2206,12 @@ const Financeiro = () => {
                             Mensalidade (por Faixa)
                           </Label>
                         </div>
-                        <div className="flex items-center space-x-2 border p-3 rounded-lg">
-                          <RadioGroupItem value="contribuicao" id="contribuicao" />
-                          <Label htmlFor="contribuicao" className="flex-1">
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-60 bg-muted/30">
+                          <RadioGroupItem value="contribuicao" id="contribuicao" disabled />
+                          <Label htmlFor="contribuicao" className="flex-1 cursor-not-allowed">
                             Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Calculadora de alíquota integrada na etapa seguinte
+                              Em breve será implementado.
                             </span>
                           </Label>
                         </div>
@@ -2378,194 +2401,33 @@ const Financeiro = () => {
                           />
                         </div>
 
-                        {previaBoleto !== null && (
-                          <div className="bg-accent/20 p-4 rounded-lg">
-                            <p className="text-sm font-medium">Prévia de valor:</p>
-                            <p className="text-2xl font-bold text-primary">
-                              R$ {previaBoleto.toFixed(2)}
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Competências: {boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}
-                            </p>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-4 border-t">
-                          <Button onClick={handlePesquisarBoleto} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                            <Search className="h-4 w-4 mr-2" />
-                            Pesquisar
-                          </Button>
-                          <Button variant="outline" onClick={handleLimparEtapa2}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Limpar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
-                            }}
-                          >
-                            <Save className="h-4 w-4 mr-2" />
-                            Salvar Filtro
-                          </Button>
-                        </div>
+                        {(() => {
+                          const preview = getMensalidadePreview();
+                          return (
+                            <div className="bg-accent/20 p-4 rounded-lg border border-accent/30">
+                              <p className="text-sm font-medium">Resumo do valor:</p>
+                              <p className="text-2xl font-bold text-primary">
+                                R$ {preview.valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </p>
+                              <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
+                                <span>{preview.meses || 0} competência(s)</span>
+                                <span>R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
+                                <span>{boletoForm.unificarCompetencias === "Sim" ? "1 boleto unificado" : `${preview.meses || 0} boleto(s)`}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </CardContent>
                     </Card>
                   </div>
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "contribuicao" && (
-                  <div className="space-y-6">
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-lg">Detalhes do Boleto - Contribuição Assistencial</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="anoContribuicao">Ano da Contribuição*</Label>
-                            <Input
-                              id="anoContribuicao"
-                              inputMode="numeric"
-                              maxLength={4}
-                              placeholder="2025"
-                              value={boletoForm.anoContribuicao}
-                              onChange={(e) =>
-                                setBoletoForm({ ...boletoForm, anoContribuicao: e.target.value.replace(/[^0-9]/g, "").slice(0, 4) })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="periodicidade">Periodicidade do Boleto*</Label>
-                            <Select
-                              value={boletoForm.periodicidade}
-                              onValueChange={(value) => setBoletoForm({ ...boletoForm, periodicidade: value })}
-                            >
-                              <SelectTrigger id="periodicidade">
-                                <SelectValue placeholder="Selecione" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="Mensal">Mensal</SelectItem>
-                                <SelectItem value="Trimestral">Trimestral</SelectItem>
-                                <SelectItem value="Semestral">Semestral</SelectItem>
-                                <SelectItem value="Anual">Anual</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="parcelas">Qtde. Parcelas*</Label>
-                            <Select
-                              value={boletoForm.parcelas}
-                              onValueChange={(value) => setBoletoForm({ ...boletoForm, parcelas: value })}
-                            >
-                              <SelectTrigger id="parcelas">
-                                <SelectValue placeholder="Selecione" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {[...Array(12)].map((_, index) => {
-                                  const value = (index + 1).toString();
-                                  return (
-                                    <SelectItem key={value} value={value}>
-                                      {value}
-                                    </SelectItem>
-                                  );
-                                })}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Data Vencimento*</Label>
-                            <DatePickerField
-                              value={boletoForm.dataVencimento}
-                              placeholder="Selecione o vencimento"
-                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="baseCalculoContrib">Base de Cálculo (R$)*</Label>
-                              <Input
-                                id="baseCalculoContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="20000"
-                                value={boletoForm.baseCalculo}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, baseCalculo: e.target.value })}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="percentualContrib">Percentual (%)*</Label>
-                              <Input
-                                id="percentualContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="1.5"
-                                value={boletoForm.percentual}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, percentual: e.target.value })}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="descontosContrib">Descontos/Isenções (R$)</Label>
-                              <Input
-                                id="descontosContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="0"
-                                value={boletoForm.descontos}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, descontos: e.target.value })}
-                              />
-                            </div>
-                          </div>
-                          <div className="space-y-3 rounded-lg border p-4 bg-neutral-100">
-                            <div className="flex items-center justify-between">
-                              <p className="font-semibold">Valor Calculado (R$)</p>
-                              <Button size="sm" variant="outline" onClick={calcularValorContribuicao}>
-                                Calcular
-                              </Button>
-                            </div>
-                            <p className="text-3xl font-bold text-primary">
-                              R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Valor Calculado = (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
-                            </p>
-                          </div>
-                        </div>
-
-                        {contribuicaoPreview && (
-                          <div className="bg-accent/20 p-4 rounded-lg">
-                            <p className="text-sm font-medium">{contribuicaoPreview}</p>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-4 border-t">
-                          <Button onClick={handlePesquisarContribuicao} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                            <Search className="h-4 w-4 mr-2" />
-                            Pesquisar
-                          </Button>
-                          <Button variant="outline" onClick={handleLimparContribuicao}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Limpar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
-                            }}
-                          >
-                            <Save className="h-4 w-4 mr-2" />
-                            Salvar Filtro
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
+                  <Card className="border-dashed">
+                    <CardContent className="p-6 text-sm text-muted-foreground">
+                      Contribuição Assistencial estará disponível em breve.
+                    </CardContent>
+                  </Card>
                 )}
 
                 {/* Etapa 3: Revisão e Emissão */}
@@ -2667,7 +2529,7 @@ const Financeiro = () => {
                           <p className="text-3xl font-bold text-primary">
                             {boletoForm.tipo === "contribuicao"
                               ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
-                              : `R$ ${(previaBoleto || 0).toFixed(2)}`}
+                              : `R$ ${getMensalidadePreview().valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
                           </p>
                         </div>
                       </CardContent>
