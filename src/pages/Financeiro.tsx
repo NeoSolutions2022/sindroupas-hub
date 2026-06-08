@@ -313,30 +313,78 @@ const DatePickerField = ({
 }) => {
   const parsedDate = value ? parseISO(value) : undefined;
   const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
+  const displayValue = selectedDate ? format(selectedDate, "dd/MM/yyyy") : "";
+  const [typedValue, setTypedValue] = useState(displayValue);
+
+  useEffect(() => {
+    setTypedValue(displayValue);
+  }, [displayValue]);
+
+  const maskDateInput = (input: string) => {
+    const digits = input.replace(/\D/g, "").slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  };
+
+  const commitTypedDate = (masked: string) => {
+    if (!masked) {
+      onChange("");
+      return;
+    }
+
+    if (masked.length !== 10) return;
+
+    const typedDate = parse(masked, "dd/MM/yyyy", new Date());
+    if (isValid(typedDate) && format(typedDate, "dd/MM/yyyy") === masked) {
+      onChange(format(typedDate, "yyyy-MM-dd"));
+    }
+  };
+
+  const handleInputChange = (input: string) => {
+    const masked = maskDateInput(input);
+    setTypedValue(masked);
+    commitTypedDate(masked);
+  };
+
+  const handleInputBlur = () => {
+    if (!typedValue) {
+      onChange("");
+      return;
+    }
+
+    const typedDate = parse(typedValue, "dd/MM/yyyy", new Date());
+    if (typedValue.length !== 10 || !isValid(typedDate) || format(typedDate, "dd/MM/yyyy") !== typedValue) {
+      setTypedValue(displayValue);
+    }
+  };
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          className={cn(
-            "w-full justify-start text-left font-normal",
-            !value && "text-muted-foreground",
-          )}
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {value ? format(selectedDate, "dd/MM/yyyy") : placeholder}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0 bg-popover" align="start">
-        <Calendar
-          mode="single"
-          selected={selectedDate}
-          onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
-          initialFocus
-        />
-      </PopoverContent>
-    </Popover>
+    <div className="flex gap-2">
+      <Input
+        value={typedValue}
+        onChange={(event) => handleInputChange(event.target.value)}
+        onBlur={handleInputBlur}
+        inputMode="numeric"
+        placeholder={placeholder}
+        className={cn(!typedValue && "text-muted-foreground")}
+      />
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0">
+            <CalendarIcon className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0 bg-popover" align="end">
+          <Calendar
+            mode="single"
+            selected={selectedDate}
+            onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
+            initialFocus
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 };
 
