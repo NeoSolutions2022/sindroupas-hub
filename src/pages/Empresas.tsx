@@ -472,7 +472,7 @@ const Empresas = () => {
 
       const matchesSituacao = situacaoFilter === "Todas" || empresa.situacaoFinanceira === situacaoFilter;
       const matchesPorte = !porteFilter || empresa.porte === porteFilter;
-      const matchesFaixa = !faixaFilter || empresa.faixaId === faixaFilter;
+      const matchesFaixa = !faixaFilter || (faixaFilter === "sem-faixa" ? !empresa.faixaId : empresa.faixaId === faixaFilter);
 
       const dateField =
         periodoTipo === "fundacao"
@@ -894,6 +894,7 @@ const Empresas = () => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Todas as faixas</SelectItem>
+                      <SelectItem value="sem-faixa">Sem faixa</SelectItem>
                       {faixas.map((faixa) => (
                         <SelectItem key={faixa.id} value={faixa.id}>
                           {faixa.label}
