@@ -325,7 +325,7 @@ const Empresas = () => {
         razao_social: payload.values.razaoSocial ?? "",
         nome_fantasia: payload.values.nomeFantasia ?? "",
         cnpj: payload.values.cnpj ?? "",
-        associada: payload.values.associado ?? false,
+        associada: payload.values.dataDesassociacao ? false : (payload.values.associado ?? false),
         situacao_financeira: payload.values.situacaoFinanceira ?? "Regular",
         porte: payload.values.porte ?? "ME",
         capital_social: payload.values.capitalSocial ?? null,
@@ -1492,7 +1492,14 @@ const Empresas = () => {
                         id="desassociacao"
                         type="date"
                         value={formData.dataDesassociacao || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, dataDesassociacao: e.target.value }))}
+                        onChange={(e) => {
+                          const dataDesassociacao = e.target.value;
+                          setFormData((prev) => ({
+                            ...prev,
+                            dataDesassociacao,
+                            ...(dataDesassociacao ? { associado: false } : {}),
+                          }));
+                        }}
                         disabled={isViewMode}
                       />
                     </div>
