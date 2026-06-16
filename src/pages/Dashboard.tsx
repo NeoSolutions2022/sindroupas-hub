@@ -518,8 +518,6 @@ const Dashboard = () => {
             <NovasKPIs
               inadimplencia={dashboardKPIs.inadimplencia}
               inadimplenciaVariacao={dashboardKPIs.inadimplenciaVariacao}
-              totalFaturadoMes={dashboardKPIs.totalFaturadoMes}
-              totalFaturadoVariacao={dashboardKPIs.totalFaturadoVariacao}
               valorEmAtraso={dashboardKPIs.valorEmAtraso}
               qtdBoletosVencidos={dashboardKPIs.qtdBoletosVencidos}
               empresasCriticas={dashboardKPIs.empresasCriticas}

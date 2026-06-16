@@ -1,4 +1,4 @@
-export type BoletoTipo = "Mensalidade (por Faixa)" | "Contribuição Assistencial";
+export type BoletoTipo = "Mensalidade (por Faixa)" | "Contribuição Assistencial" | "Boleto avulso";
 
 export interface BoletoRegistro {
   id: string;

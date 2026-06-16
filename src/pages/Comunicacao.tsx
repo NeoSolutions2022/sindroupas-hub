@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
@@ -33,6 +34,10 @@ import {
 } from "@/components/ui/select";
 import { Plus, Mail, MessageCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { hasuraRequest } from "@/lib/api/hasura";
+import { useAuth } from "@/contexts/AuthContext";
+import { TablePagination } from "@/components/ui/table-pagination";
+import { sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type NotificacaoStatus = "enviado" | "entregue" | "lido";
 
@@ -65,18 +70,46 @@ const mockNotificacoesInicial: Notificacao[] = [
 ];
 
 const Comunicacao = () => {
+  const { token } = useAuth();
   const [notificacoes, setNotificacoes] = useState<Notificacao[]>(mockNotificacoesInicial);
+  const [empresaFiltroObs, setEmpresaFiltroObs] = useState("");
+  const [novaObservacaoByEmpresa, setNovaObservacaoByEmpresa] = useState<Record<string, string>>({});
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [notifPage, setNotifPage] = useState(1);
+  const [notifPageSize, setNotifPageSize] = useState(50);
+  const [obsPage, setObsPage] = useState(1);
+  const [obsPageSize, setObsPageSize] = useState(50);
   const [novaNotificacao, setNovaNotificacao] = useState({
-    empresa: "",
+    empresas: [] as string[],
     canal: "WhatsApp" as "WhatsApp" | "E-mail",
     mensagem: "",
     linkFormulario: "",
   });
+  const [empresaBuscaEnvio, setEmpresaBuscaEnvio] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [isCadenciado, setIsCadenciado] = useState(true);
   const { toast } = useToast();
+  const { data: empresasData, refetch: refetchEmpresas } = useQuery({
+    queryKey: ["comunicacao-empresas-observacoes"],
+    queryFn: () =>
+      hasuraRequest<{ empresas: { id: string; razao_social: string; observacoes?: string | null; whatsapp?: string | null; email?: string | null }[] }>({
+        query: `
+          query ComunicacaoEmpresas {
+            empresas(order_by: { razao_social: asc }) {
+              id
+              razao_social
+              observacoes
+              whatsapp
+              email
+            }
+          }
+        `,
+        token,
+      }),
+  });
 
-  const handleEnviarNotificacao = () => {
-    if (!novaNotificacao.empresa || !novaNotificacao.mensagem) {
+  const handleEnviarNotificacao = async () => {
+    if (novaNotificacao.empresas.length === 0 || !novaNotificacao.mensagem) {
       toast({
         title: "Erro",
         description: "Preencha todos os campos obrigatórios",
@@ -89,36 +122,65 @@ const Comunicacao = () => {
       ? `${novaNotificacao.mensagem} ${novaNotificacao.linkFormulario}`
       : novaNotificacao.mensagem;
 
-    const mensagemComPlaceholder = mensagemCompleta.replace(
-      /{{empresa}}/g,
-      novaNotificacao.empresa
-    );
+    const mensagemComPlaceholder = mensagemCompleta;
 
-    const novaNotif: Notificacao = {
-      id: notificacoes.length + 1,
-      empresa: novaNotificacao.empresa,
-      canal: novaNotificacao.canal,
-      mensagem: mensagemComPlaceholder,
-      status: "enviado",
-      data: new Date().toISOString().split("T")[0],
-    };
+    try {
+      setIsSending(true);
+      const alvoEmpresas = novaNotificacao.empresas.includes("__TODAS__")
+        ? (empresasData?.empresas ?? [])
+        : (empresasData?.empresas ?? []).filter((item) => novaNotificacao.empresas.includes(item.razao_social));
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const getDelayMs = () => 60_000 + Math.floor(Math.random() * 60_000); // 1-2 min
 
-    setNotificacoes([novaNotif, ...notificacoes]);
+      for (let index = 0; index < alvoEmpresas.length; index += 1) {
+        const empresaSelecionada = alvoEmpresas[index];
+        const mensagemEmpresa = mensagemComPlaceholder.replace(/{{empresa}}/g, empresaSelecionada.razao_social);
+        const normalizeWhatsappToE164BR = (raw?: string | null) => {
+          const digits = (raw ?? "").replace(/\D/g, "");
+          if (!digits) return "";
+          return digits.startsWith("55") ? digits : `55${digits}`;
+        };
+        const number = normalizeWhatsappToE164BR(empresaSelecionada.whatsapp);
+        if (!number) continue;
 
-    // Simular mudança de status após 3s
-    setTimeout(() => {
-      setNotificacoes((prev) =>
-        prev.map((n) => (n.id === novaNotif.id ? { ...n, status: "entregue" } : n))
-      );
-    }, 3000);
+        await sendEvolutionTextRequest({ number, text: mensagemEmpresa });
+        const novaNotif: Notificacao = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          empresa: empresaSelecionada.razao_social,
+          canal: novaNotificacao.canal,
+          mensagem: mensagemEmpresa,
+          status: "entregue",
+          data: new Date().toISOString().split("T")[0],
+        };
+        setNotificacoes((prev) => [novaNotif, ...prev]);
+        await handleAdicionarObservacao(
+          empresaSelecionada.id,
+          empresaSelecionada.observacoes,
+          `Notificação enviada via Evolution (${novaNotificacao.canal}): ${mensagemEmpresa}`,
+        );
 
-    toast({
-      title: "Notificação enviada",
-      description: `Mensagem enviada para ${novaNotificacao.empresa} via ${novaNotificacao.canal}`,
-    });
+        const hasNext = index < alvoEmpresas.length - 1;
+        if (isCadenciado && hasNext) {
+          const delayMs = getDelayMs();
+          const delayMin = Math.round((delayMs / 60_000) * 10) / 10;
+          toast({
+            title: "Cadência ativa",
+            description: `Próximo envio para outro contato em ~${delayMin} min.`,
+          });
+          await wait(delayMs);
+        }
+      }
 
-    setNovaNotificacao({ empresa: "", canal: "WhatsApp", mensagem: "", linkFormulario: "" });
-    setDialogOpen(false);
+      toast({
+        title: "Notificação enviada",
+        description: `Mensagens enviadas para ${alvoEmpresas.length} empresa(s) via Evolution API`,
+      });
+      setNovaNotificacao({ empresas: [], canal: "WhatsApp", mensagem: "", linkFormulario: "" });
+      setEmpresaBuscaEnvio("");
+      setDialogOpen(false);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const getStatusBadge = (status: NotificacaoStatus) => {
@@ -141,6 +203,58 @@ const Comunicacao = () => {
     ) : (
       <Mail className="h-4 w-4" />
     );
+  };
+
+  const empresasFiltradasObs = (empresasData?.empresas ?? []).filter((empresa) =>
+    empresa.razao_social.toLowerCase().includes(empresaFiltroObs.toLowerCase()),
+  );
+
+
+  const historicoWhatsapp = (empresasData?.empresas ?? []).flatMap((empresa) => {
+    const raw = empresa.observacoes ?? "";
+    if (!raw.trim()) return [] as { id: string; data: string; empresa: string; mensagem: string; canal: "WhatsApp"; status: NotificacaoStatus }[];
+    return raw
+      .split("\n---\n")
+      .map((entry, index) => ({ entry: entry.trim(), index }))
+      .filter(({ entry }) => /whatsapp|evolution|notificação enviada/i.test(entry))
+      .map(({ entry, index }) => {
+        const dateMatch = entry.match(/^\[(.*?)\]/);
+        const data = dateMatch?.[1] ?? "-";
+        const mensagem = entry.replace(/^\[.*?\]\s*/, "");
+        return {
+          id: `${empresa.id}-${index}`,
+          data,
+          empresa: empresa.razao_social,
+          mensagem,
+          canal: "WhatsApp" as const,
+          status: "entregue" as NotificacaoStatus,
+        };
+      });
+  });
+
+  const paginatedNotificacoes = notificacoes.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
+  const paginatedHistoricoWhatsapp = historicoWhatsapp.slice((notifPage - 1) * notifPageSize, notifPage * notifPageSize);
+  const paginatedObs = empresasFiltradasObs.slice((obsPage - 1) * obsPageSize, obsPage * obsPageSize);
+
+  const handleAdicionarObservacao = async (empresaId: string, observacoesAtuais?: string | null, notaDireta?: string) => {
+    const novaObservacao = (notaDireta ?? novaObservacaoByEmpresa[empresaId] ?? "").trim();
+    if (!novaObservacao) return;
+    const stamp = new Date().toLocaleString("pt-BR");
+    const novoHistorico = [`[${stamp}] ${novaObservacao.trim()}`, (observacoesAtuais ?? "").trim()]
+      .filter(Boolean)
+      .join("\n---\n");
+    await hasuraRequest({
+      query: `
+        mutation AtualizarObservacoesEmpresa($id: uuid!, $observacoes: String) {
+          update_empresas_by_pk(pk_columns: { id: $id }, _set: { observacoes: $observacoes }) { id }
+        }
+      `,
+      variables: { id: empresaId, observacoes: novoHistorico },
+      token,
+    });
+    setNovaObservacaoByEmpresa((prev) => ({ ...prev, [empresaId]: "" }));
+    await refetchEmpresas();
+    toast({ title: "Observação adicionada" });
   };
 
   return (
@@ -168,15 +282,45 @@ const Comunicacao = () => {
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="empresa">Empresa</Label>
+                      <Label>Empresas</Label>
                       <Input
-                        id="empresa"
-                        placeholder="Nome da empresa"
-                        value={novaNotificacao.empresa}
-                        onChange={(e) =>
-                          setNovaNotificacao({ ...novaNotificacao, empresa: e.target.value })
-                        }
+                        placeholder="Buscar empresa..."
+                        value={empresaBuscaEnvio}
+                        onChange={(e) => setEmpresaBuscaEnvio(e.target.value)}
                       />
+                      <div className="max-h-44 overflow-auto rounded-md border p-2 space-y-2">
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={novaNotificacao.empresas.includes("__TODAS__")}
+                            onChange={(e) => setNovaNotificacao((prev) => ({
+                              ...prev,
+                              empresas: e.target.checked ? ["__TODAS__"] : [],
+                            }))}
+                          />
+                          Todas as empresas
+                        </label>
+                        {(empresasData?.empresas ?? [])
+                          .filter((empresa) => empresa.razao_social.toLowerCase().includes(empresaBuscaEnvio.toLowerCase()))
+                          .map((empresa) => {
+                            const checked = novaNotificacao.empresas.includes(empresa.razao_social);
+                            return (
+                              <label key={empresa.id} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={checked || novaNotificacao.empresas.includes("__TODAS__")}
+                                  onChange={(e) => setNovaNotificacao((prev) => ({
+                                    ...prev,
+                                    empresas: e.target.checked
+                                      ? [...prev.empresas.filter((x) => x !== "__TODAS__"), empresa.razao_social]
+                                      : prev.empresas.filter((x) => x !== empresa.razao_social && x !== "__TODAS__"),
+                                  }))}
+                                />
+                                {empresa.razao_social}
+                              </label>
+                            );
+                          })}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="canal">Canal de Envio</Label>
@@ -195,6 +339,14 @@ const Comunicacao = () => {
                         </SelectContent>
                       </Select>
                     </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={isCadenciado}
+                        onChange={(e) => setIsCadenciado(e.target.checked)}
+                      />
+                      Cadenciar envios (1–2 min entre contatos)
+                    </label>
                     <div className="space-y-2">
                       <Label htmlFor="mensagem">Mensagem</Label>
                       <Textarea
@@ -226,7 +378,9 @@ const Comunicacao = () => {
                     <Button variant="outline" onClick={() => setDialogOpen(false)}>
                       Cancelar
                     </Button>
-                    <Button onClick={handleEnviarNotificacao}>Enviar</Button>
+                    <Button onClick={handleEnviarNotificacao} disabled={isSending}>
+                      {isSending ? "Enviando..." : "Enviar"}
+                    </Button>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -234,7 +388,7 @@ const Comunicacao = () => {
 
             <Card>
               <CardHeader>
-                <CardTitle>Histórico de Mensagens Enviadas</CardTitle>
+                <CardTitle>Histórico de Mensagens (WhatsApp)</CardTitle>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -248,7 +402,7 @@ const Comunicacao = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {notificacoes.map((notificacao) => (
+                    {paginatedHistoricoWhatsapp.map((notificacao) => (
                       <TableRow key={notificacao.id}>
                         <TableCell>{notificacao.data}</TableCell>
                         <TableCell className="font-medium">{notificacao.empresa}</TableCell>
@@ -264,6 +418,49 @@ const Comunicacao = () => {
                     ))}
                   </TableBody>
                 </Table>
+                <TablePagination page={notifPage} pageSize={notifPageSize} total={historicoWhatsapp.length} onPageChange={setNotifPage} onPageSizeChange={(size) => { setNotifPageSize(size); setNotifPage(1); }} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Histórico de Contato por Empresa</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Input
+                  placeholder="Filtrar empresa..."
+                  value={empresaFiltroObs}
+                  onChange={(e) => setEmpresaFiltroObs(e.target.value)}
+                />
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Empresa</TableHead>
+                      <TableHead>Observações (Histórico)</TableHead>
+                      <TableHead>Nova observação</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedObs.map((empresa) => (
+                      <TableRow key={empresa.id}>
+                        <TableCell className="font-medium">{empresa.razao_social}</TableCell>
+                        <TableCell className="whitespace-pre-wrap text-sm">{empresa.observacoes || "-"}</TableCell>
+                        <TableCell className="space-y-2 min-w-[280px]">
+                          <Textarea
+                            value={novaObservacaoByEmpresa[empresa.id] ?? ""}
+                            onChange={(e) => setNovaObservacaoByEmpresa((prev) => ({ ...prev, [empresa.id]: e.target.value }))}
+                            placeholder="Adicionar nova entrada no histórico..."
+                            rows={3}
+                          />
+                          <Button size="sm" onClick={() => handleAdicionarObservacao(empresa.id, empresa.observacoes)}>
+                            Adicionar
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <TablePagination page={obsPage} pageSize={obsPageSize} total={empresasFiltradasObs.length} onPageChange={setObsPage} onPageSizeChange={(size) => { setObsPageSize(size); setObsPage(1); }} />
               </CardContent>
             </Card>
           </main>

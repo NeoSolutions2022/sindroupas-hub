@@ -23,6 +23,8 @@ interface BoletoActionsCellProps {
   onCancel?: () => void;
   onDescription?: () => void;
   onWhatsApp?: () => void;
+  onCommunication?: () => void;
+  onEditCompany?: () => void;
 }
 
 export function BoletoActionsCell({
@@ -34,6 +36,8 @@ export function BoletoActionsCell({
   onChangeDueDate,
   onCancel,
   onDescription,
+  onCommunication,
+  onEditCompany,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
   const isPaid = status === "Pago";
@@ -89,6 +93,9 @@ export function BoletoActionsCell({
                 Cancelar boleto
               </DropdownMenuItem>
             )}
+            {onCommunication && <DropdownMenuItem onClick={onCommunication}>Comunicação</DropdownMenuItem>}
+            {onEditCompany && <DropdownMenuItem onClick={onEditCompany}>Editar dados da empresa</DropdownMenuItem>}
+
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -161,6 +168,8 @@ export function BoletoActionsCell({
             </DropdownMenuItem>
           )}
           {onDescription && <DropdownMenuItem onClick={onDescription}>Descrição</DropdownMenuItem>}
+          {onCommunication && <DropdownMenuItem onClick={onCommunication}>Comunicação</DropdownMenuItem>}
+          {onEditCompany && <DropdownMenuItem onClick={onEditCompany}>Editar dados da empresa</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

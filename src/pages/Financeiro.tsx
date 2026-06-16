@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Search, Save, RotateCcw, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -50,7 +50,7 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
@@ -60,10 +60,12 @@ import ExcelJS from "exceljs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
+import { TablePagination } from "@/components/ui/table-pagination";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
@@ -159,6 +161,7 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      observacoes
       qtd_funcionarios
       cnpj
       email
@@ -182,6 +185,32 @@ const FINANCEIRO_QUERY = `
       min_colaboradores
       max_colaboradores
       valor_mensalidade
+    }
+  }
+`;
+
+const EMPRESAS_POR_FAIXA_QUERY = `
+  query EmpresasPorFaixa($faixaId: uuid!) {
+    empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
+      id
+      razao_social
+      observacoes
+      cnpj
+      qtd_funcionarios
+      email
+      whatsapp
+      responsaveis {
+        id
+        nome
+        whatsapp
+        email
+      }
+      colaboradores {
+        id
+        nome
+        whatsapp
+        email
+      }
     }
   }
 `;
@@ -223,7 +252,7 @@ interface Faixa {
 }
 
 interface BoletoForm {
-  tipo: "mensalidade" | "contribuicao" | "";
+  tipo: "mensalidade" | "contribuicao" | "avulso" | "";
   empresaId: string;
   empresaNome: string;
   competenciaInicial: string;
@@ -240,6 +269,9 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  valorAvulso: string;
+  motivoCobranca: string;
+  valorOverride?: number;
 }
 
 type ContactCandidate = {
@@ -283,30 +315,78 @@ const DatePickerField = ({
 }) => {
   const parsedDate = value ? parseISO(value) : undefined;
   const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
+  const displayValue = selectedDate ? format(selectedDate, "dd/MM/yyyy") : "";
+  const [typedValue, setTypedValue] = useState(displayValue);
+
+  useEffect(() => {
+    setTypedValue(displayValue);
+  }, [displayValue]);
+
+  const maskDateInput = (input: string) => {
+    const digits = input.replace(/\D/g, "").slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  };
+
+  const commitTypedDate = (masked: string) => {
+    if (!masked) {
+      onChange("");
+      return;
+    }
+
+    if (masked.length !== 10) return;
+
+    const typedDate = parse(masked, "dd/MM/yyyy", new Date());
+    if (isValid(typedDate) && format(typedDate, "dd/MM/yyyy") === masked) {
+      onChange(format(typedDate, "yyyy-MM-dd"));
+    }
+  };
+
+  const handleInputChange = (input: string) => {
+    const masked = maskDateInput(input);
+    setTypedValue(masked);
+    commitTypedDate(masked);
+  };
+
+  const handleInputBlur = () => {
+    if (!typedValue) {
+      onChange("");
+      return;
+    }
+
+    const typedDate = parse(typedValue, "dd/MM/yyyy", new Date());
+    if (typedValue.length !== 10 || !isValid(typedDate) || format(typedDate, "dd/MM/yyyy") !== typedValue) {
+      setTypedValue(displayValue);
+    }
+  };
 
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          className={cn(
-            "w-full justify-start text-left font-normal",
-            !value && "text-muted-foreground",
-          )}
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {value ? format(selectedDate, "dd/MM/yyyy") : placeholder}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0 bg-popover" align="start">
-        <Calendar
-          mode="single"
-          selected={selectedDate}
-          onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
-          initialFocus
-        />
-      </PopoverContent>
-    </Popover>
+    <div className="flex gap-2">
+      <Input
+        value={typedValue}
+        onChange={(event) => handleInputChange(event.target.value)}
+        onBlur={handleInputBlur}
+        inputMode="numeric"
+        placeholder={placeholder}
+        className={cn(!typedValue && "text-muted-foreground")}
+      />
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0">
+            <CalendarIcon className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0 bg-popover" align="end">
+          <Calendar
+            mode="single"
+            selected={selectedDate}
+            onSelect={(date) => onChange(date ? format(date, "yyyy-MM-dd") : "")}
+            initialFocus
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 };
 
@@ -363,16 +443,20 @@ const Financeiro = () => {
     valor: number;
   } | null>(null);
   const [dueDateDialogOpen, setDueDateDialogOpen] = useState(false);
+  const [isUpdatingDueDate, setIsUpdatingDueDate] = useState(false);
   const [selectedBoletoForDueDate, setSelectedBoletoForDueDate] = useState<BoletoView | null>(null);
   const [newDueDate, setNewDueDate] = useState("");
   const [descriptionDialogOpen, setDescriptionDialogOpen] = useState(false);
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
   const [selectedBoletoForDescription, setSelectedBoletoForDescription] = useState<BoletoView | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [isCancellingBoleto, setIsCancellingBoleto] = useState(false);
   const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
+  const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -390,26 +474,34 @@ const Financeiro = () => {
 
   const boletos = useMemo<BoletoView[]>(() => {
     return (
-      data?.financeiro_boletos.map((boleto) => ({
-        id: boleto.id,
-        efiChargeId: boleto.efi_charge_id ?? null,
-        pdfUrl: boleto.pdf_url ?? null,
-        tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
-        empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
-        valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
-        vencimento: boleto.vencimento ?? "",
-        status: normalizeBoletoStatus(boleto.efi_status),
-        descricao: boleto.descricao ?? "",
-        competenciaInicial: boleto.competencia_inicial ?? undefined,
-        competenciaFinal: boleto.competencia_final ?? undefined,
-        faixaId: boleto.faixa_id ?? undefined,
-        ano: boleto.ano ?? undefined,
-        periodicidade: boleto.periodicidade ?? undefined,
-        parcelas: boleto.parcelas ?? undefined,
-        base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
-        percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
-        descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
-      })) ?? []
+      data?.financeiro_boletos.map((boleto) => {
+        const tipoNormalizado: BoletoRegistro["tipo"] = boleto.tipo === "avulso" || boleto.tipo === "Boleto avulso"
+          ? "Boleto avulso"
+          : boleto.tipo === "contribuicao" || boleto.tipo === "Contribuição Assistencial"
+            ? "Contribuição Assistencial"
+            : "Mensalidade (por Faixa)";
+
+        return {
+          id: boleto.id,
+          efiChargeId: boleto.efi_charge_id ?? null,
+          pdfUrl: boleto.pdf_url ?? null,
+          tipo: tipoNormalizado,
+          empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
+          valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
+          vencimento: boleto.vencimento ?? "",
+          status: normalizeBoletoStatus(boleto.efi_status),
+          descricao: boleto.descricao ?? "",
+          competenciaInicial: boleto.competencia_inicial ?? undefined,
+          competenciaFinal: boleto.competencia_final ?? undefined,
+          faixaId: boleto.faixa_id ?? undefined,
+          ano: boleto.ano ?? undefined,
+          periodicidade: boleto.periodicidade ?? undefined,
+          parcelas: boleto.parcelas ?? undefined,
+          base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
+          percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
+          descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
+        };
+      }) ?? []
     );
   }, [data?.financeiro_boletos]);
 
@@ -466,10 +558,25 @@ const Financeiro = () => {
         throw new Error("Empresa sem CNPJ. O endpoint de boletos exige cliente PJ com CNPJ ou PF com CPF.");
       }
 
-      const valorBoleto = payload.tipo === "contribuicao" ? payload.valorCalculado : previaBoleto ?? 0;
+      const valorBoleto = payload.tipo === "contribuicao"
+        ? payload.valorCalculado
+        : payload.tipo === "avulso"
+          ? parseCurrencyInput(payload.valorAvulso)
+          : payload.valorOverride ?? previaBoleto ?? getValorFaixa(payload.faixaId);
       if (valorBoleto <= 0) {
-        throw new Error("Valor do boleto inválido. Faça a pesquisa antes de emitir.");
+        throw new Error("Valor do boleto inválido. Informe um valor maior que zero.");
       }
+
+      const descricaoBoleto = payload.tipo === "contribuicao"
+        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        : payload.tipo === "avulso"
+          ? payload.motivoCobranca.trim()
+          : "Mensalidade por faixa";
+      const itemName = payload.tipo === "contribuicao"
+        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        : payload.tipo === "avulso"
+          ? "Boleto avulso"
+          : "Mensalidade";
 
       const descontoValor = parseCurrencyInput(payload.descontos);
       const baseValor = parseCurrencyInput(payload.baseCalculo);
@@ -482,10 +589,7 @@ const Financeiro = () => {
         tipo: payload.tipo,
         valor: Number(valorBoleto.toFixed(2)),
         vencimento: payload.dataVencimento,
-        descricao:
-          payload.tipo === "contribuicao"
-            ? `Contribuição Assistencial ${payload.anoContribuicao}`
-            : "Mensalidade por faixa",
+        descricao: descricaoBoleto,
         competencia_inicial: payload.competenciaInicial || undefined,
         competencia_final: payload.competenciaFinal || undefined,
         ano: payload.anoContribuicao || undefined,
@@ -494,10 +598,7 @@ const Financeiro = () => {
         descontos: descontoValor || undefined,
         percentual: percentualValor || undefined,
         base: baseValor || undefined,
-        item_name:
-          payload.tipo === "contribuicao"
-            ? `Contribuição Assistencial ${payload.anoContribuicao}`
-            : "Mensalidade",
+        item_name: itemName,
         item_amount: 1,
         custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
         message: payload.mensagemPersonalizada || undefined,
@@ -554,6 +655,34 @@ const Financeiro = () => {
       })) ?? []
     );
   }, [data?.faixas]);
+
+  const getValorFaixa = (faixaId?: string) => {
+    if (!faixaId) return 0;
+    return faixas.find((f) => f.id === faixaId)?.valor ?? 0;
+  };
+  const getCompetenciasCount = (inicio?: string, fim?: string) => {
+    if (!inicio || !fim) return 0;
+    const start = startOfMonth(parseISO(inicio));
+    const end = startOfMonth(parseISO(fim));
+    if (!isValid(start) || !isValid(end) || isAfter(start, end)) return 0;
+    let cursor = start;
+    let total = 0;
+    while (!isAfter(cursor, end)) {
+      total += 1;
+      cursor = addMonths(cursor, 1);
+    }
+    return total;
+  };
+
+  const getMensalidadePreview = () => {
+    const valorFaixa = getValorFaixa(boletoForm.faixaId);
+    const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+    return {
+      meses,
+      valorMensal: valorFaixa,
+      valorTotal: valorFaixa * Math.max(meses, 1),
+    };
+  };
 
   const saveFaixaMutation = useMutation({
     mutationFn: async (payload: { id?: string; min: number; max: number; valor: number; descricao?: string }) => {
@@ -623,7 +752,15 @@ const Financeiro = () => {
   const [faixaDialogOpen, setFaixaDialogOpen] = useState(false);
   const [faixaToEdit, setFaixaToEdit] = useState<Faixa | null>(null);
   const [faixaToDelete, setFaixaToDelete] = useState<Faixa | null>(null);
-  const [faixaForm, setFaixaForm] = useState({ min: "", max: "", valor: "", descricao: "" });
+  const [faixaForm, setFaixaForm] = useState({ valor: "", descricao: "" });
+  const [boletosPage, setBoletosPage] = useState(1);
+  const [boletosPageSize, setBoletosPageSize] = useState(50);
+  const [comunicacaoDialogOpen, setComunicacaoDialogOpen] = useState(false);
+  const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
+  const [novaNotaComunicacao, setNovaNotaComunicacao] = useState("");
+  const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
+  const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
+  const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -646,6 +783,8 @@ const Financeiro = () => {
     descontos: "",
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
+    valorAvulso: "",
+    motivoCobranca: "",
   });
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -654,6 +793,17 @@ const Financeiro = () => {
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
+
+  const { data: empresasPorFaixaData, isLoading: isLoadingEmpresasPorFaixa } = useQuery({
+    queryKey: ["empresas-por-faixa", batchFaixaId],
+    enabled: isBatchMode && !!batchFaixaId,
+    queryFn: () =>
+      hasuraRequest<{ empresas: EmpresaLookupRow[] }>({
+        query: EMPRESAS_POR_FAIXA_QUERY,
+        variables: { faixaId: batchFaixaId },
+        token,
+      }),
+  });
 
   useEffect(() => {
     const savedBatch = localStorage.getItem("financeiro:lote-empresas");
@@ -770,6 +920,11 @@ const Financeiro = () => {
     return [...historicoContribuicao].slice(-5).reverse();
   }, [historicoContribuicao]);
 
+  const paginatedBoletos = useMemo(() => {
+    const start = (boletosPage - 1) * boletosPageSize;
+    return filteredBoletos.slice(start, start + boletosPageSize);
+  }, [filteredBoletos, boletosPage, boletosPageSize]);
+
   const canProceed = useMemo(() => {
     if (wizardStep === 1) {
       return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
@@ -777,14 +932,17 @@ const Financeiro = () => {
 
     if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        return previaBoleto !== null;
+        return !!(boletoForm.competenciaInicial && boletoForm.competenciaFinal && boletoForm.dataVencimento && boletoForm.faixaId);
+      }
+      if (boletoForm.tipo === "avulso") {
+        return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
       }
 
-      return boletoForm.pesquisaContribuicaoFeita && boletoForm.valorCalculado > 0;
+      return false;
     }
 
     return true;
-  }, [batchEmpresaIds.length, boletoForm, isBatchMode, previaBoleto, wizardStep]);
+  }, [batchEmpresaIds.length, boletoForm, isBatchMode, wizardStep]);
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -985,14 +1143,12 @@ const Financeiro = () => {
     if (faixa) {
       setFaixaToEdit(faixa);
       setFaixaForm({
-        min: faixa.min.toString(),
-        max: faixa.max.toString(),
         valor: faixa.valor.toString(),
         descricao: faixa.descricao ?? "",
       });
     } else {
       setFaixaToEdit(null);
-      setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+      setFaixaForm({ valor: "", descricao: "" });
     }
     setFaixaDialogOpen(true);
   };
@@ -1002,8 +1158,6 @@ const Financeiro = () => {
       toast({ title: "Erro", description: "A descrição da faixa é obrigatória.", variant: "destructive" });
       return;
     }
-    const min = faixaForm.min ? parseInt(faixaForm.min) : 0;
-    const max = faixaForm.max ? parseInt(faixaForm.max) : 0;
     const valor = parseFloat(faixaForm.valor);
 
     if (isNaN(valor)) {
@@ -1015,24 +1169,8 @@ const Financeiro = () => {
       return;
     }
 
-    // Verificar sobreposição
-    const hasOverlap = faixas.some((f) => {
-      if (faixaToEdit && f.id === faixaToEdit.id) return false;
-      return (min >= f.min && min <= f.max) || (max >= f.min && max <= f.max) ||
-             (min <= f.min && max >= f.max);
-    });
-
-    if (hasOverlap) {
-      toast({
-        title: "Erro",
-        description: "Esta faixa se sobrepõe a uma faixa existente.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     saveFaixaMutation.mutate(
-      { id: faixaToEdit?.id, min, max, valor, descricao: faixaForm.descricao },
+      { id: faixaToEdit?.id, min: 0, max: 0, valor, descricao: faixaForm.descricao },
       {
         onSuccess: () => {
           toast({
@@ -1042,7 +1180,7 @@ const Financeiro = () => {
               : "A nova faixa foi criada com sucesso.",
           });
           setFaixaDialogOpen(false);
-          setFaixaForm({ min: "", max: "", valor: "", descricao: "" });
+          setFaixaForm({ valor: "", descricao: "" });
           setFaixaToEdit(null);
         },
         onError: (err) => {
@@ -1097,6 +1235,8 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      valorAvulso: "",
+      motivoCobranca: "",
     });
     setEmpresaSearch("");
     setIsBatchMode(false);
@@ -1121,15 +1261,21 @@ const Financeiro = () => {
   );
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
-    const faixa = faixas.find((item) => item.id === batchFaixaId);
-    if (!faixa) return [];
-    return mockEmpresas.filter((emp) => emp.qtdFuncionarios >= faixa.min && emp.qtdFuncionarios <= faixa.max);
-  }, [batchFaixaId, faixas, mockEmpresas]);
+    return (
+      empresasPorFaixaData?.empresas.map((empresa) => ({
+        id: empresa.id,
+        nome: empresa.razao_social,
+        cnpj: empresa.cnpj ?? "",
+        qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
+        contatoPrincipal: chooseBoletoContact(empresa),
+      })) ?? []
+    );
+  }, [batchFaixaId, empresasPorFaixaData?.empresas]);
 
-  const parseCurrencyInput = (value: string) => {
+  function parseCurrencyInput(value: string) {
     if (!value) return 0;
     return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
-  };
+  }
 
   const calcularValorContribuicao = () => {
     const base = parseCurrencyInput(boletoForm.baseCalculo);
@@ -1159,10 +1305,19 @@ const Financeiro = () => {
       }
     } else if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        if (previaBoleto === null) {
+        if (!boletoForm.competenciaInicial || !boletoForm.competenciaFinal || !boletoForm.dataVencimento || !boletoForm.faixaId) {
           toast({
-            title: "Pesquisa obrigatória",
-            description: "Clique em 'Pesquisar' antes de avançar.",
+            title: "Campos obrigatórios",
+            description: "Preencha competências, vencimento e faixa para avançar.",
+            variant: "destructive",
+          });
+          return;
+        }
+      } else if (boletoForm.tipo === "avulso") {
+        if (!boletoForm.dataVencimento || !boletoForm.motivoCobranca.trim() || parseCurrencyInput(boletoForm.valorAvulso) <= 0) {
+          toast({
+            title: "Campos obrigatórios",
+            description: "Informe vencimento, valor e motivo da cobrança para avançar.",
             variant: "destructive",
           });
           return;
@@ -1231,6 +1386,8 @@ const Financeiro = () => {
       faixaId: "",
       unificarCompetencias: "Não",
       mensagemPersonalizada: "",
+      valorAvulso: "",
+      motivoCobranca: "",
     });
     setPreviaBoleto(null);
   };
@@ -1294,12 +1451,62 @@ const Financeiro = () => {
     const targetEmpresas = isBatchMode
       ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
       : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+    const buildCompetencias = (inicio: string, fim: string) => {
+      const start = startOfMonth(parseISO(inicio));
+      const end = startOfMonth(parseISO(fim));
+      if (!isValid(start) || !isValid(end) || isAfter(start, end)) return [] as string[];
+      const competencias: string[] = [];
+      let cursor = start;
+      while (!isAfter(cursor, end)) {
+        competencias.push(format(cursor, "yyyy-MM-dd"));
+        cursor = addMonths(cursor, 1);
+      }
+      return competencias;
+    };
+
     try {
-      await Promise.all(
-        targetEmpresas.map((empresa) =>
-          createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
-        ),
-      );
+      setIsEmittingBoletos(true);
+      if (boletoForm.tipo === "mensalidade") {
+        const competencias = buildCompetencias(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+        if (competencias.length === 0) {
+          throw new Error("Competências inválidas. Verifique as datas inicial e final.");
+        }
+
+        if (boletoForm.unificarCompetencias === "Sim") {
+          const valorUnificado = (previaBoleto ?? getValorFaixa(boletoForm.faixaId)) * competencias.length;
+          await Promise.all(
+            targetEmpresas.map((empresa) =>
+              createBoletoMutation.mutateAsync({
+                ...boletoForm,
+                empresaId: empresa.id,
+                empresaNome: empresa.nome,
+                valorOverride: valorUnificado,
+              }),
+            ),
+          );
+        } else {
+          await Promise.all(
+            targetEmpresas.flatMap((empresa) =>
+              competencias.map((competencia) =>
+                createBoletoMutation.mutateAsync({
+                  ...boletoForm,
+                  empresaId: empresa.id,
+                  empresaNome: empresa.nome,
+                  competenciaInicial: competencia,
+                  competenciaFinal: competencia,
+                  valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
+                }),
+              ),
+            ),
+          );
+        }
+      } else {
+        await Promise.all(
+          targetEmpresas.map((empresa) =>
+            createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
+          ),
+        );
+      }
       toast({
         title: isBatchMode
           ? "Boletos em lote emitidos com sucesso"
@@ -1315,6 +1522,8 @@ const Financeiro = () => {
         description: err instanceof Error ? err.message : "Tente novamente em instantes.",
         variant: "destructive",
       });
+    } finally {
+      setIsEmittingBoletos(false);
     }
   };
 
@@ -1353,6 +1562,24 @@ const Financeiro = () => {
       variables: { id, descricao: descricao || null },
     });
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const appendObservacaoEmpresa = async (empresaNome: string, comentario: string) => {
+    const empresa = data?.empresas.find((item) => item.razao_social === empresaNome);
+    if (!empresa || !comentario.trim()) return;
+    const stamp = format(new Date(), "dd/MM/yyyy HH:mm");
+    const historicoAtual = (empresa.observacoes ?? "").trim();
+    const novoHistorico = [`[${stamp}] ${comentario.trim()}`, historicoAtual].filter(Boolean).join("\n---\n");
+    await hasuraRequest({
+      query: `
+        mutation UpdateEmpresaObservacoes($id: uuid!, $observacoes: String) {
+          update_empresas_by_pk(pk_columns: { id: $id }, _set: { observacoes: $observacoes }) { id }
+        }
+      `,
+      variables: { id: empresa.id, observacoes: novoHistorico },
+      token,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
   useEffect(() => {
@@ -1484,7 +1711,7 @@ const Financeiro = () => {
                               </TableCell>
                             </TableRow>
                           ) : (
-                            filteredBoletos.map((boleto) => {
+                            paginatedBoletos.map((boleto) => {
                               const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
@@ -1526,7 +1753,7 @@ const Financeiro = () => {
                                       )}
                                       {contato?.email ? (
                                         <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
                                             <Mail className="h-4 w-4 text-blue-600" />
                                           </a>
                                         </Button>
@@ -1582,6 +1809,17 @@ const Financeiro = () => {
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
                                         setDescriptionDialogOpen(true);
                                       }}
+                                      onCommunication={() => {
+                                        setSelectedEmpresaComunicacao(boleto.empresa);
+                                        setNovaNotaComunicacao("");
+                                        setComunicacaoDialogOpen(true);
+                                      }}
+                                      onEditCompany={() => {
+                                        const empresaRow = data?.empresas.find((e) => e.razao_social === boleto.empresa);
+                                        if (!empresaRow) return;
+                                        setEmpresaEditDraft({ id: empresaRow.id, razao_social: empresaRow.razao_social, email: empresaRow.email ?? "", whatsapp: empresaRow.whatsapp ?? "" });
+                                        setEditEmpresaDialogOpen(true);
+                                      }}
                                       onCancel={() => {
                                         setSelectedBoletoForCancel(boleto as BoletoView);
                                         setCancelReason("");
@@ -1596,6 +1834,16 @@ const Financeiro = () => {
                           )}
                         </TableBody>
                       </Table>
+                      <TablePagination
+                        page={boletosPage}
+                        pageSize={boletosPageSize}
+                        total={filteredBoletos.length}
+                        onPageChange={setBoletosPage}
+                        onPageSizeChange={(size) => {
+                          setBoletosPageSize(size);
+                          setBoletosPage(1);
+                        }}
+                      />
                     </div>
                   </CardContent>
                 </Card>
@@ -1605,14 +1853,19 @@ const Financeiro = () => {
                   open={gerarNovoOpen}
                   onOpenChange={setGerarNovoOpen}
                   boleto={selectedBoletoForNew}
-                  onGenerate={(boletoId, novaData) => {
+                  onGenerate={(boletoId, novaData, novoValor) => {
                     const original = boletos.find((b) => b.id === boletoId);
                     if (original) {
                       const empresaMatch = data?.empresas.find(
                         (empresa) => empresa.razao_social === original.empresa,
                       );
+                      const tipoOriginal = original.tipo === "Contribuição Assistencial"
+                        ? "contribuicao"
+                        : original.tipo === "Boleto avulso" || original.tipo === "Avulso"
+                          ? "avulso"
+                          : "mensalidade";
                       const payload: BoletoForm = {
-                        tipo: original.tipo === "Contribuição Assistencial" ? "contribuicao" : "mensalidade",
+                        tipo: tipoOriginal,
                         empresaId: empresaMatch?.id ?? "",
                         empresaNome: original.empresa,
                         competenciaInicial: original.competenciaInicial ?? "",
@@ -1628,7 +1881,10 @@ const Financeiro = () => {
                         percentual: original.percentual ? String(original.percentual) : "",
                         descontos: original.descontos ? String(original.descontos) : "",
                         valorCalculado: original.valor,
+                        valorOverride: novoValor,
                         pesquisaContribuicaoFeita: true,
+                        valorAvulso: novoValor ? String(novoValor) : String(original.valor),
+                        motivoCobranca: original.descricao ?? "",
                       };
                       createBoletoMutation.mutate(payload, {
                         onSuccess: () => {
@@ -1663,8 +1919,9 @@ const Financeiro = () => {
                       <Input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} />
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDueDateDialogOpen(false)} disabled={isUpdatingDueDate}>Cancelar</Button>
                       <Button
+                        disabled={isUpdatingDueDate}
                         onClick={async () => {
                           if (!selectedBoletoForDueDate || !newDueDate) return;
                           const chargeId = extractChargeId(selectedBoletoForDueDate.id);
@@ -1677,6 +1934,7 @@ const Financeiro = () => {
                             return;
                           }
                           try {
+                            setIsUpdatingDueDate(true);
                             await updateBoletoDueDateRequest(chargeId, newDueDate);
                             await syncDueDateInHasura(selectedBoletoForDueDate.id, newDueDate);
                             toast({ title: "Vencimento atualizado", description: `Novo vencimento: ${newDueDate}.` });
@@ -1687,10 +1945,12 @@ const Financeiro = () => {
                               description: err instanceof Error ? err.message : "Tente novamente.",
                               variant: "destructive",
                             });
+                          } finally {
+                            setIsUpdatingDueDate(false);
                           }
                         }}
                       >
-                        Salvar
+                        {isUpdatingDueDate ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1711,16 +1971,26 @@ const Financeiro = () => {
                       placeholder="Escreva observações sobre este boleto..."
                     />
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)}>Cancelar</Button>
+                      <Button variant="outline" onClick={() => setDescriptionDialogOpen(false)} disabled={isSavingDescription}>Cancelar</Button>
                       <Button
+                        disabled={isSavingDescription}
                         onClick={async () => {
                           if (!selectedBoletoForDescription) return;
-                          await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
-                          toast({ title: "Descrição atualizada" });
-                          setDescriptionDialogOpen(false);
+                          try {
+                            setIsSavingDescription(true);
+                            await syncDescricaoInHasura(selectedBoletoForDescription.id, descriptionDraft);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForDescription.empresa,
+                              `Boleto (${selectedBoletoForDescription.id}): ${descriptionDraft}`,
+                            );
+                            toast({ title: "Descrição atualizada" });
+                            setDescriptionDialogOpen(false);
+                          } finally {
+                            setIsSavingDescription(false);
+                          }
                         }}
                       >
-                        Salvar
+                        {isSavingDescription ? "Salvando..." : "Salvar"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1738,8 +2008,9 @@ const Financeiro = () => {
                       Gerar novo boleto após cancelar
                     </label>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>Voltar</Button>
+                      <Button variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={isCancellingBoleto}>Voltar</Button>
                       <Button
+                        disabled={isCancellingBoleto}
                         onClick={async () => {
                           if (!selectedBoletoForCancel) return;
                           if (!cancelReason.trim()) {
@@ -1748,18 +2019,27 @@ const Financeiro = () => {
                           }
                           const chargeId = selectedBoletoForCancel.efiChargeId ? Number(selectedBoletoForCancel.efiChargeId) : extractChargeId(selectedBoletoForCancel.id);
                           if (!chargeId) return;
-                          await cancelBoletoRequest(chargeId);
-                          await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
-                          await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
-                          if (cancelAndRegenerate) {
-                            setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
-                            setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
-                            setGerarNovoOpen(true);
+                          try {
+                            setIsCancellingBoleto(true);
+                            await cancelBoletoRequest(chargeId);
+                            await syncStatusInHasura(selectedBoletoForCancel.id, "cancelado");
+                            await syncDescricaoInHasura(selectedBoletoForCancel.id, `Cancelado: ${cancelReason}`);
+                            await appendObservacaoEmpresa(
+                              selectedBoletoForCancel.empresa,
+                              `Cancelamento de boleto (${selectedBoletoForCancel.id}): ${cancelReason}`,
+                            );
+                            if (cancelAndRegenerate) {
+                              setSelectedBoletoForNew({ id: selectedBoletoForCancel.id, empresa: selectedBoletoForCancel.empresa, vencimento: selectedBoletoForCancel.vencimento, valor: selectedBoletoForCancel.valor });
+                              setRegeneratedFromCancel((prev) => [...prev, selectedBoletoForCancel.id]);
+                              setGerarNovoOpen(true);
+                            }
+                            setCancelDialogOpen(false);
+                          } finally {
+                            setIsCancellingBoleto(false);
                           }
-                          setCancelDialogOpen(false);
                         }}
                       >
-                        Confirmar cancelamento
+                        {isCancellingBoleto ? "Cancelando..." : "Confirmar cancelamento"}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -1863,8 +2143,7 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Mín Funcionários</TableHead>
-                            <TableHead>Máx Funcionários</TableHead>
+                            <TableHead>Label</TableHead>
                             <TableHead>Valor (R$)</TableHead>
                             <TableHead className="text-right">Ações</TableHead>
                           </TableRow>
@@ -1872,15 +2151,14 @@ const Financeiro = () => {
                         <TableBody>
                           {faixas.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={4} className="text-center text-muted-foreground">
+                              <TableCell colSpan={3} className="text-center text-muted-foreground">
                                 Nenhuma faixa cadastrada
                               </TableCell>
                             </TableRow>
                           ) : (
                             faixas.map((faixa) => (
                               <TableRow key={faixa.id}>
-                                <TableCell>{faixa.min}</TableCell>
-                                <TableCell>{faixa.max}</TableCell>
+                                <TableCell>{faixa.descricao || "—"}</TableCell>
                                 <TableCell>R$ {faixa.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                                 <TableCell className="text-right space-x-2">
                                   <Button
@@ -1928,26 +2206,6 @@ const Financeiro = () => {
                       placeholder="Ex: Faixa Comércio Varejista"
                       value={faixaForm.descricao}
                       onChange={(e) => setFaixaForm({ ...faixaForm, descricao: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="minFunc">Mín Funcionários (opcional)</Label>
-                    <Input
-                      id="minFunc"
-                      type="number"
-                      placeholder="Ex: 1"
-                      value={faixaForm.min}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, min: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="maxFunc">Máx Funcionários (opcional)</Label>
-                    <Input
-                      id="maxFunc"
-                      type="number"
-                      placeholder="Ex: 20"
-                      value={faixaForm.max}
-                      onChange={(e) => setFaixaForm({ ...faixaForm, max: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -2021,7 +2279,7 @@ const Financeiro = () => {
                       <RadioGroup
                         value={boletoForm.tipo}
                         onValueChange={(value) => {
-                          const tipoSelecionado = value as "mensalidade" | "contribuicao";
+                          const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
@@ -2039,11 +2297,20 @@ const Financeiro = () => {
                           </Label>
                         </div>
                         <div className="flex items-center space-x-2 border p-3 rounded-lg">
-                          <RadioGroupItem value="contribuicao" id="contribuicao" />
-                          <Label htmlFor="contribuicao" className="flex-1">
+                          <RadioGroupItem value="avulso" id="avulso" />
+                          <Label htmlFor="avulso" className="cursor-pointer flex-1">
+                            Boleto avulso
+                            <span className="block text-xs text-muted-foreground mt-1">
+                              Crie uma cobrança sem faixa, com valor personalizado e motivo na descrição.
+                            </span>
+                          </Label>
+                        </div>
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-60 bg-muted/30">
+                          <RadioGroupItem value="contribuicao" id="contribuicao" disabled />
+                          <Label htmlFor="contribuicao" className="flex-1 cursor-not-allowed">
                             Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Calculadora de alíquota integrada na etapa seguinte
+                              Em breve será implementado.
                             </span>
                           </Label>
                         </div>
@@ -2070,7 +2337,23 @@ const Financeiro = () => {
                           </Select>
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
-                              {empresasDaFaixaSelecionada.map((empresa) => (
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
+                                >
+                                  Selecionar todas
+                                </Button>
+                              )}
+                              {isLoadingEmpresasPorFaixa && (
+                                <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length === 0 && (
+                                <p className="text-sm text-muted-foreground">Nenhuma empresa encontrada para a faixa selecionada.</p>
+                              )}
+                              {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.map((empresa) => (
                                 <label key={empresa.id} className="flex items-center gap-2 text-sm">
                                   <input
                                     type="checkbox"
@@ -2217,190 +2500,82 @@ const Financeiro = () => {
                           />
                         </div>
 
-                        {previaBoleto !== null && (
-                          <div className="bg-accent/20 p-4 rounded-lg">
-                            <p className="text-sm font-medium">Prévia de valor:</p>
-                            <p className="text-2xl font-bold text-primary">
-                              R$ {previaBoleto.toFixed(2)}
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Competências: {boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}
-                            </p>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-4 border-t">
-                          <Button onClick={handlePesquisarBoleto} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                            <Search className="h-4 w-4 mr-2" />
-                            Pesquisar
-                          </Button>
-                          <Button variant="outline" onClick={handleLimparEtapa2}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Limpar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
-                            }}
-                          >
-                            <Save className="h-4 w-4 mr-2" />
-                            Salvar Filtro
-                          </Button>
-                        </div>
+                        {(() => {
+                          const preview = getMensalidadePreview();
+                          return (
+                            <div className="bg-accent/20 p-4 rounded-lg border border-accent/30">
+                              <p className="text-sm font-medium">Resumo do valor:</p>
+                              <p className="text-2xl font-bold text-primary">
+                                R$ {preview.valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                              </p>
+                              <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
+                                <span>{preview.meses || 0} competência(s)</span>
+                                <span>R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
+                                <span>{boletoForm.unificarCompetencias === "Sim" ? "1 boleto unificado" : `${preview.meses || 0} boleto(s)`}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </CardContent>
                     </Card>
                   </div>
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "contribuicao" && (
+                  <Card className="border-dashed">
+                    <CardContent className="p-6 text-sm text-muted-foreground">
+                      Contribuição Assistencial estará disponível em breve.
+                    </CardContent>
+                  </Card>
+                )}
+
+                {wizardStep === 2 && boletoForm.tipo === "avulso" && (
                   <div className="space-y-6">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="text-lg">Detalhes do Boleto - Contribuição Assistencial</CardTitle>
+                        <CardTitle className="text-lg">Detalhes do Boleto Avulso</CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-6">
+                      <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="anoContribuicao">Ano da Contribuição*</Label>
-                            <Input
-                              id="anoContribuicao"
-                              inputMode="numeric"
-                              maxLength={4}
-                              placeholder="2025"
-                              value={boletoForm.anoContribuicao}
-                              onChange={(e) =>
-                                setBoletoForm({ ...boletoForm, anoContribuicao: e.target.value.replace(/[^0-9]/g, "").slice(0, 4) })
-                              }
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="periodicidade">Periodicidade do Boleto*</Label>
-                            <Select
-                              value={boletoForm.periodicidade}
-                              onValueChange={(value) => setBoletoForm({ ...boletoForm, periodicidade: value })}
-                            >
-                              <SelectTrigger id="periodicidade">
-                                <SelectValue placeholder="Selecione" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="Mensal">Mensal</SelectItem>
-                                <SelectItem value="Trimestral">Trimestral</SelectItem>
-                                <SelectItem value="Semestral">Semestral</SelectItem>
-                                <SelectItem value="Anual">Anual</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="parcelas">Qtde. Parcelas*</Label>
-                            <Select
-                              value={boletoForm.parcelas}
-                              onValueChange={(value) => setBoletoForm({ ...boletoForm, parcelas: value })}
-                            >
-                              <SelectTrigger id="parcelas">
-                                <SelectValue placeholder="Selecione" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {[...Array(12)].map((_, index) => {
-                                  const value = (index + 1).toString();
-                                  return (
-                                    <SelectItem key={value} value={value}>
-                                      {value}
-                                    </SelectItem>
-                                  );
-                                })}
-                              </SelectContent>
-                            </Select>
-                          </div>
                           <div className="space-y-2">
                             <Label>Data Vencimento*</Label>
                             <DatePickerField
                               value={boletoForm.dataVencimento}
-                              placeholder="Selecione o vencimento"
+                              placeholder="Selecione ou digite o vencimento"
                               onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="valorAvulso">Valor personalizado*</Label>
+                            <Input
+                              id="valorAvulso"
+                              inputMode="decimal"
+                              placeholder="Ex.: 1.250,00"
+                              value={boletoForm.valorAvulso}
+                              onChange={(event) => setBoletoForm({ ...boletoForm, valorAvulso: event.target.value })}
                             />
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="baseCalculoContrib">Base de Cálculo (R$)*</Label>
-                              <Input
-                                id="baseCalculoContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="20000"
-                                value={boletoForm.baseCalculo}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, baseCalculo: e.target.value })}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="percentualContrib">Percentual (%)*</Label>
-                              <Input
-                                id="percentualContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="1.5"
-                                value={boletoForm.percentual}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, percentual: e.target.value })}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="descontosContrib">Descontos/Isenções (R$)</Label>
-                              <Input
-                                id="descontosContrib"
-                                type="number"
-                                inputMode="decimal"
-                                placeholder="0"
-                                value={boletoForm.descontos}
-                                onChange={(e) => setBoletoForm({ ...boletoForm, descontos: e.target.value })}
-                              />
-                            </div>
-                          </div>
-                          <div className="space-y-3 rounded-lg border p-4 bg-neutral-100">
-                            <div className="flex items-center justify-between">
-                              <p className="font-semibold">Valor Calculado (R$)</p>
-                              <Button size="sm" variant="outline" onClick={calcularValorContribuicao}>
-                                Calcular
-                              </Button>
-                            </div>
-                            <p className="text-3xl font-bold text-primary">
-                              R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              Valor Calculado = (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
-                            </p>
-                          </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="motivoCobranca">Motivo da cobrança / descrição*</Label>
+                          <textarea
+                            id="motivoCobranca"
+                            className="min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            placeholder="Descreva o motivo da cobrança. Esse texto será registrado na descrição do boleto."
+                            value={boletoForm.motivoCobranca}
+                            onChange={(event) => setBoletoForm({ ...boletoForm, motivoCobranca: event.target.value })}
+                          />
                         </div>
 
-                        {contribuicaoPreview && (
-                          <div className="bg-accent/20 p-4 rounded-lg">
-                            <p className="text-sm font-medium">{contribuicaoPreview}</p>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-4 border-t">
-                          <Button onClick={handlePesquisarContribuicao} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                            <Search className="h-4 w-4 mr-2" />
-                            Pesquisar
-                          </Button>
-                          <Button variant="outline" onClick={handleLimparContribuicao}>
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            Limpar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              toast({ title: "Filtro salvo (mock)", description: "Funcionalidade em desenvolvimento" });
-                            }}
-                          >
-                            <Save className="h-4 w-4 mr-2" />
-                            Salvar Filtro
-                          </Button>
+                        <div className="bg-accent/20 p-4 rounded-lg border border-accent/30">
+                          <p className="text-sm font-medium">Resumo do boleto avulso:</p>
+                          <p className="text-2xl font-bold text-primary">
+                            R$ {parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Cobrança sem vínculo com faixa. O motivo informado será enviado como descrição do boleto.
+                          </p>
                         </div>
                       </CardContent>
                     </Card>
@@ -2425,7 +2600,9 @@ const Financeiro = () => {
                             <p className="font-medium">
                               {boletoForm.tipo === "contribuicao"
                                 ? "Contribuição Assistencial"
-                                : "Mensalidade (por Faixa)"}
+                                : boletoForm.tipo === "avulso"
+                                  ? "Boleto avulso"
+                                  : "Mensalidade (por Faixa)"}
                             </p>
                           </div>
 
@@ -2457,6 +2634,23 @@ const Financeiro = () => {
                                   <p className="font-medium">{boletoForm.mensagemPersonalizada}</p>
                                 </div>
                               )}
+                            </>
+                          ) : boletoForm.tipo === "avulso" ? (
+                            <>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
+                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Valor personalizado:</p>
+                                <p className="font-medium text-primary">
+                                  R$ {parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div className="col-span-2">
+                                <p className="font-semibold text-muted-foreground">Motivo da cobrança / descrição:</p>
+                                <p className="font-medium whitespace-pre-wrap">{boletoForm.motivoCobranca}</p>
+                              </div>
                             </>
                           ) : (
                             <>
@@ -2506,7 +2700,9 @@ const Financeiro = () => {
                           <p className="text-3xl font-bold text-primary">
                             {boletoForm.tipo === "contribuicao"
                               ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
-                              : `R$ ${(previaBoleto || 0).toFixed(2)}`}
+                              : boletoForm.tipo === "avulso"
+                                ? `R$ ${parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                              : `R$ ${getMensalidadePreview().valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
                           </p>
                         </div>
                       </CardContent>
@@ -2531,11 +2727,73 @@ const Financeiro = () => {
                         Próximo
                       </Button>
                     ) : (
-                      <Button onClick={handleEmitirBoleto} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                        Emitir
+                      <Button onClick={handleEmitirBoleto} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
                       </Button>
                     )}
                   </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={comunicacaoDialogOpen} onOpenChange={setComunicacaoDialogOpen}>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader><DialogTitle>Histórico de comunicação - {selectedEmpresaComunicacao}</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <div className="text-sm whitespace-pre-wrap rounded-md border p-3 bg-muted/20">
+                    {data?.empresas.find((e) => e.razao_social === selectedEmpresaComunicacao)?.observacoes || "Sem histórico."}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="nova-nota-comunicacao">Nova nota</Label>
+                    <textarea
+                      id="nova-nota-comunicacao"
+                      className="w-full min-h-24 rounded-md border bg-background p-3 text-sm"
+                      placeholder="Adicione uma observação de contato..."
+                      value={novaNotaComunicacao}
+                      onChange={(e) => setNovaNotaComunicacao(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setComunicacaoDialogOpen(false)} disabled={isSavingNotaComunicacao}>
+                    Fechar
+                  </Button>
+                  <Button
+                    disabled={isSavingNotaComunicacao || !novaNotaComunicacao.trim()}
+                    onClick={async () => {
+                      if (!selectedEmpresaComunicacao || !novaNotaComunicacao.trim()) return;
+                      try {
+                        setIsSavingNotaComunicacao(true);
+                        await appendObservacaoEmpresa(selectedEmpresaComunicacao, novaNotaComunicacao.trim());
+                        setNovaNotaComunicacao("");
+                        toast({ title: "Nota adicionada ao histórico" });
+                      } finally {
+                        setIsSavingNotaComunicacao(false);
+                      }
+                    }}
+                  >
+                    {isSavingNotaComunicacao ? "Salvando..." : "Adicionar nota"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={editEmpresaDialogOpen} onOpenChange={setEditEmpresaDialogOpen}>
+              <DialogContent className="max-w-md">
+                <DialogHeader><DialogTitle>Editar dados da empresa</DialogTitle></DialogHeader>
+                <div className="space-y-3">
+                  <Input value={empresaEditDraft?.razao_social || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, razao_social: e.target.value } : p)} placeholder="Razão social" />
+                  <Input value={empresaEditDraft?.email || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, email: e.target.value } : p)} placeholder="E-mail" />
+                  <Input value={empresaEditDraft?.whatsapp || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, whatsapp: e.target.value } : p)} placeholder="WhatsApp" />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setEditEmpresaDialogOpen(false)}>Cancelar</Button>
+                  <Button onClick={async () => {
+                    if (!empresaEditDraft) return;
+                    await hasuraRequest({ query: `mutation UpdateEmpresaRapido($id: uuid!, $razao: String!, $email: String, $whatsapp: String) { update_empresas_by_pk(pk_columns: {id: $id}, _set: { razao_social: $razao, email: $email, whatsapp: $whatsapp }) { id } }`, variables: { id: empresaEditDraft.id, razao: empresaEditDraft.razao_social, email: empresaEditDraft.email || null, whatsapp: empresaEditDraft.whatsapp || null }, token });
+                    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+                    setEditEmpresaDialogOpen(false);
+                  }}>Salvar</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
