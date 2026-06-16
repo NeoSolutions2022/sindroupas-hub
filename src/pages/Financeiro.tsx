@@ -252,7 +252,7 @@ interface Faixa {
 }
 
 interface BoletoForm {
-  tipo: "mensalidade" | "contribuicao" | "";
+  tipo: "mensalidade" | "contribuicao" | "avulso" | "";
   empresaId: string;
   empresaNome: string;
   competenciaInicial: string;
@@ -269,6 +269,8 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  valorAvulso: string;
+  motivoCobranca: string;
   valorOverride?: number;
 }
 
@@ -472,26 +474,34 @@ const Financeiro = () => {
 
   const boletos = useMemo<BoletoView[]>(() => {
     return (
-      data?.financeiro_boletos.map((boleto) => ({
-        id: boleto.id,
-        efiChargeId: boleto.efi_charge_id ?? null,
-        pdfUrl: boleto.pdf_url ?? null,
-        tipo: (boleto.tipo as BoletoRegistro["tipo"]) ?? "Mensalidade (por Faixa)",
-        empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
-        valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
-        vencimento: boleto.vencimento ?? "",
-        status: normalizeBoletoStatus(boleto.efi_status),
-        descricao: boleto.descricao ?? "",
-        competenciaInicial: boleto.competencia_inicial ?? undefined,
-        competenciaFinal: boleto.competencia_final ?? undefined,
-        faixaId: boleto.faixa_id ?? undefined,
-        ano: boleto.ano ?? undefined,
-        periodicidade: boleto.periodicidade ?? undefined,
-        parcelas: boleto.parcelas ?? undefined,
-        base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
-        percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
-        descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
-      })) ?? []
+      data?.financeiro_boletos.map((boleto) => {
+        const tipoNormalizado: BoletoRegistro["tipo"] = boleto.tipo === "avulso" || boleto.tipo === "Boleto avulso"
+          ? "Boleto avulso"
+          : boleto.tipo === "contribuicao" || boleto.tipo === "Contribuição Assistencial"
+            ? "Contribuição Assistencial"
+            : "Mensalidade (por Faixa)";
+
+        return {
+          id: boleto.id,
+          efiChargeId: boleto.efi_charge_id ?? null,
+          pdfUrl: boleto.pdf_url ?? null,
+          tipo: tipoNormalizado,
+          empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
+          valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
+          vencimento: boleto.vencimento ?? "",
+          status: normalizeBoletoStatus(boleto.efi_status),
+          descricao: boleto.descricao ?? "",
+          competenciaInicial: boleto.competencia_inicial ?? undefined,
+          competenciaFinal: boleto.competencia_final ?? undefined,
+          faixaId: boleto.faixa_id ?? undefined,
+          ano: boleto.ano ?? undefined,
+          periodicidade: boleto.periodicidade ?? undefined,
+          parcelas: boleto.parcelas ?? undefined,
+          base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
+          percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
+          descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
+        };
+      }) ?? []
     );
   }, [data?.financeiro_boletos]);
 
@@ -550,10 +560,23 @@ const Financeiro = () => {
 
       const valorBoleto = payload.tipo === "contribuicao"
         ? payload.valorCalculado
-        : payload.valorOverride ?? previaBoleto ?? getValorFaixa(payload.faixaId);
+        : payload.tipo === "avulso"
+          ? parseCurrencyInput(payload.valorAvulso)
+          : payload.valorOverride ?? previaBoleto ?? getValorFaixa(payload.faixaId);
       if (valorBoleto <= 0) {
-        throw new Error("Valor do boleto inválido. Selecione uma faixa com valor válido.");
+        throw new Error("Valor do boleto inválido. Informe um valor maior que zero.");
       }
+
+      const descricaoBoleto = payload.tipo === "contribuicao"
+        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        : payload.tipo === "avulso"
+          ? payload.motivoCobranca.trim()
+          : "Mensalidade por faixa";
+      const itemName = payload.tipo === "contribuicao"
+        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        : payload.tipo === "avulso"
+          ? "Boleto avulso"
+          : "Mensalidade";
 
       const descontoValor = parseCurrencyInput(payload.descontos);
       const baseValor = parseCurrencyInput(payload.baseCalculo);
@@ -566,10 +589,7 @@ const Financeiro = () => {
         tipo: payload.tipo,
         valor: Number(valorBoleto.toFixed(2)),
         vencimento: payload.dataVencimento,
-        descricao:
-          payload.tipo === "contribuicao"
-            ? `Contribuição Assistencial ${payload.anoContribuicao}`
-            : "Mensalidade por faixa",
+        descricao: descricaoBoleto,
         competencia_inicial: payload.competenciaInicial || undefined,
         competencia_final: payload.competenciaFinal || undefined,
         ano: payload.anoContribuicao || undefined,
@@ -578,10 +598,7 @@ const Financeiro = () => {
         descontos: descontoValor || undefined,
         percentual: percentualValor || undefined,
         base: baseValor || undefined,
-        item_name:
-          payload.tipo === "contribuicao"
-            ? `Contribuição Assistencial ${payload.anoContribuicao}`
-            : "Mensalidade",
+        item_name: itemName,
         item_amount: 1,
         custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
         message: payload.mensagemPersonalizada || undefined,
@@ -766,6 +783,8 @@ const Financeiro = () => {
     descontos: "",
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
+    valorAvulso: "",
+    motivoCobranca: "",
   });
   const [empresaSearch, setEmpresaSearch] = useState("");
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -914,6 +933,9 @@ const Financeiro = () => {
     if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
         return !!(boletoForm.competenciaInicial && boletoForm.competenciaFinal && boletoForm.dataVencimento && boletoForm.faixaId);
+      }
+      if (boletoForm.tipo === "avulso") {
+        return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
       }
 
       return false;
@@ -1213,6 +1235,8 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      valorAvulso: "",
+      motivoCobranca: "",
     });
     setEmpresaSearch("");
     setIsBatchMode(false);
@@ -1248,10 +1272,10 @@ const Financeiro = () => {
     );
   }, [batchFaixaId, empresasPorFaixaData?.empresas]);
 
-  const parseCurrencyInput = (value: string) => {
+  function parseCurrencyInput(value: string) {
     if (!value) return 0;
     return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
-  };
+  }
 
   const calcularValorContribuicao = () => {
     const base = parseCurrencyInput(boletoForm.baseCalculo);
@@ -1285,6 +1309,15 @@ const Financeiro = () => {
           toast({
             title: "Campos obrigatórios",
             description: "Preencha competências, vencimento e faixa para avançar.",
+            variant: "destructive",
+          });
+          return;
+        }
+      } else if (boletoForm.tipo === "avulso") {
+        if (!boletoForm.dataVencimento || !boletoForm.motivoCobranca.trim() || parseCurrencyInput(boletoForm.valorAvulso) <= 0) {
+          toast({
+            title: "Campos obrigatórios",
+            description: "Informe vencimento, valor e motivo da cobrança para avançar.",
             variant: "destructive",
           });
           return;
@@ -1353,6 +1386,8 @@ const Financeiro = () => {
       faixaId: "",
       unificarCompetencias: "Não",
       mensagemPersonalizada: "",
+      valorAvulso: "",
+      motivoCobranca: "",
     });
     setPreviaBoleto(null);
   };
@@ -1824,8 +1859,13 @@ const Financeiro = () => {
                       const empresaMatch = data?.empresas.find(
                         (empresa) => empresa.razao_social === original.empresa,
                       );
+                      const tipoOriginal = original.tipo === "Contribuição Assistencial"
+                        ? "contribuicao"
+                        : original.tipo === "Boleto avulso" || original.tipo === "Avulso"
+                          ? "avulso"
+                          : "mensalidade";
                       const payload: BoletoForm = {
-                        tipo: original.tipo === "Contribuição Assistencial" ? "contribuicao" : "mensalidade",
+                        tipo: tipoOriginal,
                         empresaId: empresaMatch?.id ?? "",
                         empresaNome: original.empresa,
                         competenciaInicial: original.competenciaInicial ?? "",
@@ -1843,6 +1883,8 @@ const Financeiro = () => {
                         valorCalculado: original.valor,
                         valorOverride: novoValor,
                         pesquisaContribuicaoFeita: true,
+                        valorAvulso: novoValor ? String(novoValor) : String(original.valor),
+                        motivoCobranca: original.descricao ?? "",
                       };
                       createBoletoMutation.mutate(payload, {
                         onSuccess: () => {
@@ -2237,7 +2279,7 @@ const Financeiro = () => {
                       <RadioGroup
                         value={boletoForm.tipo}
                         onValueChange={(value) => {
-                          const tipoSelecionado = value as "mensalidade" | "contribuicao";
+                          const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
@@ -2252,6 +2294,15 @@ const Financeiro = () => {
                           <RadioGroupItem value="mensalidade" id="mensalidade" />
                           <Label htmlFor="mensalidade" className="cursor-pointer flex-1">
                             Mensalidade (por Faixa)
+                          </Label>
+                        </div>
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg">
+                          <RadioGroupItem value="avulso" id="avulso" />
+                          <Label htmlFor="avulso" className="cursor-pointer flex-1">
+                            Boleto avulso
+                            <span className="block text-xs text-muted-foreground mt-1">
+                              Crie uma cobrança sem faixa, com valor personalizado e motivo na descrição.
+                            </span>
                           </Label>
                         </div>
                         <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-60 bg-muted/30">
@@ -2478,6 +2529,59 @@ const Financeiro = () => {
                   </Card>
                 )}
 
+                {wizardStep === 2 && boletoForm.tipo === "avulso" && (
+                  <div className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg">Detalhes do Boleto Avulso</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label>Data Vencimento*</Label>
+                            <DatePickerField
+                              value={boletoForm.dataVencimento}
+                              placeholder="Selecione ou digite o vencimento"
+                              onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="valorAvulso">Valor personalizado*</Label>
+                            <Input
+                              id="valorAvulso"
+                              inputMode="decimal"
+                              placeholder="Ex.: 1.250,00"
+                              value={boletoForm.valorAvulso}
+                              onChange={(event) => setBoletoForm({ ...boletoForm, valorAvulso: event.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="motivoCobranca">Motivo da cobrança / descrição*</Label>
+                          <textarea
+                            id="motivoCobranca"
+                            className="min-h-[110px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            placeholder="Descreva o motivo da cobrança. Esse texto será registrado na descrição do boleto."
+                            value={boletoForm.motivoCobranca}
+                            onChange={(event) => setBoletoForm({ ...boletoForm, motivoCobranca: event.target.value })}
+                          />
+                        </div>
+
+                        <div className="bg-accent/20 p-4 rounded-lg border border-accent/30">
+                          <p className="text-sm font-medium">Resumo do boleto avulso:</p>
+                          <p className="text-2xl font-bold text-primary">
+                            R$ {parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                          </p>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Cobrança sem vínculo com faixa. O motivo informado será enviado como descrição do boleto.
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+
                 {/* Etapa 3: Revisão e Emissão */}
                 {wizardStep === 3 && (
                   <div className="space-y-6">
@@ -2496,7 +2600,9 @@ const Financeiro = () => {
                             <p className="font-medium">
                               {boletoForm.tipo === "contribuicao"
                                 ? "Contribuição Assistencial"
-                                : "Mensalidade (por Faixa)"}
+                                : boletoForm.tipo === "avulso"
+                                  ? "Boleto avulso"
+                                  : "Mensalidade (por Faixa)"}
                             </p>
                           </div>
 
@@ -2528,6 +2634,23 @@ const Financeiro = () => {
                                   <p className="font-medium">{boletoForm.mensagemPersonalizada}</p>
                                 </div>
                               )}
+                            </>
+                          ) : boletoForm.tipo === "avulso" ? (
+                            <>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
+                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-muted-foreground">Valor personalizado:</p>
+                                <p className="font-medium text-primary">
+                                  R$ {parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div className="col-span-2">
+                                <p className="font-semibold text-muted-foreground">Motivo da cobrança / descrição:</p>
+                                <p className="font-medium whitespace-pre-wrap">{boletoForm.motivoCobranca}</p>
+                              </div>
                             </>
                           ) : (
                             <>
@@ -2577,6 +2700,8 @@ const Financeiro = () => {
                           <p className="text-3xl font-bold text-primary">
                             {boletoForm.tipo === "contribuicao"
                               ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                              : boletoForm.tipo === "avulso"
+                                ? `R$ ${parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
                               : `R$ ${getMensalidadePreview().valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
                           </p>
                         </div>
