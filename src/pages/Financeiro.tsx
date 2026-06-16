@@ -61,10 +61,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
+import { Progress } from "@/components/ui/progress";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  nome_fantasia?: string | null;
+  faixa_id?: string | null;
   observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
@@ -161,6 +164,8 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      nome_fantasia
+      faixa_id
       observacoes
       qtd_funcionarios
       cnpj
@@ -194,6 +199,8 @@ const EMPRESAS_POR_FAIXA_QUERY = `
     empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
       id
       razao_social
+      nome_fantasia
+      faixa_id
       observacoes
       cnpj
       qtd_funcionarios
@@ -303,6 +310,61 @@ const periodicidadeToNumero = (periodicidade?: string) => {
   const numeric = Number(periodicidade);
   return Number.isFinite(numeric) ? numeric : undefined;
 };
+
+
+const formatDateBR = (value?: string) => {
+  if (!value) return "";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "dd/MM/yyyy") : value;
+};
+
+const formatCompetenciaBR = (value?: string) => {
+  if (!value) return "";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "MM/yyyy") : value;
+};
+
+const getCompetenciaRangeLabel = (inicio?: string, fim?: string) => {
+  const start = formatCompetenciaBR(inicio);
+  const end = formatCompetenciaBR(fim);
+  if (!start && !end) return "";
+  return start === end || !end ? start : `${start} a ${end}`;
+};
+
+const rangesOverlap = (startA?: string, endA?: string, startB?: string, endB?: string) => {
+  if (!startA || !endA || !startB || !endB) return false;
+  const aStart = startOfMonth(parseISO(startA));
+  const aEnd = startOfMonth(parseISO(endA));
+  const bStart = startOfMonth(parseISO(startB));
+  const bEnd = startOfMonth(parseISO(endB));
+  if (![aStart, aEnd, bStart, bEnd].every(isValid)) return false;
+  return !isAfter(aStart, bEnd) && !isAfter(bStart, aEnd);
+};
+
+const getCurrentQuarterRange = () => {
+  const now = new Date();
+  const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
+  const start = startOfMonth(new Date(now.getFullYear(), quarterStartMonth, 1));
+  const end = startOfMonth(addMonths(start, 2));
+  return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
+};
+
+const MonthPickerField = ({
+  value,
+  onChange,
+  placeholder = "Selecione a competência",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) => (
+  <Input
+    type="month"
+    aria-label={placeholder}
+    value={value ? format(parseISO(value), "yyyy-MM") : ""}
+    onChange={(event) => onChange(event.target.value ? `${event.target.value}-01` : "")}
+  />
+);
 
 const DatePickerField = ({
   value,
@@ -457,6 +519,7 @@ const Financeiro = () => {
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
+  const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -486,6 +549,7 @@ const Financeiro = () => {
           efiChargeId: boleto.efi_charge_id ?? null,
           pdfUrl: boleto.pdf_url ?? null,
           tipo: tipoNormalizado,
+          empresaId: boleto.empresa?.id,
           empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
           valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
           vencimento: boleto.vencimento ?? "",
@@ -529,7 +593,10 @@ const Financeiro = () => {
         const contato = chooseBoletoContact(empresa);
         return {
           id: empresa.id,
-          nome: empresa.razao_social,
+          nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
+          razaoSocial: empresa.razao_social,
+          nomeFantasia: empresa.nome_fantasia ?? "",
+          faixaId: empresa.faixa_id ?? "",
           cnpj: empresa.cnpj ?? "",
           qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
           contatoPrincipal: {
@@ -1242,6 +1309,7 @@ const Financeiro = () => {
     setIsBatchMode(false);
     setPreviaBoleto(null);
     setContribuicaoPreview("");
+    setBatchEmissionProgress({ done: 0, total: 0 });
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
@@ -1254,17 +1322,25 @@ const Financeiro = () => {
     setShowEmpresaSuggestions(false);
   };
 
-  const empresasFiltradas = mockEmpresas.filter(
-    (emp) =>
-      emp.nome.toLowerCase().includes(empresaSearch.toLowerCase()) ||
-      emp.cnpj.includes(empresaSearch)
-  );
+  const empresasFiltradas = mockEmpresas.filter((emp) => {
+    const term = empresaSearch.toLowerCase();
+    const matchesSearch =
+      emp.nome.toLowerCase().includes(term) ||
+      emp.razaoSocial.toLowerCase().includes(term) ||
+      emp.nomeFantasia.toLowerCase().includes(term) ||
+      emp.cnpj.includes(empresaSearch);
+    const matchesBatchFaixa = !isBatchMode || !batchFaixaId || emp.faixaId === batchFaixaId;
+    return matchesSearch && matchesBatchFaixa;
+  });
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
     return (
       empresasPorFaixaData?.empresas.map((empresa) => ({
         id: empresa.id,
-        nome: empresa.razao_social,
+        nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
+        razaoSocial: empresa.razao_social,
+        nomeFantasia: empresa.nome_fantasia ?? "",
+        faixaId: empresa.faixa_id ?? "",
         cnpj: empresa.cnpj ?? "",
         qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
         contatoPrincipal: chooseBoletoContact(empresa),
@@ -1447,10 +1523,18 @@ const Financeiro = () => {
     setContribuicaoPreview("");
   };
 
+  const hasBoletoOverlap = (empresaId: string, competenciaInicial: string, competenciaFinal: string) => {
+    return boletos.some((boleto) => {
+      if (boleto.empresaId !== empresaId) return false;
+      if (boleto.tipo !== "Mensalidade (por Faixa)") return false;
+      if (boleto.status === "Cancelado") return false;
+      return rangesOverlap(competenciaInicial, competenciaFinal, boleto.competenciaInicial, boleto.competenciaFinal);
+    });
+  };
+
   const handleEmitirBoleto = async () => {
-    const targetEmpresas = isBatchMode
-      ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
-      : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+    const selectedIds = isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
+    const targetEmpresas = mockEmpresas.filter((empresa) => selectedIds.has(empresa.id));
     const buildCompetencias = (inicio: string, fim: string) => {
       const start = startOfMonth(parseISO(inicio));
       const end = startOfMonth(parseISO(fim));
@@ -1466,46 +1550,74 @@ const Financeiro = () => {
 
     try {
       setIsEmittingBoletos(true);
+      setBatchEmissionProgress({ done: 0, total: 0 });
       if (boletoForm.tipo === "mensalidade") {
         const competencias = buildCompetencias(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
         if (competencias.length === 0) {
           throw new Error("Competências inválidas. Verifique as datas inicial e final.");
         }
 
+        const foraDaFaixa = targetEmpresas.filter((empresa) => empresa.faixaId !== boletoForm.faixaId);
+        if (foraDaFaixa.length > 0) {
+          throw new Error(`Há empresa(s) fora da faixa selecionada: ${foraDaFaixa.map((empresa) => empresa.nome).join(", ")}.`);
+        }
+
+        const duplicadas = targetEmpresas.filter((empresa) =>
+          hasBoletoOverlap(empresa.id, boletoForm.competenciaInicial, boletoForm.competenciaFinal),
+        );
+        if (duplicadas.length > 0) {
+          throw new Error(`Já existe boleto de mensalidade para a competência selecionada: ${duplicadas.map((empresa) => empresa.nome).join(", ")}.`);
+        }
+
+        if (isBatchMode) {
+          const trimestreAtual = getCurrentQuarterRange();
+          const emitidasNoTrimestre = targetEmpresas.filter((empresa) =>
+            hasBoletoOverlap(empresa.id, trimestreAtual.start, trimestreAtual.end),
+          );
+          if (emitidasNoTrimestre.length > 0) {
+            throw new Error(`Emissão em lote bloqueada para empresa(s) com boleto emitido no trimestre corrente: ${emitidasNoTrimestre.map((empresa) => empresa.nome).join(", ")}.`);
+          }
+        }
+
+        const totalOperacoes = boletoForm.unificarCompetencias === "Sim" ? targetEmpresas.length : targetEmpresas.length * competencias.length;
+        setBatchEmissionProgress({ done: 0, total: totalOperacoes });
+        const emitir = async (payload: BoletoForm) => {
+          await createBoletoMutation.mutateAsync(payload);
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        };
+
         if (boletoForm.unificarCompetencias === "Sim") {
           const valorUnificado = (previaBoleto ?? getValorFaixa(boletoForm.faixaId)) * competencias.length;
-          await Promise.all(
-            targetEmpresas.map((empresa) =>
-              createBoletoMutation.mutateAsync({
+          for (const empresa of targetEmpresas) {
+            await emitir({
+              ...boletoForm,
+              empresaId: empresa.id,
+              empresaNome: empresa.nome,
+              valorOverride: valorUnificado,
+              mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}`,
+            });
+          }
+        } else {
+          for (const empresa of targetEmpresas) {
+            for (const competencia of competencias) {
+              await emitir({
                 ...boletoForm,
                 empresaId: empresa.id,
                 empresaNome: empresa.nome,
-                valorOverride: valorUnificado,
-              }),
-            ),
-          );
-        } else {
-          await Promise.all(
-            targetEmpresas.flatMap((empresa) =>
-              competencias.map((competencia) =>
-                createBoletoMutation.mutateAsync({
-                  ...boletoForm,
-                  empresaId: empresa.id,
-                  empresaNome: empresa.nome,
-                  competenciaInicial: competencia,
-                  competenciaFinal: competencia,
-                  valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
-                }),
-              ),
-            ),
-          );
+                competenciaInicial: competencia,
+                competenciaFinal: competencia,
+                valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
+                mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(competencia, competencia)}`,
+              });
+            }
+          }
         }
       } else {
-        await Promise.all(
-          targetEmpresas.map((empresa) =>
-            createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
-          ),
-        );
+        setBatchEmissionProgress({ done: 0, total: targetEmpresas.length });
+        for (const empresa of targetEmpresas) {
+          await createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome });
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        }
       }
       toast({
         title: isBatchMode
@@ -1513,7 +1625,7 @@ const Financeiro = () => {
           : boletoForm.tipo === "contribuicao"
             ? "Boleto de Contribuição Assistencial emitido com sucesso"
             : "Boleto emitido com sucesso",
-        description: isBatchMode ? `${targetEmpresas.length} boleto(s) criado(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
+        description: isBatchMode ? `${targetEmpresas.length} empresa(s) processada(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
       });
       resetWizard();
     } catch (err) {
@@ -2323,7 +2435,7 @@ const Financeiro = () => {
                       {isBatchMode && (
                         <div className="space-y-2 rounded-md border p-3">
                           <Label>Selecionar faixa para lote</Label>
-                          <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); }}>
+                          <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); setBoletoForm((prev) => ({ ...prev, faixaId: value })); }}>
                             <SelectTrigger>
                               <SelectValue placeholder="Escolha uma faixa" />
                             </SelectTrigger>
@@ -2338,14 +2450,24 @@ const Financeiro = () => {
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
                               {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
-                                >
-                                  Selecionar todas
-                                </Button>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
+                                  >
+                                    Selecionar todas
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setBatchEmpresaIds([])}
+                                  >
+                                    Deselecionar tudo
+                                  </Button>
+                                </div>
                               )}
                               {isLoadingEmpresasPorFaixa && (
                                 <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
@@ -2358,7 +2480,7 @@ const Financeiro = () => {
                                   <input
                                     type="checkbox"
                                     checked={batchEmpresaIds.includes(empresa.id)}
-                                    onChange={(e) => setBatchEmpresaIds((prev) => e.target.checked ? [...prev, empresa.id] : prev.filter((id) => id !== empresa.id))}
+                                    onChange={(e) => setBatchEmpresaIds((prev) => e.target.checked ? Array.from(new Set([...prev, empresa.id])) : prev.filter((id) => id !== empresa.id))}
                                   />
                                   {empresa.nome} ({empresa.qtdFuncionarios} func.)
                                 </label>
@@ -2389,6 +2511,10 @@ const Financeiro = () => {
                                 className="p-3 hover:bg-accent cursor-pointer border-b last:border-b-0"
                                 onClick={() => {
                                   if (isBatchMode) {
+                                    if (batchFaixaId && empresa.faixaId !== batchFaixaId) {
+                                      toast({ title: "Empresa fora da faixa", description: "Selecione apenas empresas da faixa escolhida para o lote.", variant: "destructive" });
+                                      return;
+                                    }
                                     setBatchEmpresaIds((prev) => (prev.includes(empresa.id) ? prev : [...prev, empresa.id]));
                                     setEmpresaSearch("");
                                     return;
@@ -2411,7 +2537,7 @@ const Financeiro = () => {
                       {isBatchMode && (
                         <div className="text-sm text-muted-foreground space-y-2">
                           <div>{batchEmpresaIds.length} empresa(s) selecionada(s).</div>
-                          <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Limpar seleção</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Deselecionar tudo</Button>
                         </div>
                       )}
                     </div>
@@ -2429,18 +2555,27 @@ const Financeiro = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
                             <Label>Competência Inicial*</Label>
-                            <DatePickerField
+                            <MonthPickerField
                               value={boletoForm.competenciaInicial}
                               placeholder="Selecione a competência inicial"
-                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaInicial: value })}
+                              onChange={(value) => setBoletoForm((prev) => ({
+                                ...prev,
+                                competenciaInicial: value,
+                                competenciaFinal: prev.competenciaFinal || value,
+                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(value, prev.competenciaFinal || value)}`,
+                              }))}
                             />
                           </div>
                           <div className="space-y-2">
                             <Label>Competência Final*</Label>
-                            <DatePickerField
+                            <MonthPickerField
                               value={boletoForm.competenciaFinal}
                               placeholder="Selecione a competência final"
-                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaFinal: value })}
+                              onChange={(value) => setBoletoForm((prev) => ({
+                                ...prev,
+                                competenciaFinal: value,
+                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(prev.competenciaInicial, value)}`,
+                              }))}
                             />
                           </div>
                         </div>
@@ -2459,6 +2594,7 @@ const Financeiro = () => {
                             <Select
                               value={boletoForm.faixaId}
                               onValueChange={(value) => setBoletoForm({ ...boletoForm, faixaId: value })}
+                              disabled={isBatchMode && !!batchFaixaId}
                             >
                               <SelectTrigger id="faixa">
                                 <SelectValue placeholder="Selecione uma faixa" />
@@ -2494,7 +2630,7 @@ const Financeiro = () => {
                           <Label htmlFor="mensagem">Mensagem Personalizada</Label>
                           <Input
                             id="mensagem"
-                            placeholder="Adicione uma mensagem opcional"
+                            placeholder="Boleto referente à competência X a Y"
                             value={boletoForm.mensagemPersonalizada}
                             onChange={(e) => setBoletoForm({ ...boletoForm, mensagemPersonalizada: e.target.value })}
                           />
@@ -2593,7 +2729,7 @@ const Financeiro = () => {
                         <div className="grid grid-cols-2 gap-3 text-sm">
                           <div>
                             <p className="font-semibold text-muted-foreground">Empresa:</p>
-                            <p className="font-medium">{boletoForm.empresaNome}</p>
+                            <p className="font-medium">{isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
                           </div>
                           <div>
                             <p className="font-semibold text-muted-foreground">Tipo:</p>
@@ -2618,7 +2754,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Competências:</p>
-                                <p className="font-medium">{boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}</p>
+                                <p className="font-medium">{getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Unificar Competências:</p>
@@ -2626,7 +2762,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               {boletoForm.mensagemPersonalizada && (
                                 <div className="col-span-2">
@@ -2639,7 +2775,7 @@ const Financeiro = () => {
                             <>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Valor personalizado:</p>
@@ -2668,7 +2804,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Base de Cálculo (R$):</p>
@@ -2718,8 +2854,17 @@ const Financeiro = () => {
                       </Button>
                     )}
                   </div>
+                  {isEmittingBoletos && batchEmissionProgress.total > 0 && (
+                    <div className="w-full space-y-2 text-sm text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Emitindo boletos...</span>
+                        <span>{batchEmissionProgress.done}/{batchEmissionProgress.total}</span>
+                      </div>
+                      <Progress value={(batchEmissionProgress.done / batchEmissionProgress.total) * 100} />
+                    </div>
+                  )}
                   <div className="flex gap-2">
-                    <Button variant="outline" onClick={resetWizard}>
+                    <Button variant="outline" onClick={resetWizard} disabled={isEmittingBoletos}>
                       Cancelar
                     </Button>
                     {wizardStep < 3 ? (
@@ -2807,6 +2952,7 @@ const Financeiro = () => {
 
 export default Financeiro;
   type BoletoView = BoletoRegistro & {
+    empresaId?: string;
     efiChargeId?: string | null;
     pdfUrl?: string | null;
     descricao?: string;
