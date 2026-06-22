@@ -209,6 +209,12 @@ type ReceitaWsResponse = {
 };
 
 const RECEITA_WS_BASE_URL = "https://www.receitaws.com.br/v1/cnpj";
+const RECEITA_WS_CORS_PROXY_URL = "https://api.allorigins.win/raw?url=";
+
+const buildReceitaWsRequestUrl = (cnpj: string) => {
+  const receitaWsUrl = `${RECEITA_WS_BASE_URL}/${cnpj}`;
+  return `${RECEITA_WS_CORS_PROXY_URL}${encodeURIComponent(receitaWsUrl)}`;
+};
 
 const parseReceitaWsDate = (value?: string) => {
   if (!value) return undefined;
@@ -754,7 +760,7 @@ const Empresas = () => {
     try {
       setIsLookingUpCnpj(true);
       lastReceitaWsLookupRef.current = cnpjDigits;
-      const response = await fetch(`${RECEITA_WS_BASE_URL}/${cnpjDigits}`);
+      const response = await fetch(buildReceitaWsRequestUrl(cnpjDigits));
       const payload = (await response.json()) as ReceitaWsResponse;
 
       if (!response.ok || payload.status === "ERROR") {
@@ -1474,7 +1480,7 @@ const Empresas = () => {
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Ao informar um CNPJ válido, os dados públicos serão buscados na ReceitaWS e preenchidos automaticamente.
+                        Ao informar um CNPJ válido, os dados públicos serão buscados na ReceitaWS via proxy CORS e preenchidos automaticamente.
                       </p>
                     </div>
                     <div className="space-y-2">
