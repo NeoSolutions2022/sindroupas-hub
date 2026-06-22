@@ -188,6 +188,61 @@ type FaixaRow = {
   valor_mensalidade?: number | null;
 };
 
+type ReceitaWsResponse = {
+  status?: "OK" | "ERROR" | string;
+  message?: string;
+  cnpj?: string;
+  abertura?: string;
+  nome?: string;
+  fantasia?: string;
+  email?: string;
+  telefone?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
+  cep?: string;
+  porte?: string;
+  capital_social?: string;
+};
+
+const RECEITA_WS_BASE_URL = "https://www.receitaws.com.br/v1/cnpj";
+
+const parseReceitaWsDate = (value?: string) => {
+  if (!value) return undefined;
+  const [day, month, year] = value.split("/");
+  if (!day || !month || !year) return undefined;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+};
+
+const normalizeReceitaWsPorte = (value?: string): Empresa["porte"] | undefined => {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return undefined;
+  if (normalized.includes("mei") || normalized.includes("microempreendedor")) return "MEI";
+  if (normalized.includes("micro empresa") || normalized.includes("microempresa")) return "ME";
+  if (normalized.includes("pequeno porte") || normalized.includes("epp")) return "EPP";
+  if (normalized.includes("sociedade anonima") || normalized === "sa" || normalized.includes("s/a")) return "SA";
+  if (normalized.includes("ltda") || normalized.includes("limitada")) return "LTDA";
+  return undefined;
+};
+
+const parseReceitaWsCapital = (value?: string) => {
+  if (!value) return undefined;
+  const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const buildReceitaWsEndereco = (payload: ReceitaWsResponse) => {
+  const street = [payload.logradouro, payload.numero].filter(Boolean).join(", ");
+  const details = [payload.complemento, payload.bairro].filter(Boolean).join(" - ");
+  const city = [payload.municipio, payload.uf].filter(Boolean).join("/");
+  const cep = payload.cep ? `CEP ${payload.cep}` : "";
+  return [street, details, city, cep].filter(Boolean).join(" • ");
+};
+
 const EMPRESAS_QUERY = `
   query EmpresasPage {
     empresas(order_by: { razao_social: asc }) {
@@ -252,7 +307,9 @@ const Empresas = () => {
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const lastReceitaWsLookupRef = useRef<string>("");
   const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery({
@@ -540,6 +597,7 @@ const Empresas = () => {
   };
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
+    lastReceitaWsLookupRef.current = "";
     setValidationErrors([]);
     setIsViewMode(viewMode);
     if (empresa) {
@@ -569,6 +627,7 @@ const Empresas = () => {
   };
 
   const handleCloseDialog = () => {
+    lastReceitaWsLookupRef.current = "";
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
@@ -654,6 +713,81 @@ const Empresas = () => {
     }
     const faixaSelecionada = faixas.find((faixa) => faixa.id === value);
     setFormData((prev) => ({ ...prev, faixaId: value, faixaLabel: faixaSelecionada?.label }));
+  };
+
+  const applyReceitaWsData = (payload: ReceitaWsResponse, cnpj: string) => {
+    const porte = normalizeReceitaWsPorte(payload.porte);
+    const capitalSocial = parseReceitaWsCapital(payload.capital_social);
+    const dataFundacao = parseReceitaWsDate(payload.abertura);
+    const endereco = buildReceitaWsEndereco(payload);
+
+    setFormData((prev) => ({
+      ...prev,
+      cnpj: formatCnpj(payload.cnpj || cnpj),
+      razaoSocial: payload.nome?.trim() || prev.razaoSocial,
+      nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim(),
+      email: payload.email?.trim().toLowerCase() || prev.email,
+      whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
+      endereco: endereco || prev.endereco,
+      porte: porte || prev.porte,
+      capitalSocial: capitalSocial ?? prev.capitalSocial,
+      dataFundacao: dataFundacao || prev.dataFundacao,
+    }));
+    setValidationErrors((prev) => prev.filter((field) => !["razaoSocial", "cnpj", "porte", "dataFundacao"].includes(field)));
+  };
+
+  const handleReceitaWsLookup = async (cnpjValue = formData.cnpj || "", options?: { silent?: boolean }) => {
+    const cnpjDigits = cnpjValue.replace(/\D/g, "");
+    if (cnpjDigits.length !== 14) {
+      if (!options?.silent) {
+        toast({
+          title: "CNPJ incompleto",
+          description: "Informe os 14 dígitos do CNPJ para buscar na ReceitaWS.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCnpj || (options?.silent && lastReceitaWsLookupRef.current === cnpjDigits)) return;
+
+    try {
+      setIsLookingUpCnpj(true);
+      lastReceitaWsLookupRef.current = cnpjDigits;
+      const response = await fetch(`${RECEITA_WS_BASE_URL}/${cnpjDigits}`);
+      const payload = (await response.json()) as ReceitaWsResponse;
+
+      if (!response.ok || payload.status === "ERROR") {
+        throw new Error(payload.message || "Não foi possível consultar esse CNPJ na ReceitaWS.");
+      }
+
+      applyReceitaWsData(payload, cnpjDigits);
+      toast({
+        title: "Dados localizados",
+        description: "Preenchi automaticamente as informações disponíveis na ReceitaWS.",
+      });
+    } catch (err) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CNPJ",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCnpj(false);
+    }
+  };
+
+  const handleCnpjChange = (value: string) => {
+    const formattedCnpj = formatCnpj(value);
+    clearValidationError("cnpj");
+    setFormData((prev) => ({ ...prev, cnpj: formattedCnpj }));
+
+    const digits = formattedCnpj.replace(/\D/g, "");
+    if (!isViewMode && digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
+      void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
   };
 
   const handleSave = () => {
@@ -1316,17 +1450,32 @@ const Empresas = () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="cnpj">CNPJ*</Label>
-                      <Input
-                        id="cnpj"
-                        placeholder="00.000.000/0000-00"
-                        value={formData.cnpj || ""}
-                        onChange={(e) => {
-                          clearValidationError("cnpj");
-                          setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }));
-                        }}
-                        className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
-                        disabled={isViewMode}
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          id="cnpj"
+                          placeholder="00.000.000/0000-00"
+                          value={formData.cnpj || ""}
+                          onChange={(e) => handleCnpjChange(e.target.value)}
+                          onBlur={() => void handleReceitaWsLookup(formData.cnpj || "", { silent: true })}
+                          className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
+                          disabled={isViewMode || isLookingUpCnpj}
+                        />
+                        {!isViewMode && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void handleReceitaWsLookup()}
+                            disabled={isLookingUpCnpj || (formData.cnpj || "").replace(/\D/g, "").length !== 14}
+                            aria-label="Buscar dados da empresa na ReceitaWS"
+                          >
+                            <Search className="mr-2 h-4 w-4" />
+                            {isLookingUpCnpj ? "Buscando..." : "Buscar"}
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Ao informar um CNPJ válido, os dados públicos serão buscados na ReceitaWS e preenchidos automaticamente.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="email">E-mail</Label>
