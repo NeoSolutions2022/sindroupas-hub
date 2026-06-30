@@ -40,7 +40,6 @@ export function BoletoActionsCell({
   onEditCompany,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
-  const isPaid = status === "Pago";
   const isCanceled = status === "Cancelado";
 
   if (isOverdue) {
@@ -102,21 +101,7 @@ export function BoletoActionsCell({
     );
   }
 
-  if (isPaid) {
-    return (
-      <div className="flex items-center justify-end gap-1">
-        <Button variant="outline" size="sm" onClick={onDetails} className="h-8 text-xs">
-          <Eye className="h-3.5 w-3.5 mr-1" />
-          Detalhes
-        </Button>
-        <Button variant="ghost" size="icon" onClick={onDownload} className="h-8 w-8">
-          <Download className="h-4 w-4" />
-        </Button>
-      </div>
-    );
-  }
-
-  // Pendente / Emitida / Cancelada
+  // Pendente / Emitida / Pago / Cancelada
   return (
     <div className="flex items-center justify-end gap-1">
       {isCanceled && (
