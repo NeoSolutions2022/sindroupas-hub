@@ -81,6 +81,26 @@ type Colaborador = {
   observacoes?: string;
 };
 
+type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
+type RelacionamentoEmpresa = {
+  id?: string;
+  tipo: TipoRelacionamento;
+  categoria?: string;
+  status: string;
+  descricao?: string;
+  contrapartidas?: string;
+  observacoes?: string;
+};
+
+const relacionamentoTipoOptions: TipoRelacionamento[] = ["Parceiro", "Mantenedor", "Fornecedor"];
+const categoriasParceiro = ["Universidade", "IEL", "FIRJAN", "SEBRAE", "Associação", "Fomento"];
+const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"];
+const relacionamentoStatusOptions: Record<TipoRelacionamento, string[]> = {
+  Parceiro: ["Ativo", "Em avaliação", "Encerrado"],
+  Mantenedor: ["Ativo", "Encerrado"],
+  Fornecedor: ["Ativo", "Em análise", "Recusado"],
+};
+
 type Empresa = {
   id: string;
   logoUrl: string;
@@ -102,6 +122,7 @@ type Empresa = {
   responsavel?: Responsavel | null;
   responsaveis: Responsavel[];
   colaboradores: Colaborador[];
+  relacionamentos: RelacionamentoEmpresa[];
 };
 
 type Faixa = {
@@ -177,6 +198,15 @@ type EmpresaRow = {
     data_aniversario?: string | null;
     cpf?: string | null;
     contato_principal?: boolean | null;
+  }[];
+  relacionamentos?: {
+    id: string;
+    tipo?: string | null;
+    categoria?: string | null;
+    status?: string | null;
+    descricao?: string | null;
+    contrapartidas?: string | null;
+    observacoes?: string | null;
   }[];
   colaboradores?: {
     id: string;
@@ -285,6 +315,15 @@ const EMPRESAS_QUERY = `
         cpf
         contato_principal
       }
+      relacionamentos {
+        id
+        tipo
+        categoria
+        status
+        descricao
+        contrapartidas
+        observacoes
+      }
       colaboradores {
         id
         nome
@@ -368,6 +407,16 @@ const Empresas = () => {
           contatoPrincipal: Boolean(responsavel.contato_principal),
         })) ?? [];
       const responsavel = responsaveis.find((item) => item.contatoPrincipal) ?? responsaveis[0];
+      const relacionamentos =
+        empresa.relacionamentos?.map((relacionamento) => ({
+          id: relacionamento.id,
+          tipo: (relacionamento.tipo as TipoRelacionamento) ?? "Parceiro",
+          categoria: relacionamento.categoria ?? undefined,
+          status: relacionamento.status ?? "Ativo",
+          descricao: relacionamento.descricao ?? undefined,
+          contrapartidas: relacionamento.contrapartidas ?? undefined,
+          observacoes: relacionamento.observacoes ?? undefined,
+        })) ?? [];
       const nomeFantasia = getEmpresaDisplayName(empresa);
       const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
       return {
@@ -390,6 +439,7 @@ const Empresas = () => {
         dataDesassociacao: empresa.data_desassociacao ?? null,
         responsavel: responsavel ?? null,
         responsaveis,
+        relacionamentos,
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -441,6 +491,8 @@ const Empresas = () => {
 
       const colaboradoresInput =
         payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
+      const relacionamentosInput =
+        payload.values.relacionamentos?.filter((relacionamento) => relacionamento.tipo) ?? [];
 
       if (payload.id) {
         await hasuraRequest({
@@ -457,17 +509,20 @@ const Empresas = () => {
 
         await hasuraRequest({
           query: `
-            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
               delete_responsaveis(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               delete_colaboradores(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_relacionamentos(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
             }
           `,
           variables: {
             empresaId: payload.id,
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: payload.id })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: payload.id })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: payload.id })),
           },
           token,
         });
@@ -486,17 +541,19 @@ const Empresas = () => {
       });
 
       const empresaId = created.insert_empresas_one.id;
-      if (responsavelInput.length || colaboradoresInput.length) {
+      if (responsavelInput.length || colaboradoresInput.length || relacionamentosInput.length) {
         await hasuraRequest({
           query: `
-            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
             }
           `,
           variables: {
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: empresaId })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: empresaId })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId })),
           },
           token,
         });
@@ -651,6 +708,7 @@ const Empresas = () => {
         responsaveis: empresa.responsaveis.length
           ? empresa.responsaveis.map((responsavel) => ({ ...responsavel }))
           : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: empresa.relacionamentos.length ? empresa.relacionamentos.map((relacionamento) => ({ ...relacionamento })) : [],
         responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview(empresa.logoUrl);
@@ -662,6 +720,7 @@ const Empresas = () => {
         porte: "ME",
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
         responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: [],
         responsavel: { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview("");
@@ -674,7 +733,7 @@ const Empresas = () => {
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
-    setFormData({ colaboradores: [], responsaveis: [] });
+    setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [] });
     setLogoPreview("");
     setValidationErrors([]);
     if (logoInputRef.current) {
@@ -787,6 +846,45 @@ const Empresas = () => {
         responsaveis: nextResponsaveis,
         responsavel: nextResponsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? nextResponsaveis[0],
       };
+    });
+  };
+
+  const addRelacionamento = () => {
+    setFormData((prev) => ({
+      ...prev,
+      relacionamentos: [
+        ...(prev.relacionamentos || []),
+        { tipo: "Parceiro", status: "Ativo", categoria: "", descricao: "", contrapartidas: "", observacoes: "" },
+      ],
+    }));
+  };
+
+  const removeRelacionamento = (index: number) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      relacionamentos.splice(index, 1);
+      return { ...prev, relacionamentos };
+    });
+  };
+
+  const updateRelacionamento = (index: number, field: keyof RelacionamentoEmpresa, value: string) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      const current = relacionamentos[index] || { tipo: "Parceiro", status: "Ativo" };
+      const next = { ...current, [field]: value } as RelacionamentoEmpresa;
+
+      if (field === "tipo") {
+        const tipo = value as TipoRelacionamento;
+        next.tipo = tipo;
+        next.status = relacionamentoStatusOptions[tipo][0];
+        next.categoria = "";
+        next.descricao = "";
+        next.contrapartidas = "";
+        next.observacoes = "";
+      }
+
+      relacionamentos[index] = next;
+      return { ...prev, relacionamentos };
     });
   };
 
@@ -1764,6 +1862,131 @@ const Empresas = () => {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Vínculos institucionais/comerciais</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Use para indicar quando a empresa também é parceira, mantenedora ou fornecedora. Isso não altera o campo Associado.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addRelacionamento}>
+                          + Vínculo
+                        </Button>
+                      )}
+                    </div>
+                    {(formData.relacionamentos || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                        Nenhum vínculo cadastrado para esta empresa.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {(formData.relacionamentos || []).map((relacionamento, index) => (
+                          <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium">Vínculo {index + 1}</p>
+                              {!isViewMode && (
+                                <Button type="button" variant="ghost" size="sm" onClick={() => removeRelacionamento(index)}>
+                                  Remover
+                                </Button>
+                              )}
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label>Tipo</Label>
+                                <Select
+                                  value={relacionamento.tipo}
+                                  onValueChange={(value) => updateRelacionamento(index, "tipo", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o tipo" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoTipoOptions.map((tipo) => (
+                                      <SelectItem key={tipo} value={tipo}>{tipo}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Status</Label>
+                                <Select
+                                  value={relacionamento.status || relacionamentoStatusOptions[relacionamento.tipo][0]}
+                                  onValueChange={(value) => updateRelacionamento(index, "status", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o status" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoStatusOptions[relacionamento.tipo].map((status) => (
+                                      <SelectItem key={status} value={status}>{status}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              {(relacionamento.tipo === "Parceiro" || relacionamento.tipo === "Fornecedor") && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Categoria</Label>
+                                  <Select
+                                    value={relacionamento.categoria || "none"}
+                                    onValueChange={(value) => updateRelacionamento(index, "categoria", value === "none" ? "" : value)}
+                                    disabled={isViewMode}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Selecione a categoria" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Sem categoria</SelectItem>
+                                      {(relacionamento.tipo === "Parceiro" ? categoriasParceiro : categoriasFornecedor).map((categoria) => (
+                                        <SelectItem key={categoria} value={categoria}>{categoria}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Parceiro" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Descrição</Label>
+                                  <Input
+                                    placeholder="Descreva a parceria"
+                                    value={relacionamento.descricao || ""}
+                                    onChange={(e) => updateRelacionamento(index, "descricao", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Mantenedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Contrapartidas</Label>
+                                  <Input
+                                    placeholder="Ex: Logo em eventos, menção em materiais"
+                                    value={relacionamento.contrapartidas || ""}
+                                    onChange={(e) => updateRelacionamento(index, "contrapartidas", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Fornecedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Observações</Label>
+                                  <Input
+                                    placeholder="Observações adicionais"
+                                    value={relacionamento.observacoes || ""}
+                                    onChange={(e) => updateRelacionamento(index, "observacoes", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-4 rounded-lg border p-4">
