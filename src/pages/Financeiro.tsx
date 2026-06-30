@@ -258,6 +258,8 @@ interface Faixa {
   descricao?: string;
 }
 
+const SINDICATO_EMAIL = "sindroupas@sindicato.sfiec.org.br";
+
 interface BoletoForm {
   tipo: "mensalidade" | "contribuicao" | "avulso" | "";
   empresaId: string;
@@ -279,6 +281,7 @@ interface BoletoForm {
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
+  emailOverride?: string;
 }
 
 type ContactCandidate = {
@@ -617,8 +620,9 @@ const Financeiro = () => {
       }
 
       const contato = empresa.contatoPrincipal;
+      const emailBoleto = payload.emailOverride || contato.email;
       const phoneNumber = (contato.whatsapp || "").replace(/\D/g, "");
-      if (!contato.email || !phoneNumber) {
+      if (!emailBoleto || !phoneNumber) {
         throw new Error("A empresa selecionada precisa ter e-mail e WhatsApp para emissão do boleto.");
       }
       if (!empresa.cnpj) {
@@ -670,7 +674,7 @@ const Financeiro = () => {
         custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
         message: payload.mensagemPersonalizada || undefined,
         customer: {
-          email: contato.email,
+          email: emailBoleto,
           phone_number: phoneNumber,
           juridical_person: {
             corporate_name: empresa.nome,
@@ -828,6 +832,10 @@ const Financeiro = () => {
   const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
   const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
   const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
+  const [emailFallbackDialogOpen, setEmailFallbackDialogOpen] = useState(false);
+  const [emailFallbackEmpresaIds, setEmailFallbackEmpresaIds] = useState<string[]>([]);
+  const [emailFallbackDraft, setEmailFallbackDraft] = useState("");
+  const [isResolvingEmailFallback, setIsResolvingEmailFallback] = useState(false);
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -1310,6 +1318,9 @@ const Financeiro = () => {
     setPreviaBoleto(null);
     setContribuicaoPreview("");
     setBatchEmissionProgress({ done: 0, total: 0 });
+    setEmailFallbackDialogOpen(false);
+    setEmailFallbackEmpresaIds([]);
+    setEmailFallbackDraft("");
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
@@ -1532,9 +1543,66 @@ const Financeiro = () => {
     });
   };
 
-  const handleEmitirBoleto = async () => {
+  const getEmpresasSemEmail = (empresas: typeof mockEmpresas, emailOverrides: Record<string, string>) => {
+    return empresas.filter((empresa) => !(emailOverrides[empresa.id] || empresa.contatoPrincipal.email));
+  };
+
+  const updateEmpresaEmails = async (empresaIds: string[], email: string) => {
+    await Promise.all(
+      empresaIds.map((empresaId) =>
+        hasuraRequest({
+          query: `
+            mutation UpdateEmpresaEmail($id: uuid!, $email: String!) {
+              update_empresas_by_pk(pk_columns: { id: $id }, _set: { email: $email }) { id }
+            }
+          `,
+          variables: { id: empresaId, email },
+          token,
+        }),
+      ),
+    );
+    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const handleResolveMissingEmail = async (email: string, shouldPersist: boolean) => {
+    if (!emailFallbackEmpresaIds.length) return;
+    if (!email.trim()) {
+      toast({ title: "E-mail obrigatório", description: "Informe um e-mail ou use o e-mail do sindicato.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      setIsResolvingEmailFallback(true);
+      if (shouldPersist) {
+        await updateEmpresaEmails(emailFallbackEmpresaIds, email.trim());
+      }
+      const emailOverrides = Object.fromEntries(emailFallbackEmpresaIds.map((empresaId) => [empresaId, email.trim()]));
+      setEmailFallbackDialogOpen(false);
+      setEmailFallbackEmpresaIds([]);
+      setEmailFallbackDraft("");
+      await handleEmitirBoleto({ emailOverrides });
+    } catch (err) {
+      toast({
+        title: "Falha ao resolver e-mail",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResolvingEmailFallback(false);
+    }
+  };
+
+  const handleEmitirBoleto = async (options?: { emailOverrides?: Record<string, string> }) => {
     const selectedIds = isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
     const targetEmpresas = mockEmpresas.filter((empresa) => selectedIds.has(empresa.id));
+    const emailOverrides = options?.emailOverrides ?? {};
+    const empresasSemEmail = getEmpresasSemEmail(targetEmpresas, emailOverrides);
+    if (empresasSemEmail.length > 0) {
+      setEmailFallbackEmpresaIds(empresasSemEmail.map((empresa) => empresa.id));
+      setEmailFallbackDraft("");
+      setEmailFallbackDialogOpen(true);
+      return;
+    }
     const buildCompetencias = (inicio: string, fim: string) => {
       const start = startOfMonth(parseISO(inicio));
       const end = startOfMonth(parseISO(fim));
@@ -1594,6 +1662,7 @@ const Financeiro = () => {
               empresaId: empresa.id,
               empresaNome: empresa.nome,
               valorOverride: valorUnificado,
+              emailOverride: emailOverrides[empresa.id],
               mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}`,
             });
           }
@@ -1607,6 +1676,7 @@ const Financeiro = () => {
                 competenciaInicial: competencia,
                 competenciaFinal: competencia,
                 valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
+                emailOverride: emailOverrides[empresa.id],
                 mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(competencia, competencia)}`,
               });
             }
@@ -1615,7 +1685,7 @@ const Financeiro = () => {
       } else {
         setBatchEmissionProgress({ done: 0, total: targetEmpresas.length });
         for (const empresa of targetEmpresas) {
-          await createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome });
+          await createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome, emailOverride: emailOverrides[empresa.id] });
           setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
         }
       }
@@ -2872,10 +2942,65 @@ const Financeiro = () => {
                         Próximo
                       </Button>
                     ) : (
-                      <Button onClick={handleEmitirBoleto} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                      <Button onClick={() => void handleEmitirBoleto()} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
                         {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
                       </Button>
                     )}
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={emailFallbackDialogOpen} onOpenChange={(open) => {
+              if (isResolvingEmailFallback) return;
+              setEmailFallbackDialogOpen(open);
+            }}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>E-mail necessário para emissão</DialogTitle>
+                  <DialogDescription>
+                    A EFI exige um e-mail para gerar o boleto. Informe um e-mail para cadastrar na empresa ou use o e-mail do sindicato.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm text-muted-foreground">
+                    {emailFallbackEmpresaIds.length === 1
+                      ? `Empresa sem e-mail: ${mockEmpresas.find((empresa) => empresa.id === emailFallbackEmpresaIds[0])?.nome || "empresa selecionada"}.`
+                      : `${emailFallbackEmpresaIds.length} empresa(s) selecionada(s) não possuem e-mail cadastrado.`}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="email-fallback">E-mail da empresa</Label>
+                    <Input
+                      id="email-fallback"
+                      type="email"
+                      placeholder="email@empresa.com"
+                      value={emailFallbackDraft}
+                      onChange={(event) => setEmailFallbackDraft(event.target.value)}
+                      disabled={isResolvingEmailFallback}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Ao salvar, este e-mail será cadastrado na empresa antes da emissão.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter className="gap-2 sm:justify-between">
+                  <Button variant="outline" onClick={() => setEmailFallbackDialogOpen(false)} disabled={isResolvingEmailFallback}>
+                    Cancelar emissão
+                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleResolveMissingEmail(SINDICATO_EMAIL, false)}
+                      disabled={isResolvingEmailFallback}
+                    >
+                      Usar e-mail do sindicato
+                    </Button>
+                    <Button
+                      onClick={() => void handleResolveMissingEmail(emailFallbackDraft, true)}
+                      disabled={isResolvingEmailFallback || !emailFallbackDraft.trim()}
+                    >
+                      {isResolvingEmailFallback ? "Continuando..." : "Salvar e continuar"}
+                    </Button>
                   </div>
                 </DialogFooter>
               </DialogContent>

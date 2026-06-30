@@ -799,7 +799,6 @@ const Empresas = () => {
       { key: "associado", label: "Associado", value: typeof formData.associado === "boolean" ? "ok" : "" },
       { key: "situacaoFinanceira", label: "Situação Financeira", value: formData.situacaoFinanceira },
       { key: "porte", label: "Porte", value: formData.porte },
-      { key: "dataFundacao", label: "Fundação", value: formData.dataFundacao },
     ];
     const missing = requiredChecks.filter((field) => field.value === undefined || field.value === "");
 
@@ -1614,7 +1613,7 @@ const Empresas = () => {
 
                   <div className="grid gap-4 md:grid-cols-3">
                     <div className="space-y-2">
-                      <Label htmlFor="fundacao">Fundação*</Label>
+                      <Label htmlFor="fundacao">Fundação</Label>
                       <Input
                         id="fundacao"
                         type="date"
