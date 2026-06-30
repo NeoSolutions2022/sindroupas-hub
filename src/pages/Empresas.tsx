@@ -65,7 +65,11 @@ const normalizeSearchText = (value?: string | null) =>
 
 type Responsavel = {
   nome?: string;
+  cpf?: string;
+  dataAniversario?: string;
   whatsapp?: string;
+  email?: string;
+  contatoPrincipal?: boolean;
 };
 
 type Colaborador = {
@@ -75,6 +79,26 @@ type Colaborador = {
   cargo: string;
   email: string;
   observacoes?: string;
+};
+
+type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
+type RelacionamentoEmpresa = {
+  id?: string;
+  tipo: TipoRelacionamento;
+  categoria?: string;
+  status: string;
+  descricao?: string;
+  contrapartidas?: string;
+  observacoes?: string;
+};
+
+const relacionamentoTipoOptions: TipoRelacionamento[] = ["Parceiro", "Mantenedor", "Fornecedor"];
+const categoriasParceiro = ["Universidade", "IEL", "FIRJAN", "SEBRAE", "Associação", "Fomento"];
+const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"];
+const relacionamentoStatusOptions: Record<TipoRelacionamento, string[]> = {
+  Parceiro: ["Ativo", "Em avaliação", "Encerrado"],
+  Mantenedor: ["Ativo", "Encerrado"],
+  Fornecedor: ["Ativo", "Em análise", "Recusado"],
 };
 
 type Empresa = {
@@ -96,7 +120,9 @@ type Empresa = {
   dataAssociacao?: string | null;
   dataDesassociacao?: string | null;
   responsavel?: Responsavel | null;
+  responsaveis: Responsavel[];
   colaboradores: Colaborador[];
+  relacionamentos: RelacionamentoEmpresa[];
 };
 
 type Faixa = {
@@ -164,7 +190,24 @@ type EmpresaRow = {
   data_fundacao?: string | null;
   data_associacao?: string | null;
   data_desassociacao?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+  responsaveis?: {
+    id: string;
+    nome?: string | null;
+    whatsapp?: string | null;
+    email?: string | null;
+    data_aniversario?: string | null;
+    cpf?: string | null;
+    contato_principal?: boolean | null;
+  }[];
+  relacionamentos?: {
+    id: string;
+    tipo?: string | null;
+    categoria?: string | null;
+    status?: string | null;
+    descricao?: string | null;
+    contrapartidas?: string | null;
+    observacoes?: string | null;
+  }[];
   colaboradores?: {
     id: string;
     nome?: string | null;
@@ -186,6 +229,63 @@ type FaixaRow = {
   min_colaboradores?: number | null;
   max_colaboradores?: number | null;
   valor_mensalidade?: number | null;
+};
+
+type ReceitaWsResponse = {
+  status?: "OK" | "ERROR" | string;
+  message?: string;
+  cnpj?: string;
+  abertura?: string;
+  nome?: string;
+  fantasia?: string;
+  email?: string;
+  telefone?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
+  cep?: string;
+  porte?: string;
+  capital_social?: string;
+};
+
+const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
+
+const buildReceitaWsRequestUrl = (cnpj: string) => `${RECEITA_WS_PROXY_BASE_PATH}/${cnpj}`;
+
+const parseReceitaWsDate = (value?: string) => {
+  if (!value) return undefined;
+  const [day, month, year] = value.split("/");
+  if (!day || !month || !year) return undefined;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+};
+
+const normalizeReceitaWsPorte = (value?: string): Empresa["porte"] | undefined => {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return undefined;
+  if (normalized.includes("mei") || normalized.includes("microempreendedor")) return "MEI";
+  if (normalized.includes("micro empresa") || normalized.includes("microempresa")) return "ME";
+  if (normalized.includes("pequeno porte") || normalized.includes("epp")) return "EPP";
+  if (normalized.includes("sociedade anonima") || normalized === "sa" || normalized.includes("s/a")) return "SA";
+  if (normalized.includes("ltda") || normalized.includes("limitada")) return "LTDA";
+  return undefined;
+};
+
+const parseReceitaWsCapital = (value?: string) => {
+  if (!value) return undefined;
+  const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const buildReceitaWsEndereco = (payload: ReceitaWsResponse) => {
+  const street = [payload.logradouro, payload.numero].filter(Boolean).join(", ");
+  const details = [payload.complemento, payload.bairro].filter(Boolean).join(" - ");
+  const city = [payload.municipio, payload.uf].filter(Boolean).join("/");
+  const cep = payload.cep ? `CEP ${payload.cep}` : "";
+  return [street, details, city, cep].filter(Boolean).join(" • ");
 };
 
 const EMPRESAS_QUERY = `
@@ -210,6 +310,19 @@ const EMPRESAS_QUERY = `
         id
         nome
         whatsapp
+        email
+        data_aniversario
+        cpf
+        contato_principal
+      }
+      relacionamentos {
+        id
+        tipo
+        categoria
+        status
+        descricao
+        contrapartidas
+        observacoes
       }
       colaboradores {
         id
@@ -252,7 +365,9 @@ const Empresas = () => {
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const lastReceitaWsLookupRef = useRef<string>("");
   const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery({
@@ -282,7 +397,26 @@ const Empresas = () => {
     if (!data?.empresas) return [];
     return data.empresas.map((empresa) => {
       const faixaLabel = empresa.faixa_id ? faixas.find((faixa) => faixa.id === empresa.faixa_id)?.label : undefined;
-      const responsavel = empresa.responsaveis?.[0];
+      const responsaveis =
+        empresa.responsaveis?.map((responsavel) => ({
+          nome: responsavel.nome ?? undefined,
+          cpf: responsavel.cpf ?? undefined,
+          dataAniversario: responsavel.data_aniversario ?? undefined,
+          whatsapp: responsavel.whatsapp ?? undefined,
+          email: responsavel.email ?? undefined,
+          contatoPrincipal: Boolean(responsavel.contato_principal),
+        })) ?? [];
+      const responsavel = responsaveis.find((item) => item.contatoPrincipal) ?? responsaveis[0];
+      const relacionamentos =
+        empresa.relacionamentos?.map((relacionamento) => ({
+          id: relacionamento.id,
+          tipo: (relacionamento.tipo as TipoRelacionamento) ?? "Parceiro",
+          categoria: relacionamento.categoria ?? undefined,
+          status: relacionamento.status ?? "Ativo",
+          descricao: relacionamento.descricao ?? undefined,
+          contrapartidas: relacionamento.contrapartidas ?? undefined,
+          observacoes: relacionamento.observacoes ?? undefined,
+        })) ?? [];
       const nomeFantasia = getEmpresaDisplayName(empresa);
       const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
       return {
@@ -303,9 +437,9 @@ const Empresas = () => {
         dataFundacao: empresa.data_fundacao ?? "",
         dataAssociacao: empresa.data_associacao ?? null,
         dataDesassociacao: empresa.data_desassociacao ?? null,
-        responsavel: responsavel
-          ? { nome: responsavel.nome ?? undefined, whatsapp: responsavel.whatsapp ?? undefined }
-          : null,
+        responsavel: responsavel ?? null,
+        responsaveis,
+        relacionamentos,
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -338,14 +472,27 @@ const Empresas = () => {
         data_desassociacao: payload.values.dataDesassociacao ?? null,
       };
 
-      const responsavel = payload.values.responsavel;
-      const responsavelInput =
-        responsavel?.nome || responsavel?.whatsapp
-          ? [{ nome: responsavel?.nome ?? "", whatsapp: responsavel?.whatsapp ?? "" }]
-          : [];
+      const responsaveisBase =
+        payload.values.responsaveis?.length
+          ? payload.values.responsaveis
+          : payload.values.responsavel
+            ? [payload.values.responsavel]
+            : [];
+      const responsavelInput = responsaveisBase
+        .filter((responsavel) => responsavel.nome || responsavel.whatsapp || responsavel.email || responsavel.cpf)
+        .map((responsavel) => ({
+          nome: responsavel.nome ?? "",
+          whatsapp: responsavel.whatsapp ?? "",
+          email: responsavel.email || null,
+          data_aniversario: responsavel.dataAniversario || null,
+          cpf: responsavel.cpf || null,
+          contato_principal: Boolean(responsavel.contatoPrincipal),
+        }));
 
       const colaboradoresInput =
         payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
+      const relacionamentosInput =
+        payload.values.relacionamentos?.filter((relacionamento) => relacionamento.tipo) ?? [];
 
       if (payload.id) {
         await hasuraRequest({
@@ -362,17 +509,20 @@ const Empresas = () => {
 
         await hasuraRequest({
           query: `
-            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
               delete_responsaveis(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               delete_colaboradores(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_relacionamentos(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
             }
           `,
           variables: {
             empresaId: payload.id,
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: payload.id })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: payload.id })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: payload.id })),
           },
           token,
         });
@@ -391,17 +541,19 @@ const Empresas = () => {
       });
 
       const empresaId = created.insert_empresas_one.id;
-      if (responsavelInput.length || colaboradoresInput.length) {
+      if (responsavelInput.length || colaboradoresInput.length || relacionamentosInput.length) {
         await hasuraRequest({
           query: `
-            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
             }
           `,
           variables: {
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: empresaId })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: empresaId })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId })),
           },
           token,
         });
@@ -456,6 +608,7 @@ const Empresas = () => {
         empresa.razaoSocial,
         empresa.nomeFantasia,
         empresa.responsavel?.nome,
+        ...empresa.responsaveis.map((responsavel) => [responsavel.nome, responsavel.cpf, responsavel.email].filter(Boolean).join(" ")),
         ...empresa.colaboradores.map((colaborador) => colaborador.nome),
       ].join(" "));
       const cnpjDigits = empresa.cnpj.replace(/\D/g, "");
@@ -540,6 +693,7 @@ const Empresas = () => {
   };
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
+    lastReceitaWsLookupRef.current = "";
     setValidationErrors([]);
     setIsViewMode(viewMode);
     if (empresa) {
@@ -551,7 +705,11 @@ const Empresas = () => {
           : [
               { nome: "", cpf: "", whatsapp: "", cargo: "", email: "" },
             ],
-        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", whatsapp: "" },
+        responsaveis: empresa.responsaveis.length
+          ? empresa.responsaveis.map((responsavel) => ({ ...responsavel }))
+          : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: empresa.relacionamentos.length ? empresa.relacionamentos.map((relacionamento) => ({ ...relacionamento })) : [],
+        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview(empresa.logoUrl);
     } else {
@@ -561,7 +719,9 @@ const Empresas = () => {
         situacaoFinanceira: "Regular",
         porte: "ME",
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
-        responsavel: { nome: "", whatsapp: "" },
+        responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: [],
+        responsavel: { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview("");
     }
@@ -569,10 +729,11 @@ const Empresas = () => {
   };
 
   const handleCloseDialog = () => {
+    lastReceitaWsLookupRef.current = "";
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
-    setFormData({ colaboradores: [] });
+    setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [] });
     setLogoPreview("");
     setValidationErrors([]);
     if (logoInputRef.current) {
@@ -637,14 +798,94 @@ const Empresas = () => {
     });
   };
 
-  const handleResponsavelChange = (field: keyof Responsavel, value: string) => {
+  const addResponsavel = () => {
     setFormData((prev) => ({
       ...prev,
-      responsavel: {
-        ...(prev.responsavel || {}),
-        [field]: field === "whatsapp" ? formatPhone(value) : value,
-      },
+      responsaveis: [
+        ...(prev.responsaveis || []),
+        { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
+      ],
     }));
+  };
+
+  const removeResponsavel = (index: number) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      responsaveis.splice(index, 1);
+      return { ...prev, responsaveis };
+    });
+  };
+
+  const updateResponsavel = (index: number, field: keyof Responsavel, value: string | boolean) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      const current = responsaveis[index] || {};
+      const formattedValue =
+        field === "cpf" && typeof value === "string"
+          ? formatCpf(value)
+          : field === "whatsapp" && typeof value === "string"
+            ? formatPhone(value)
+            : value;
+
+      const nextResponsaveis = responsaveis.map((responsavel, responsavelIndex) => {
+        if (field === "contatoPrincipal" && value === true) {
+          return {
+            ...responsavel,
+            contatoPrincipal: responsavelIndex === index,
+          };
+        }
+        return responsavelIndex === index ? { ...current, [field]: formattedValue } : responsavel;
+      });
+
+      if (!nextResponsaveis[index]) {
+        nextResponsaveis[index] = { ...current, [field]: formattedValue };
+      }
+
+      return {
+        ...prev,
+        responsaveis: nextResponsaveis,
+        responsavel: nextResponsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? nextResponsaveis[0],
+      };
+    });
+  };
+
+  const addRelacionamento = () => {
+    setFormData((prev) => ({
+      ...prev,
+      relacionamentos: [
+        ...(prev.relacionamentos || []),
+        { tipo: "Parceiro", status: "Ativo", categoria: "", descricao: "", contrapartidas: "", observacoes: "" },
+      ],
+    }));
+  };
+
+  const removeRelacionamento = (index: number) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      relacionamentos.splice(index, 1);
+      return { ...prev, relacionamentos };
+    });
+  };
+
+  const updateRelacionamento = (index: number, field: keyof RelacionamentoEmpresa, value: string) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      const current = relacionamentos[index] || { tipo: "Parceiro", status: "Ativo" };
+      const next = { ...current, [field]: value } as RelacionamentoEmpresa;
+
+      if (field === "tipo") {
+        const tipo = value as TipoRelacionamento;
+        next.tipo = tipo;
+        next.status = relacionamentoStatusOptions[tipo][0];
+        next.categoria = "";
+        next.descricao = "";
+        next.contrapartidas = "";
+        next.observacoes = "";
+      }
+
+      relacionamentos[index] = next;
+      return { ...prev, relacionamentos };
+    });
   };
 
   const handleFaixaChange = (value: string) => {
@@ -656,6 +897,81 @@ const Empresas = () => {
     setFormData((prev) => ({ ...prev, faixaId: value, faixaLabel: faixaSelecionada?.label }));
   };
 
+  const applyReceitaWsData = (payload: ReceitaWsResponse, cnpj: string) => {
+    const porte = normalizeReceitaWsPorte(payload.porte);
+    const capitalSocial = parseReceitaWsCapital(payload.capital_social);
+    const dataFundacao = parseReceitaWsDate(payload.abertura);
+    const endereco = buildReceitaWsEndereco(payload);
+
+    setFormData((prev) => ({
+      ...prev,
+      cnpj: formatCnpj(payload.cnpj || cnpj),
+      razaoSocial: payload.nome?.trim() || prev.razaoSocial,
+      nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim(),
+      email: payload.email?.trim().toLowerCase() || prev.email,
+      whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
+      endereco: endereco || prev.endereco,
+      porte: porte || prev.porte,
+      capitalSocial: capitalSocial ?? prev.capitalSocial,
+      dataFundacao: dataFundacao || prev.dataFundacao,
+    }));
+    setValidationErrors((prev) => prev.filter((field) => !["razaoSocial", "cnpj", "porte", "dataFundacao"].includes(field)));
+  };
+
+  const handleReceitaWsLookup = async (cnpjValue = formData.cnpj || "", options?: { silent?: boolean }) => {
+    const cnpjDigits = cnpjValue.replace(/\D/g, "");
+    if (cnpjDigits.length !== 14) {
+      if (!options?.silent) {
+        toast({
+          title: "CNPJ incompleto",
+          description: "Informe os 14 dígitos do CNPJ para buscar na ReceitaWS.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCnpj || (options?.silent && lastReceitaWsLookupRef.current === cnpjDigits)) return;
+
+    try {
+      setIsLookingUpCnpj(true);
+      lastReceitaWsLookupRef.current = cnpjDigits;
+      const response = await fetch(buildReceitaWsRequestUrl(cnpjDigits));
+      const payload = (await response.json()) as ReceitaWsResponse;
+
+      if (!response.ok || payload.status === "ERROR") {
+        throw new Error(payload.message || "Não foi possível consultar esse CNPJ na ReceitaWS.");
+      }
+
+      applyReceitaWsData(payload, cnpjDigits);
+      toast({
+        title: "Dados localizados",
+        description: "Preenchi automaticamente as informações disponíveis na ReceitaWS.",
+      });
+    } catch (err) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CNPJ",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCnpj(false);
+    }
+  };
+
+  const handleCnpjChange = (value: string) => {
+    const formattedCnpj = formatCnpj(value);
+    clearValidationError("cnpj");
+    setFormData((prev) => ({ ...prev, cnpj: formattedCnpj }));
+
+    const digits = formattedCnpj.replace(/\D/g, "");
+    if (!isViewMode && digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
+      void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
+  };
+
   const handleSave = () => {
     const requiredChecks = [
       { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
@@ -663,7 +979,6 @@ const Empresas = () => {
       { key: "associado", label: "Associado", value: typeof formData.associado === "boolean" ? "ok" : "" },
       { key: "situacaoFinanceira", label: "Situação Financeira", value: formData.situacaoFinanceira },
       { key: "porte", label: "Porte", value: formData.porte },
-      { key: "dataFundacao", label: "Fundação", value: formData.dataFundacao },
     ];
     const missing = requiredChecks.filter((field) => field.value === undefined || field.value === "");
 
@@ -725,20 +1040,28 @@ const Empresas = () => {
   };
 
   const getContatoPrincipal = (empresa: Empresa) => {
-    const responsavelTemWhats = Boolean(empresa.responsavel?.whatsapp);
-    if (empresa.responsavel?.nome && responsavelTemWhats) {
-      return { nome: empresa.responsavel.nome, whatsapp: empresa.responsavel.whatsapp };
+    const responsavelPrincipal = empresa.responsaveis.find((responsavel) => responsavel.contatoPrincipal);
+    if (responsavelPrincipal?.nome) {
+      return {
+        nome: responsavelPrincipal.nome,
+        whatsapp: responsavelPrincipal.whatsapp || "—",
+      };
     }
 
-    if ((!empresa.responsavel || !responsavelTemWhats) && empresa.colaboradores.length) {
-      const colaboradorComWhats = empresa.colaboradores.find((colaborador) => colaborador.whatsapp);
-      if (colaboradorComWhats) {
-        return { nome: colaboradorComWhats.nome, whatsapp: colaboradorComWhats.whatsapp };
-      }
+    const colaboradorContato = empresa.colaboradores.find((colaborador) => colaborador.nome || colaborador.whatsapp);
+    if (colaboradorContato) {
+      return {
+        nome: colaboradorContato.nome || "Colaborador sem nome",
+        whatsapp: colaboradorContato.whatsapp || "—",
+      };
     }
 
-    if (empresa.responsavel?.nome) {
-      return { nome: empresa.responsavel.nome, whatsapp: "—" };
+    const primeiroResponsavel = empresa.responsaveis.find((responsavel) => responsavel.nome || responsavel.whatsapp);
+    if (primeiroResponsavel) {
+      return {
+        nome: primeiroResponsavel.nome || "Responsável sem nome",
+        whatsapp: primeiroResponsavel.whatsapp || "—",
+      };
     }
 
     return null;
@@ -1316,17 +1639,32 @@ const Empresas = () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="cnpj">CNPJ*</Label>
-                      <Input
-                        id="cnpj"
-                        placeholder="00.000.000/0000-00"
-                        value={formData.cnpj || ""}
-                        onChange={(e) => {
-                          clearValidationError("cnpj");
-                          setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }));
-                        }}
-                        className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
-                        disabled={isViewMode}
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          id="cnpj"
+                          placeholder="00.000.000/0000-00"
+                          value={formData.cnpj || ""}
+                          onChange={(e) => handleCnpjChange(e.target.value)}
+                          onBlur={() => void handleReceitaWsLookup(formData.cnpj || "", { silent: true })}
+                          className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
+                          disabled={isViewMode || isLookingUpCnpj}
+                        />
+                        {!isViewMode && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void handleReceitaWsLookup()}
+                            disabled={isLookingUpCnpj || (formData.cnpj || "").replace(/\D/g, "").length !== 14}
+                            aria-label="Buscar dados da empresa na ReceitaWS"
+                          >
+                            <Search className="mr-2 h-4 w-4" />
+                            {isLookingUpCnpj ? "Buscando..." : "Buscar"}
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Ao informar um CNPJ válido, os dados públicos serão buscados na ReceitaWS e preenchidos automaticamente.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="email">E-mail</Label>
@@ -1463,7 +1801,7 @@ const Empresas = () => {
 
                   <div className="grid gap-4 md:grid-cols-3">
                     <div className="space-y-2">
-                      <Label htmlFor="fundacao">Fundação*</Label>
+                      <Label htmlFor="fundacao">Fundação</Label>
                       <Input
                         id="fundacao"
                         type="date"
@@ -1527,31 +1865,214 @@ const Empresas = () => {
                   </div>
 
                   <div className="space-y-4 rounded-lg border p-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsável (opcional)</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Usado como contato principal se houver WhatsApp informado.
-                      </p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Vínculos institucionais/comerciais</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Use para indicar quando a empresa também é parceira, mantenedora ou fornecedora. Isso não altera o campo Associado.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addRelacionamento}>
+                          + Vínculo
+                        </Button>
+                      )}
                     </div>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>Nome</Label>
-                        <Input
-                          placeholder="Nome do responsável"
-                          value={formData.responsavel?.nome || ""}
-                          onChange={(e) => handleResponsavelChange("nome", e.target.value)}
-                          disabled={isViewMode}
-                        />
+                    {(formData.relacionamentos || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                        Nenhum vínculo cadastrado para esta empresa.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {(formData.relacionamentos || []).map((relacionamento, index) => (
+                          <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium">Vínculo {index + 1}</p>
+                              {!isViewMode && (
+                                <Button type="button" variant="ghost" size="sm" onClick={() => removeRelacionamento(index)}>
+                                  Remover
+                                </Button>
+                              )}
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label>Tipo</Label>
+                                <Select
+                                  value={relacionamento.tipo}
+                                  onValueChange={(value) => updateRelacionamento(index, "tipo", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o tipo" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoTipoOptions.map((tipo) => (
+                                      <SelectItem key={tipo} value={tipo}>{tipo}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Status</Label>
+                                <Select
+                                  value={relacionamento.status || relacionamentoStatusOptions[relacionamento.tipo][0]}
+                                  onValueChange={(value) => updateRelacionamento(index, "status", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o status" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoStatusOptions[relacionamento.tipo].map((status) => (
+                                      <SelectItem key={status} value={status}>{status}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              {(relacionamento.tipo === "Parceiro" || relacionamento.tipo === "Fornecedor") && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Categoria</Label>
+                                  <Select
+                                    value={relacionamento.categoria || "none"}
+                                    onValueChange={(value) => updateRelacionamento(index, "categoria", value === "none" ? "" : value)}
+                                    disabled={isViewMode}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Selecione a categoria" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Sem categoria</SelectItem>
+                                      {(relacionamento.tipo === "Parceiro" ? categoriasParceiro : categoriasFornecedor).map((categoria) => (
+                                        <SelectItem key={categoria} value={categoria}>{categoria}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Parceiro" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Descrição</Label>
+                                  <Input
+                                    placeholder="Descreva a parceria"
+                                    value={relacionamento.descricao || ""}
+                                    onChange={(e) => updateRelacionamento(index, "descricao", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Mantenedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Contrapartidas</Label>
+                                  <Input
+                                    placeholder="Ex: Logo em eventos, menção em materiais"
+                                    value={relacionamento.contrapartidas || ""}
+                                    onChange={(e) => updateRelacionamento(index, "contrapartidas", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Fornecedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Observações</Label>
+                                  <Input
+                                    placeholder="Observações adicionais"
+                                    value={relacionamento.observacoes || ""}
+                                    onChange={(e) => updateRelacionamento(index, "observacoes", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div className="space-y-2">
-                        <Label>WhatsApp</Label>
-                        <Input
-                          placeholder="(00) 00000-0000"
-                          value={formData.responsavel?.whatsapp || ""}
-                          onChange={(e) => handleResponsavelChange("whatsapp", e.target.value)}
-                          disabled={isViewMode}
-                        />
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsáveis (opcional)</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Marque contato principal para priorizar um responsável. Sem marcação, o contato principal segue o primeiro colaborador da lista.
+                        </p>
                       </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addResponsavel}>
+                          + Responsável
+                        </Button>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      {(formData.responsaveis?.length ? formData.responsaveis : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }]).map((responsavel, index) => (
+                        <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium">Responsável {index + 1}</p>
+                            {!isViewMode && (formData.responsaveis?.length || 0) > 1 && (
+                              <Button type="button" variant="ghost" size="sm" onClick={() => removeResponsavel(index)}>
+                                Remover
+                              </Button>
+                            )}
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label>Nome</Label>
+                              <Input
+                                placeholder="Nome do responsável"
+                                value={responsavel.nome || ""}
+                                onChange={(e) => updateResponsavel(index, "nome", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>CPF</Label>
+                              <Input
+                                placeholder="000.000.000-00"
+                                value={responsavel.cpf || ""}
+                                onChange={(e) => updateResponsavel(index, "cpf", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Data de nascimento</Label>
+                              <Input
+                                type="date"
+                                value={responsavel.dataAniversario || ""}
+                                onChange={(e) => updateResponsavel(index, "dataAniversario", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>E-mail</Label>
+                              <Input
+                                type="email"
+                                placeholder="email@exemplo.com"
+                                value={responsavel.email || ""}
+                                onChange={(e) => updateResponsavel(index, "email", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>WhatsApp</Label>
+                              <Input
+                                placeholder="(00) 00000-0000"
+                                value={responsavel.whatsapp || ""}
+                                onChange={(e) => updateResponsavel(index, "whatsapp", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <label className="flex items-center gap-2 rounded-md border p-3 text-sm md:self-end">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(responsavel.contatoPrincipal)}
+                                onChange={(e) => updateResponsavel(index, "contatoPrincipal", e.target.checked)}
+                                disabled={isViewMode}
+                              />
+                              Contato principal
+                            </label>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
