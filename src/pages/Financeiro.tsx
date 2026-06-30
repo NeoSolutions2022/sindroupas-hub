@@ -930,6 +930,29 @@ const Financeiro = () => {
     return normalizeBoletoStatus(boleto.status);
   };
 
+  const handleDownloadBoleto = (boleto: BoletoView) => {
+    const pdfUrl = boleto.pdfUrl?.trim();
+
+    if (!pdfUrl) {
+      toast({
+        title: "PDF indisponível",
+        description: "Este boleto não possui pdf_url para download.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const openedWindow = window.open(pdfUrl, "_blank", "noopener,noreferrer");
+
+    if (!openedWindow) {
+      toast({
+        title: "Não foi possível abrir o PDF",
+        description: "Autorize pop-ups no navegador e tente baixar o boleto novamente.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const filteredBoletos = useMemo(() => {
     return boletos
       .filter((boleto) => {
@@ -1955,24 +1978,8 @@ const Financeiro = () => {
                                     <BoletoActionsCell
                                       status={effectiveStatus}
                                       whatsappLink={whatsappLink}
-                                      onDetails={() => {
-                                        if (boleto.pdfUrl) {
-                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
-                                          return;
-                                        }
-                                        navigate(`/dashboard/financeiro/${boleto.id}`);
-                                      }}
-                                      onDownload={() => {
-                                        if (boleto.pdfUrl) {
-                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
-                                          return;
-                                        }
-                                        toast({
-                                          title: "PDF indisponível",
-                                          description: "Este boleto não possui pdf_url para download.",
-                                          variant: "destructive",
-                                        });
-                                      }}
+                                      onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
+                                      onDownload={() => handleDownloadBoleto(boleto)}
                                       onGenerateNew={() => {
                                         if (regeneratedFromCancel.includes(boleto.id)) {
                                           toast({ title: "Boleto já regenerado", description: "Este boleto cancelado já foi utilizado para gerar um novo boleto." });
