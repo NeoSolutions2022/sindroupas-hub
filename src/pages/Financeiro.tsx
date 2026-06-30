@@ -73,7 +73,7 @@ type EmpresaLookupRow = {
   cnpj?: string | null;
   email?: string | null;
   whatsapp?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null; contato_principal?: boolean | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
 };
 
@@ -176,6 +176,7 @@ const FINANCEIRO_QUERY = `
         nome
         whatsapp
         email
+        contato_principal
       }
       colaboradores {
         id
@@ -211,6 +212,7 @@ const EMPRESAS_POR_FAIXA_QUERY = `
         nome
         whatsapp
         email
+        contato_principal
       }
       colaboradores {
         id
@@ -458,9 +460,12 @@ const DatePickerField = ({
 const chooseBoletoContact = (
   empresa: Pick<EmpresaLookupRow, "razao_social" | "email" | "whatsapp" | "responsaveis" | "colaboradores">,
 ) => {
+  const responsaveis = empresa.responsaveis ?? [];
+  const responsavelPrincipal = responsaveis.find((responsavel) => responsavel.contato_principal);
   const candidates: ContactCandidate[] = [
-    ...(empresa.responsaveis ?? []),
+    ...(responsavelPrincipal ? [responsavelPrincipal] : []),
     ...(empresa.colaboradores ?? []),
+    ...(!responsavelPrincipal ? responsaveis : responsaveis.filter((responsavel) => responsavel.id !== responsavelPrincipal.id)),
     {
       nome: empresa.razao_social,
       email: empresa.email,

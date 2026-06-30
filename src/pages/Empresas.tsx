@@ -65,7 +65,11 @@ const normalizeSearchText = (value?: string | null) =>
 
 type Responsavel = {
   nome?: string;
+  cpf?: string;
+  dataAniversario?: string;
   whatsapp?: string;
+  email?: string;
+  contatoPrincipal?: boolean;
 };
 
 type Colaborador = {
@@ -96,6 +100,7 @@ type Empresa = {
   dataAssociacao?: string | null;
   dataDesassociacao?: string | null;
   responsavel?: Responsavel | null;
+  responsaveis: Responsavel[];
   colaboradores: Colaborador[];
 };
 
@@ -164,7 +169,15 @@ type EmpresaRow = {
   data_fundacao?: string | null;
   data_associacao?: string | null;
   data_desassociacao?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+  responsaveis?: {
+    id: string;
+    nome?: string | null;
+    whatsapp?: string | null;
+    email?: string | null;
+    data_aniversario?: string | null;
+    cpf?: string | null;
+    contato_principal?: boolean | null;
+  }[];
   colaboradores?: {
     id: string;
     nome?: string | null;
@@ -267,6 +280,10 @@ const EMPRESAS_QUERY = `
         id
         nome
         whatsapp
+        email
+        data_aniversario
+        cpf
+        contato_principal
       }
       colaboradores {
         id
@@ -341,7 +358,16 @@ const Empresas = () => {
     if (!data?.empresas) return [];
     return data.empresas.map((empresa) => {
       const faixaLabel = empresa.faixa_id ? faixas.find((faixa) => faixa.id === empresa.faixa_id)?.label : undefined;
-      const responsavel = empresa.responsaveis?.[0];
+      const responsaveis =
+        empresa.responsaveis?.map((responsavel) => ({
+          nome: responsavel.nome ?? undefined,
+          cpf: responsavel.cpf ?? undefined,
+          dataAniversario: responsavel.data_aniversario ?? undefined,
+          whatsapp: responsavel.whatsapp ?? undefined,
+          email: responsavel.email ?? undefined,
+          contatoPrincipal: Boolean(responsavel.contato_principal),
+        })) ?? [];
+      const responsavel = responsaveis.find((item) => item.contatoPrincipal) ?? responsaveis[0];
       const nomeFantasia = getEmpresaDisplayName(empresa);
       const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
       return {
@@ -362,9 +388,8 @@ const Empresas = () => {
         dataFundacao: empresa.data_fundacao ?? "",
         dataAssociacao: empresa.data_associacao ?? null,
         dataDesassociacao: empresa.data_desassociacao ?? null,
-        responsavel: responsavel
-          ? { nome: responsavel.nome ?? undefined, whatsapp: responsavel.whatsapp ?? undefined }
-          : null,
+        responsavel: responsavel ?? null,
+        responsaveis,
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -397,11 +422,22 @@ const Empresas = () => {
         data_desassociacao: payload.values.dataDesassociacao ?? null,
       };
 
-      const responsavel = payload.values.responsavel;
-      const responsavelInput =
-        responsavel?.nome || responsavel?.whatsapp
-          ? [{ nome: responsavel?.nome ?? "", whatsapp: responsavel?.whatsapp ?? "" }]
-          : [];
+      const responsaveisBase =
+        payload.values.responsaveis?.length
+          ? payload.values.responsaveis
+          : payload.values.responsavel
+            ? [payload.values.responsavel]
+            : [];
+      const responsavelInput = responsaveisBase
+        .filter((responsavel) => responsavel.nome || responsavel.whatsapp || responsavel.email || responsavel.cpf)
+        .map((responsavel) => ({
+          nome: responsavel.nome ?? "",
+          whatsapp: responsavel.whatsapp ?? "",
+          email: responsavel.email || null,
+          data_aniversario: responsavel.dataAniversario || null,
+          cpf: responsavel.cpf || null,
+          contato_principal: Boolean(responsavel.contatoPrincipal),
+        }));
 
       const colaboradoresInput =
         payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
@@ -515,6 +551,7 @@ const Empresas = () => {
         empresa.razaoSocial,
         empresa.nomeFantasia,
         empresa.responsavel?.nome,
+        ...empresa.responsaveis.map((responsavel) => [responsavel.nome, responsavel.cpf, responsavel.email].filter(Boolean).join(" ")),
         ...empresa.colaboradores.map((colaborador) => colaborador.nome),
       ].join(" "));
       const cnpjDigits = empresa.cnpj.replace(/\D/g, "");
@@ -611,7 +648,10 @@ const Empresas = () => {
           : [
               { nome: "", cpf: "", whatsapp: "", cargo: "", email: "" },
             ],
-        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", whatsapp: "" },
+        responsaveis: empresa.responsaveis.length
+          ? empresa.responsaveis.map((responsavel) => ({ ...responsavel }))
+          : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview(empresa.logoUrl);
     } else {
@@ -621,7 +661,8 @@ const Empresas = () => {
         situacaoFinanceira: "Regular",
         porte: "ME",
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
-        responsavel: { nome: "", whatsapp: "" },
+        responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        responsavel: { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview("");
     }
@@ -633,7 +674,7 @@ const Empresas = () => {
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
-    setFormData({ colaboradores: [] });
+    setFormData({ colaboradores: [], responsaveis: [] });
     setLogoPreview("");
     setValidationErrors([]);
     if (logoInputRef.current) {
@@ -698,14 +739,55 @@ const Empresas = () => {
     });
   };
 
-  const handleResponsavelChange = (field: keyof Responsavel, value: string) => {
+  const addResponsavel = () => {
     setFormData((prev) => ({
       ...prev,
-      responsavel: {
-        ...(prev.responsavel || {}),
-        [field]: field === "whatsapp" ? formatPhone(value) : value,
-      },
+      responsaveis: [
+        ...(prev.responsaveis || []),
+        { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
+      ],
     }));
+  };
+
+  const removeResponsavel = (index: number) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      responsaveis.splice(index, 1);
+      return { ...prev, responsaveis };
+    });
+  };
+
+  const updateResponsavel = (index: number, field: keyof Responsavel, value: string | boolean) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      const current = responsaveis[index] || {};
+      const formattedValue =
+        field === "cpf" && typeof value === "string"
+          ? formatCpf(value)
+          : field === "whatsapp" && typeof value === "string"
+            ? formatPhone(value)
+            : value;
+
+      const nextResponsaveis = responsaveis.map((responsavel, responsavelIndex) => {
+        if (field === "contatoPrincipal" && value === true) {
+          return {
+            ...responsavel,
+            contatoPrincipal: responsavelIndex === index,
+          };
+        }
+        return responsavelIndex === index ? { ...current, [field]: formattedValue } : responsavel;
+      });
+
+      if (!nextResponsaveis[index]) {
+        nextResponsaveis[index] = { ...current, [field]: formattedValue };
+      }
+
+      return {
+        ...prev,
+        responsaveis: nextResponsaveis,
+        responsavel: nextResponsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? nextResponsaveis[0],
+      };
+    });
   };
 
   const handleFaixaChange = (value: string) => {
@@ -860,20 +942,28 @@ const Empresas = () => {
   };
 
   const getContatoPrincipal = (empresa: Empresa) => {
-    const responsavelTemWhats = Boolean(empresa.responsavel?.whatsapp);
-    if (empresa.responsavel?.nome && responsavelTemWhats) {
-      return { nome: empresa.responsavel.nome, whatsapp: empresa.responsavel.whatsapp };
+    const responsavelPrincipal = empresa.responsaveis.find((responsavel) => responsavel.contatoPrincipal);
+    if (responsavelPrincipal?.nome) {
+      return {
+        nome: responsavelPrincipal.nome,
+        whatsapp: responsavelPrincipal.whatsapp || "—",
+      };
     }
 
-    if ((!empresa.responsavel || !responsavelTemWhats) && empresa.colaboradores.length) {
-      const colaboradorComWhats = empresa.colaboradores.find((colaborador) => colaborador.whatsapp);
-      if (colaboradorComWhats) {
-        return { nome: colaboradorComWhats.nome, whatsapp: colaboradorComWhats.whatsapp };
-      }
+    const colaboradorContato = empresa.colaboradores.find((colaborador) => colaborador.nome || colaborador.whatsapp);
+    if (colaboradorContato) {
+      return {
+        nome: colaboradorContato.nome || "Colaborador sem nome",
+        whatsapp: colaboradorContato.whatsapp || "—",
+      };
     }
 
-    if (empresa.responsavel?.nome) {
-      return { nome: empresa.responsavel.nome, whatsapp: "—" };
+    const primeiroResponsavel = empresa.responsaveis.find((responsavel) => responsavel.nome || responsavel.whatsapp);
+    if (primeiroResponsavel) {
+      return {
+        nome: primeiroResponsavel.nome || "Responsável sem nome",
+        whatsapp: primeiroResponsavel.whatsapp || "—",
+      };
     }
 
     return null;
@@ -1677,31 +1767,89 @@ const Empresas = () => {
                   </div>
 
                   <div className="space-y-4 rounded-lg border p-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsável (opcional)</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Usado como contato principal se houver WhatsApp informado.
-                      </p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsáveis (opcional)</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Marque contato principal para priorizar um responsável. Sem marcação, o contato principal segue o primeiro colaborador da lista.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addResponsavel}>
+                          + Responsável
+                        </Button>
+                      )}
                     </div>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>Nome</Label>
-                        <Input
-                          placeholder="Nome do responsável"
-                          value={formData.responsavel?.nome || ""}
-                          onChange={(e) => handleResponsavelChange("nome", e.target.value)}
-                          disabled={isViewMode}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>WhatsApp</Label>
-                        <Input
-                          placeholder="(00) 00000-0000"
-                          value={formData.responsavel?.whatsapp || ""}
-                          onChange={(e) => handleResponsavelChange("whatsapp", e.target.value)}
-                          disabled={isViewMode}
-                        />
-                      </div>
+                    <div className="space-y-4">
+                      {(formData.responsaveis?.length ? formData.responsaveis : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }]).map((responsavel, index) => (
+                        <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium">Responsável {index + 1}</p>
+                            {!isViewMode && (formData.responsaveis?.length || 0) > 1 && (
+                              <Button type="button" variant="ghost" size="sm" onClick={() => removeResponsavel(index)}>
+                                Remover
+                              </Button>
+                            )}
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label>Nome</Label>
+                              <Input
+                                placeholder="Nome do responsável"
+                                value={responsavel.nome || ""}
+                                onChange={(e) => updateResponsavel(index, "nome", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>CPF</Label>
+                              <Input
+                                placeholder="000.000.000-00"
+                                value={responsavel.cpf || ""}
+                                onChange={(e) => updateResponsavel(index, "cpf", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Data de nascimento</Label>
+                              <Input
+                                type="date"
+                                value={responsavel.dataAniversario || ""}
+                                onChange={(e) => updateResponsavel(index, "dataAniversario", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>E-mail</Label>
+                              <Input
+                                type="email"
+                                placeholder="email@exemplo.com"
+                                value={responsavel.email || ""}
+                                onChange={(e) => updateResponsavel(index, "email", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>WhatsApp</Label>
+                              <Input
+                                placeholder="(00) 00000-0000"
+                                value={responsavel.whatsapp || ""}
+                                onChange={(e) => updateResponsavel(index, "whatsapp", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <label className="flex items-center gap-2 rounded-md border p-3 text-sm md:self-end">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(responsavel.contatoPrincipal)}
+                                onChange={(e) => updateResponsavel(index, "contatoPrincipal", e.target.checked)}
+                                disabled={isViewMode}
+                              />
+                              Contato principal
+                            </label>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
