@@ -68,6 +68,7 @@ type EmpresaLookupRow = {
   razao_social: string;
   nome_fantasia?: string | null;
   faixa_id?: string | null;
+  desconto_mensalidade_percentual?: number | string | null;
   observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
@@ -166,6 +167,7 @@ const FINANCEIRO_QUERY = `
       razao_social
       nome_fantasia
       faixa_id
+      desconto_mensalidade_percentual
       observacoes
       qtd_funcionarios
       cnpj
@@ -202,6 +204,7 @@ const EMPRESAS_POR_FAIXA_QUERY = `
       razao_social
       nome_fantasia
       faixa_id
+      desconto_mensalidade_percentual
       observacoes
       cnpj
       qtd_funcionarios
@@ -283,6 +286,7 @@ interface BoletoForm {
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
+  descontoValorOverride?: number;
   emailOverride?: string;
 }
 
@@ -605,6 +609,7 @@ const Financeiro = () => {
           razaoSocial: empresa.razao_social,
           nomeFantasia: empresa.nome_fantasia ?? "",
           faixaId: empresa.faixa_id ?? "",
+          descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
           cnpj: empresa.cnpj ?? "",
           qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
           contatoPrincipal: {
@@ -654,7 +659,7 @@ const Financeiro = () => {
           ? "Boleto avulso"
           : "Mensalidade";
 
-      const descontoValor = parseCurrencyInput(payload.descontos);
+      const descontoValor = payload.descontoValorOverride ?? parseCurrencyInput(payload.descontos);
       const baseValor = parseCurrencyInput(payload.baseCalculo);
       const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
       const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
@@ -736,6 +741,22 @@ const Financeiro = () => {
     if (!faixaId) return 0;
     return faixas.find((f) => f.id === faixaId)?.valor ?? 0;
   };
+  const normalizeDiscountPercent = (value?: number | string | null) => {
+    const numericValue = typeof value === "string" ? Number(value) : value;
+    if (!Number.isFinite(numericValue ?? NaN)) return 0;
+    return Math.min(Math.max(Number(numericValue), 0), 100);
+  };
+  const calcularMensalidadeComDesconto = (valorBase: number, descontoPercentual?: number | string | null) => {
+    const percentual = normalizeDiscountPercent(descontoPercentual);
+    const descontoValor = valorBase * (percentual / 100);
+    return {
+      valorBase,
+      descontoPercentual: percentual,
+      descontoValor,
+      valorFinal: Math.max(valorBase - descontoValor, 0),
+    };
+  };
+  const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
     const start = startOfMonth(parseISO(inicio));
@@ -753,10 +774,15 @@ const Financeiro = () => {
   const getMensalidadePreview = () => {
     const valorFaixa = getValorFaixa(boletoForm.faixaId);
     const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+    const empresaSelecionada = !isBatchMode ? getEmpresaMensalidade(boletoForm.empresaId) : undefined;
+    const desconto = calcularMensalidadeComDesconto(valorFaixa, empresaSelecionada?.descontoMensalidadePercentual);
     return {
       meses,
       valorMensal: valorFaixa,
-      valorTotal: valorFaixa * Math.max(meses, 1),
+      descontoPercentual: desconto.descontoPercentual,
+      descontoValorMensal: desconto.descontoValor,
+      valorMensalComDesconto: desconto.valorFinal,
+      valorTotal: desconto.valorFinal * Math.max(meses, 1),
     };
   };
 
@@ -1380,6 +1406,7 @@ const Financeiro = () => {
         razaoSocial: empresa.razao_social,
         nomeFantasia: empresa.nome_fantasia ?? "",
         faixaId: empresa.faixa_id ?? "",
+        descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
         cnpj: empresa.cnpj ?? "",
         qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
         contatoPrincipal: chooseBoletoContact(empresa),
@@ -1683,19 +1710,21 @@ const Financeiro = () => {
         };
 
         if (boletoForm.unificarCompetencias === "Sim") {
-          const valorUnificado = (previaBoleto ?? getValorFaixa(boletoForm.faixaId)) * competencias.length;
           for (const empresa of targetEmpresas) {
+            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
             await emitir({
               ...boletoForm,
               empresaId: empresa.id,
               empresaNome: empresa.nome,
-              valorOverride: valorUnificado,
+              valorOverride: mensalidade.valorFinal * competencias.length,
+              descontoValorOverride: mensalidade.descontoValor * competencias.length,
               emailOverride: emailOverrides[empresa.id],
               mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}`,
             });
           }
         } else {
           for (const empresa of targetEmpresas) {
+            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
             for (const competencia of competencias) {
               await emitir({
                 ...boletoForm,
@@ -1703,7 +1732,8 @@ const Financeiro = () => {
                 empresaNome: empresa.nome,
                 competenciaInicial: competencia,
                 competenciaFinal: competencia,
-                valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
+                valorOverride: mensalidade.valorFinal,
+                descontoValorOverride: mensalidade.descontoValor,
                 emailOverride: emailOverrides[empresa.id],
                 mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(competencia, competencia)}`,
               });
@@ -2728,9 +2758,20 @@ const Financeiro = () => {
                               </p>
                               <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
                                 <span>{preview.meses || 0} competência(s)</span>
-                                <span>R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
+                                <span>R$ {preview.valorMensalComDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
                                 <span>{boletoForm.unificarCompetencias === "Sim" ? "1 boleto unificado" : `${preview.meses || 0} boleto(s)`}</span>
                               </div>
+                              {!isBatchMode && preview.descontoPercentual > 0 && (
+                                <p className="mt-2 text-xs text-[#7E8C5E]">
+                                  Desconto de {preview.descontoPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% aplicado:
+                                  {" "}R$ {preview.descontoValorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês sobre R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}.
+                                </p>
+                              )}
+                              {isBatchMode && (
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  Em lote, descontos individuais cadastrados em cada empresa serão aplicados no momento da emissão.
+                                </p>
+                              )}
                             </div>
                           );
                         })()}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,6 +78,12 @@ const Login = () => {
               <a href="#" className="text-sm text-muted-foreground hover:text-accent">
                 Esqueci minha senha
               </a>
+            </div>
+            <div className="rounded-lg border border-[#DCE7CB] bg-[#F7F8F4] p-3 text-center">
+              <p className="text-xs text-muted-foreground">Ainda não é associado?</p>
+              <Link to="/cadastro-associado" className="text-sm font-medium text-[#1C1C1C] hover:underline">
+                Solicitar cadastro de associado
+              </Link>
             </div>
           </form>
         </CardContent>

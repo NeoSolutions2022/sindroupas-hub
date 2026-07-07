@@ -11,6 +11,7 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Atividades from "./pages/Atividades";
+import CadastroAssociadoPublico from "./pages/CadastroAssociadoPublico";
 import Empresas from "./pages/Empresas";
 import Comunicacao from "./pages/Comunicacao";
 import CRMDetalhe from "./pages/CRMDetalhe";
@@ -34,6 +35,7 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/cadastro-associado" element={<CadastroAssociadoPublico />} />
             <Route
               path="/dashboard"
               element={

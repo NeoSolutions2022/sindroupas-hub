@@ -29,6 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
@@ -39,6 +40,7 @@ import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
 import {
   Calendar,
+  CheckCircle2,
   ChevronDown,
   Download,
   Edit,
@@ -48,6 +50,7 @@ import {
   Search,
   Trash2,
   Upload,
+  UserCheck,
 } from "lucide-react";
 
 const portes = ["MEI", "ME", "EPP", "LTDA", "SA"] as const;
@@ -114,6 +117,7 @@ type Empresa = {
   situacaoFinanceira: "Regular" | "Inadimplente";
   porte: typeof portes[number];
   capitalSocial?: number;
+  descontoMensalidadePercentual?: number;
   faixaId?: string;
   faixaLabel?: string;
   dataFundacao: string;
@@ -123,6 +127,12 @@ type Empresa = {
   responsaveis: Responsavel[];
   colaboradores: Colaborador[];
   relacionamentos: RelacionamentoEmpresa[];
+};
+
+type SolicitacaoAssociacaoPayload = {
+  responsaveis?: Responsavel[];
+  colaboradores?: Colaborador[];
+  relacionamentos?: RelacionamentoEmpresa[];
 };
 
 type Faixa = {
@@ -186,6 +196,7 @@ type EmpresaRow = {
   situacao_financeira?: "Regular" | "Inadimplente" | null;
   porte?: string | null;
   capital_social?: number | null;
+  desconto_mensalidade_percentual?: number | null;
   faixa_id?: string | null;
   data_fundacao?: string | null;
   data_associacao?: string | null;
@@ -217,6 +228,29 @@ type EmpresaRow = {
     email?: string | null;
     observacoes?: string | null;
   }[];
+};
+
+type SolicitacaoAssociacaoRow = {
+  id: string;
+  status: "pendente" | "em_analise" | "aprovado" | "recusado" | "convertido" | string;
+  cnpj: string;
+  razao_social: string;
+  nome_fantasia?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
+  endereco?: string | null;
+  porte?: string | null;
+  capital_social?: number | null;
+  data_fundacao?: string | null;
+  qtd_funcionarios?: number | null;
+  responsavel_nome?: string | null;
+  responsavel_cpf?: string | null;
+  responsavel_email?: string | null;
+  responsavel_whatsapp?: string | null;
+  responsavel_data_nascimento?: string | null;
+  payload?: SolicitacaoAssociacaoPayload | null;
+  observacoes?: string | null;
+  created_at?: string | null;
 };
 
 const getEmpresaDisplayName = (empresa: Pick<EmpresaRow, "nome_fantasia" | "razao_social">) => {
@@ -302,6 +336,7 @@ const EMPRESAS_QUERY = `
       situacao_financeira
       porte
       capital_social
+      desconto_mensalidade_percentual
       faixa_id
       data_fundacao
       data_associacao
@@ -341,6 +376,32 @@ const EMPRESAS_QUERY = `
       max_colaboradores
       valor_mensalidade
     }
+    solicitacoes_associacao(
+      where: { status: { _in: ["pendente", "em_analise", "aprovado"] } }
+      order_by: { created_at: desc }
+      limit: 20
+    ) {
+      id
+      status
+      cnpj
+      razao_social
+      nome_fantasia
+      email
+      whatsapp
+      endereco
+      porte
+      capital_social
+      data_fundacao
+      qtd_funcionarios
+      responsavel_nome
+      responsavel_cpf
+      responsavel_email
+      responsavel_whatsapp
+      responsavel_data_nascimento
+      payload
+      observacoes
+      created_at
+    }
   }
 `;
 
@@ -373,11 +434,13 @@ const Empresas = () => {
   const { data, isLoading, error } = useQuery({
     queryKey: ["empresas-page"],
     queryFn: () =>
-      hasuraRequest<{ empresas: EmpresaRow[]; faixas: FaixaRow[] }>({
+      hasuraRequest<{ empresas: EmpresaRow[]; faixas: FaixaRow[]; solicitacoes_associacao: SolicitacaoAssociacaoRow[] }>({
         query: EMPRESAS_QUERY,
         token,
       }),
   });
+
+  const solicitacoesAssociacao = data?.solicitacoes_associacao ?? [];
 
   const faixas = useMemo<Faixa[]>(() => {
     return (
@@ -432,6 +495,7 @@ const Empresas = () => {
         situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
         porte: (empresa.porte as Empresa["porte"]) ?? "ME",
         capitalSocial: empresa.capital_social ?? undefined,
+        descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
         faixaId: empresa.faixa_id ?? undefined,
         faixaLabel,
         dataFundacao: empresa.data_fundacao ?? "",
@@ -463,6 +527,7 @@ const Empresas = () => {
         situacao_financeira: payload.values.situacaoFinanceira ?? "Regular",
         porte: payload.values.porte ?? "ME",
         capital_social: payload.values.capitalSocial ?? null,
+        desconto_mensalidade_percentual: payload.values.descontoMensalidadePercentual ?? 0,
         faixa_id: payload.values.faixaId ?? null,
         email: payload.values.email ?? null,
         whatsapp: payload.values.whatsapp ?? null,
@@ -560,6 +625,123 @@ const Empresas = () => {
       }
 
       return empresaId;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const approveSolicitacaoMutation = useMutation({
+    mutationFn: async (solicitacao: SolicitacaoAssociacaoRow) => {
+      const payload = solicitacao.payload ?? {};
+      const responsaveisFromPayload = payload.responsaveis ?? [];
+      const responsaveis: Responsavel[] = responsaveisFromPayload.length
+        ? responsaveisFromPayload
+        : [
+            {
+              nome: solicitacao.responsavel_nome ?? "",
+              cpf: solicitacao.responsavel_cpf ?? "",
+              dataAniversario: solicitacao.responsavel_data_nascimento ?? "",
+              whatsapp: solicitacao.responsavel_whatsapp ?? "",
+              email: solicitacao.responsavel_email ?? "",
+              contatoPrincipal: true,
+            },
+          ];
+
+      const empresaInput = {
+        razao_social: solicitacao.razao_social,
+        nome_fantasia: solicitacao.nome_fantasia || solicitacao.razao_social,
+        cnpj: solicitacao.cnpj,
+        associada: true,
+        situacao_financeira: "Regular",
+        porte: solicitacao.porte || "ME",
+        capital_social: solicitacao.capital_social ?? null,
+        desconto_mensalidade_percentual: 0,
+        email: solicitacao.email || solicitacao.responsavel_email || null,
+        whatsapp: solicitacao.whatsapp || solicitacao.responsavel_whatsapp || null,
+        endereco: solicitacao.endereco || null,
+        data_fundacao: solicitacao.data_fundacao || null,
+        data_associacao: new Date().toISOString().slice(0, 10),
+      };
+
+      const created = await hasuraRequest<{ insert_empresas_one: { id: string } }>({
+        query: `
+          mutation AprovarSolicitacaoEmpresa($input: empresas_insert_input!) {
+            insert_empresas_one(object: $input) { id }
+          }
+        `,
+        variables: { input: empresaInput },
+        token,
+      });
+
+      const empresaId = created.insert_empresas_one.id;
+      const responsaveisInput = responsaveis
+        .filter((responsavel) => responsavel.nome || responsavel.whatsapp || responsavel.email || responsavel.cpf)
+        .map((responsavel, index) => ({
+          empresa_id: empresaId,
+          nome: responsavel.nome ?? "",
+          whatsapp: responsavel.whatsapp ?? "",
+          email: responsavel.email || null,
+          data_aniversario: responsavel.dataAniversario || null,
+          cpf: responsavel.cpf || null,
+          contato_principal: responsavel.contatoPrincipal ?? index === 0,
+        }));
+      const colaboradoresInput = (payload.colaboradores ?? [])
+        .filter((colaborador) => colaborador.nome || colaborador.cpf)
+        .map((colaborador) => ({ ...colaborador, empresa_id: empresaId }));
+      const relacionamentosInput = (payload.relacionamentos ?? [])
+        .filter((relacionamento) => relacionamento.tipo)
+        .map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId }));
+
+      await hasuraRequest({
+        query: `
+          mutation FinalizarSolicitacao(
+            $solicitacaoId: uuid!
+            $responsaveis: [responsaveis_insert_input!]!
+            $colaboradores: [colaboradores_insert_input!]!
+            $relacionamentos: [relacionamentos_insert_input!]!
+            $empresaId: uuid!
+            $aprovadoEm: timestamptz!
+          ) {
+            insert_responsaveis(objects: $responsaveis) { affected_rows }
+            insert_colaboradores(objects: $colaboradores) { affected_rows }
+            insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+            update_solicitacoes_associacao_by_pk(
+              pk_columns: { id: $solicitacaoId }
+              _set: { status: "convertido", empresa_id: $empresaId, aprovado_em: $aprovadoEm }
+            ) { id status empresa_id }
+          }
+        `,
+        variables: {
+          solicitacaoId: solicitacao.id,
+          responsaveis: responsaveisInput,
+          colaboradores: colaboradoresInput,
+          relacionamentos: relacionamentosInput,
+          empresaId,
+          aprovadoEm: new Date().toISOString(),
+        },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const rejectSolicitacaoMutation = useMutation({
+    mutationFn: async (solicitacaoId: string) => {
+      await hasuraRequest({
+        query: `
+          mutation RecusarSolicitacao($id: uuid!, $recusadoEm: timestamptz!) {
+            update_solicitacoes_associacao_by_pk(
+              pk_columns: { id: $id }
+              _set: { status: "recusado", recusado_em: $recusadoEm }
+            ) { id status }
+          }
+        `,
+        variables: { id: solicitacaoId, recusadoEm: new Date().toISOString() },
+        token,
+      });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
@@ -718,6 +900,7 @@ const Empresas = () => {
         associado: true,
         situacaoFinanceira: "Regular",
         porte: "ME",
+        descontoMensalidadePercentual: 0,
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
         responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
         relacionamentos: [],
@@ -1105,6 +1288,106 @@ const Empresas = () => {
               <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
                 {error instanceof Error ? error.message : "Erro ao carregar empresas."}
               </div>
+            )}
+
+            {solicitacoesAssociacao.length > 0 && (
+              <Card className="overflow-hidden border-[#DCE7CB] bg-white shadow-sm">
+                <CardHeader className="border-b bg-[#F7F8F4]">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-full bg-[#DCE7CB] p-2 text-[#1C1C1C]">
+                        <UserCheck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-lg text-[#1C1C1C]">Solicitações públicas de associação</CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                          Revise os cadastros enviados pelo formulário público antes de converter em empresa associada.
+                        </p>
+                      </div>
+                    </div>
+                    <Badge className="w-fit bg-[#7E8C5E] text-white">
+                      {solicitacoesAssociacao.length} pendente(s)
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+                  {solicitacoesAssociacao.map((solicitacao) => (
+                    <div key={solicitacao.id} className="flex flex-col gap-3 rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold text-[#1C1C1C]">{solicitacao.nome_fantasia || solicitacao.razao_social}</h3>
+                          <Badge variant="outline" className="capitalize">{solicitacao.status.replace("_", " ")}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{solicitacao.razao_social}</p>
+                        <p className="text-xs text-muted-foreground">{solicitacao.cnpj}</p>
+                      </div>
+                      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                        <span><strong className="text-[#1C1C1C]">Responsável:</strong> {solicitacao.responsavel_nome || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Contato:</strong> {solicitacao.responsavel_whatsapp || solicitacao.whatsapp || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">E-mail:</strong> {solicitacao.responsavel_email || solicitacao.email || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Enviada em:</strong> {formatDate(solicitacao.created_at)}</span>
+                      </div>
+                      {solicitacao.observacoes && (
+                        <p className="rounded-lg bg-white p-2 text-xs text-muted-foreground">{solicitacao.observacoes}</p>
+                      )}
+                      <div className="mt-auto flex flex-col gap-2 sm:flex-row">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="flex-1 bg-[#00A86B] hover:bg-[#00A86B]/90"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => {
+                            approveSolicitacaoMutation.mutate(solicitacao, {
+                              onSuccess: () => {
+                                toast({
+                                  title: "Solicitação aprovada",
+                                  description: "A empresa associada foi criada a partir do cadastro público.",
+                                });
+                              },
+                              onError: (err) => {
+                                toast({
+                                  title: "Falha ao aprovar solicitação",
+                                  description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+                                  variant: "destructive",
+                                });
+                              },
+                            });
+                          }}
+                        >
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          Aprovar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => {
+                            rejectSolicitacaoMutation.mutate(solicitacao.id, {
+                              onSuccess: () => {
+                                toast({
+                                  title: "Solicitação recusada",
+                                  description: "O pedido saiu da fila de aprovação.",
+                                });
+                              },
+                              onError: (err) => {
+                                toast({
+                                  title: "Falha ao recusar solicitação",
+                                  description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+                                  variant: "destructive",
+                                });
+                              },
+                            });
+                          }}
+                        >
+                          Recusar
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
             )}
 
             <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
@@ -1843,25 +2126,48 @@ const Empresas = () => {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Faixa</Label>
-                    <Select
-                      value={formData.faixaId || "none"}
-                      onValueChange={handleFaixaChange}
-                      disabled={isViewMode}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione a faixa" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Sem faixa</SelectItem>
-                        {faixas.map((faixa) => (
-                          <SelectItem key={faixa.id} value={faixa.id}>
-                            {faixa.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="space-y-2">
+                      <Label>Faixa</Label>
+                      <Select
+                        value={formData.faixaId || "none"}
+                        onValueChange={handleFaixaChange}
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione a faixa" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Sem faixa</SelectItem>
+                          {faixas.map((faixa) => (
+                            <SelectItem key={faixa.id} value={faixa.id}>
+                              {faixa.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="descontoMensalidade">Desconto mensalidade (%)</Label>
+                      <Input
+                        id="descontoMensalidade"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        placeholder="0,00"
+                        value={formData.descontoMensalidadePercentual ?? 0}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setFormData((prev) => ({
+                            ...prev,
+                            descontoMensalidadePercentual: Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0,
+                          }));
+                        }}
+                        disabled={isViewMode}
+                      />
+                      <p className="text-xs text-muted-foreground">Aplicado automaticamente nos boletos de mensalidade por faixa.</p>
+                    </div>
                   </div>
 
                   <div className="space-y-4 rounded-lg border p-4">
