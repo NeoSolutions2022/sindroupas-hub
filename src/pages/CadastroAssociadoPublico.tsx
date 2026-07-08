@@ -1,14 +1,44 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Building2, CheckCircle2, Send, Users } from "lucide-react";
+import { Building2, CheckCircle2, Search, Send, Users } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { hasuraRequest } from "@/lib/api/hasura";
+
+const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
+
+const porteOptions = [
+  { value: "MEI", label: "MEI (até R$ 81.000,00)" },
+  { value: "ME", label: "ME (até R$ 360 mil)" },
+  { value: "EPP", label: "EPP (de R$ 360 mil a R$ 4,8 milhões)" },
+  { value: "Médias e Grandes Empresas", label: "Médias e Grandes Empresas (acima de R$ 4,8 milhões)" },
+] as const;
+
+type ReceitaWsResponse = {
+  status?: "OK" | "ERROR" | string;
+  message?: string;
+  cnpj?: string;
+  abertura?: string;
+  nome?: string;
+  fantasia?: string;
+  porte?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
+  cep?: string;
+  email?: string;
+  telefone?: string;
+  capital_social?: string;
+};
 
 const formatCnpj = (value: string) =>
   value
@@ -33,6 +63,45 @@ const formatPhone = (value: string) =>
     .replace(/(\d{2})(\d)/, "($1) $2")
     .replace(/(\d{5})(\d{4})$/, "$1-$2")
     .slice(0, 15);
+
+const parseReceitaWsDate = (value?: string) => {
+  if (!value) return "";
+  const [day, month, year] = value.split("/");
+  if (!day || !month || !year) return "";
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+};
+
+const normalizeSearchText = (value?: string | null) =>
+  (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const normalizeReceitaWsPorte = (value?: string, capitalSocial?: string) => {
+  const normalized = normalizeSearchText(value);
+  const capital = Number((capitalSocial ?? "").replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", "."));
+
+  if (normalized.includes("mei") || normalized.includes("microempreendedor")) return "MEI";
+  if (normalized.includes("micro empresa") || normalized.includes("microempresa")) return "ME";
+  if (normalized.includes("pequeno porte") || normalized.includes("epp")) return "EPP";
+  if (Number.isFinite(capital) && capital > 4_800_000) return "Médias e Grandes Empresas";
+  if (normalized.includes("demais") || normalized.includes("grande")) return "Médias e Grandes Empresas";
+  return "";
+};
+
+const parseReceitaWsCapital = (value?: string) => {
+  if (!value) return "";
+  const parsed = Number(value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(parsed) ? String(parsed) : "";
+};
+
+const buildReceitaWsEndereco = (payload: ReceitaWsResponse) => {
+  const street = [payload.logradouro, payload.numero].filter(Boolean).join(", ");
+  const details = [payload.complemento, payload.bairro].filter(Boolean).join(" - ");
+  const city = [payload.municipio, payload.uf].filter(Boolean).join("/");
+  const cep = payload.cep ? `CEP ${payload.cep}` : "";
+  return [street, details, city, cep].filter(Boolean).join(" • ");
+};
 
 type CadastroPublicoForm = {
   cnpj: string;
@@ -76,12 +145,15 @@ const CadastroAssociadoPublico = () => {
   const { toast } = useToast();
   const [form, setForm] = useState<CadastroPublicoForm>(initialForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const lastReceitaWsLookupRef = useRef("");
 
   const requiredFields = useMemo(
     () => [
       form.cnpj.replace(/\D/g, "").length === 14,
       form.razaoSocial.trim(),
+      form.porte.trim(),
       form.email.trim() || form.responsavelEmail.trim(),
       form.responsavelNome.trim(),
       form.responsavelWhatsapp.replace(/\D/g, "").length >= 10,
@@ -95,12 +167,85 @@ const CadastroAssociadoPublico = () => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const applyReceitaWsData = (payload: ReceitaWsResponse, cnpj: string) => {
+    const porte = normalizeReceitaWsPorte(payload.porte, payload.capital_social);
+    const endereco = buildReceitaWsEndereco(payload);
+
+    setForm((prev) => ({
+      ...prev,
+      cnpj: formatCnpj(payload.cnpj || cnpj),
+      razaoSocial: payload.nome?.trim() || prev.razaoSocial,
+      nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim() || "",
+      email: payload.email?.trim().toLowerCase() || prev.email,
+      whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
+      endereco: endereco || prev.endereco,
+      porte: porte || prev.porte,
+      capitalSocial: parseReceitaWsCapital(payload.capital_social) || prev.capitalSocial,
+      dataFundacao: parseReceitaWsDate(payload.abertura) || prev.dataFundacao,
+    }));
+  };
+
+  const handleReceitaWsLookup = async (cnpjValue = form.cnpj, options?: { silent?: boolean }) => {
+    const cnpjDigits = cnpjValue.replace(/\D/g, "");
+    if (cnpjDigits.length !== 14) {
+      if (!options?.silent) {
+        toast({
+          title: "CNPJ incompleto",
+          description: "Informe os 14 dígitos do CNPJ para buscar os dados da empresa.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCnpj || (options?.silent && lastReceitaWsLookupRef.current === cnpjDigits)) return;
+
+    try {
+      setIsLookingUpCnpj(true);
+      lastReceitaWsLookupRef.current = cnpjDigits;
+      const response = await fetch(`${RECEITA_WS_PROXY_BASE_PATH}/${cnpjDigits}`);
+      const payload = (await response.json()) as ReceitaWsResponse;
+
+      if (!response.ok || payload.status === "ERROR") {
+        throw new Error(payload.message || "Não foi possível consultar esse CNPJ na ReceitaWS.");
+      }
+
+      applyReceitaWsData(payload, cnpjDigits);
+      if (!options?.silent) {
+        toast({
+          title: "Dados localizados",
+          description: "Preenchi automaticamente as informações disponíveis na ReceitaWS.",
+        });
+      }
+    } catch (error) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CNPJ",
+          description: error instanceof Error ? error.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCnpj(false);
+    }
+  };
+
+  const handleCnpjChange = (value: string) => {
+    const formattedCnpj = formatCnpj(value);
+    setForm((prev) => ({ ...prev, cnpj: formattedCnpj }));
+
+    const digits = formattedCnpj.replace(/\D/g, "");
+    if (digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
+      void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canSubmit) {
       toast({
         title: "Revise os campos obrigatórios",
-        description: "Informe CNPJ, razão social, contato e responsável principal.",
+        description: "Informe CNPJ, razão social, porte, contato e responsável legal.",
         variant: "destructive",
       });
       return;
@@ -227,7 +372,26 @@ const CadastroAssociadoPublico = () => {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="cnpj">CNPJ*</Label>
-                  <Input id="cnpj" value={form.cnpj} onChange={(event) => updateForm("cnpj", formatCnpj(event.target.value))} placeholder="00.000.000/0000-00" />
+                  <div className="flex gap-2">
+                    <Input
+                      id="cnpj"
+                      value={form.cnpj}
+                      onChange={(event) => handleCnpjChange(event.target.value)}
+                      onBlur={() => void handleReceitaWsLookup(form.cnpj, { silent: true })}
+                      placeholder="00.000.000/0000-00"
+                      disabled={isLookingUpCnpj}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleReceitaWsLookup()}
+                      disabled={isLookingUpCnpj || form.cnpj.replace(/\D/g, "").length !== 14}
+                    >
+                      <Search className="mr-2 h-4 w-4" />
+                      {isLookingUpCnpj ? "Buscando..." : "Buscar"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Ao informar o CNPJ, buscamos os dados públicos para facilitar o preenchimento.</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="razaoSocial">Razão Social*</Label>
@@ -250,8 +414,19 @@ const CadastroAssociadoPublico = () => {
                   <Input id="qtdFuncionarios" type="number" min="0" value={form.qtdFuncionarios} onChange={(event) => updateForm("qtdFuncionarios", event.target.value)} placeholder="0" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="porte">Porte</Label>
-                  <Input id="porte" value={form.porte} onChange={(event) => updateForm("porte", event.target.value)} placeholder="ME, EPP, LTDA..." />
+                  <Label htmlFor="porte">Porte da Empresa*</Label>
+                  <Select value={form.porte || undefined} onValueChange={(value) => updateForm("porte", value)}>
+                    <SelectTrigger id="porte">
+                      <SelectValue placeholder="Selecione o porte" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {porteOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="dataFundacao">Data de fundação</Label>
@@ -264,11 +439,11 @@ const CadastroAssociadoPublico = () => {
               </div>
 
               <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4">
-                <h2 className="font-semibold text-[#1C1C1C]">Responsável principal</h2>
+                <h2 className="font-semibold text-[#1C1C1C]">Responsável legal</h2>
                 <p className="mb-4 text-sm text-muted-foreground">Essa pessoa será priorizada no contato da equipe.</p>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="responsavelNome">Nome*</Label>
+                    <Label htmlFor="responsavelNome">Nome do responsável legal*</Label>
                     <Input id="responsavelNome" value={form.responsavelNome} onChange={(event) => updateForm("responsavelNome", event.target.value)} placeholder="Nome completo" />
                   </div>
                   <div className="space-y-2">
