@@ -423,6 +423,7 @@ const Empresas = () => {
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
+  const [selectedSolicitacao, setSelectedSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -1330,11 +1331,21 @@ const Empresas = () => {
                       {solicitacao.observacoes && (
                         <p className="rounded-lg bg-white p-2 text-xs text-muted-foreground">{solicitacao.observacoes}</p>
                       )}
-                      <div className="mt-auto flex flex-col gap-2 sm:flex-row">
+                      <div className="mt-auto grid gap-2 sm:grid-cols-3">
                         <Button
                           type="button"
                           size="sm"
-                          className="flex-1 bg-[#00A86B] hover:bg-[#00A86B]/90"
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => setSelectedSolicitacao(solicitacao)}
+                        >
+                          <Eye className="mr-2 h-4 w-4" />
+                          Detalhes
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="w-full bg-[#00A86B] hover:bg-[#00A86B]/90"
                           disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
                           onClick={() => {
                             approveSolicitacaoMutation.mutate(solicitacao, {
@@ -1361,7 +1372,7 @@ const Empresas = () => {
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="flex-1"
+                          className="w-full"
                           disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
                           onClick={() => {
                             rejectSolicitacaoMutation.mutate(solicitacao.id, {
@@ -2484,6 +2495,162 @@ const Empresas = () => {
                     )}
                   </div>
                 </div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={!!selectedSolicitacao}
+              onOpenChange={(open) => {
+                if (!open) setSelectedSolicitacao(null);
+              }}
+            >
+              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Detalhes da solicitação</DialogTitle>
+                  <DialogDescription>
+                    Confira todos os dados enviados pela empresa antes de aprovar ou recusar o cadastro.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {selectedSolicitacao && (
+                  <div className="space-y-5">
+                    <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <h3 className="text-lg font-semibold text-[#1C1C1C]">
+                            {selectedSolicitacao.nome_fantasia || selectedSolicitacao.razao_social}
+                          </h3>
+                          <p className="text-sm text-muted-foreground">{selectedSolicitacao.razao_social}</p>
+                        </div>
+                        <Badge variant="outline" className="w-fit capitalize">
+                          {selectedSolicitacao.status.replace("_", " ")}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Dados da empresa</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 text-sm">
+                          {[
+                            ["CNPJ", selectedSolicitacao.cnpj],
+                            ["Razão Social", selectedSolicitacao.razao_social],
+                            ["Nome Fantasia", selectedSolicitacao.nome_fantasia],
+                            ["E-mail", selectedSolicitacao.email],
+                            ["WhatsApp", selectedSolicitacao.whatsapp],
+                            ["Endereço", selectedSolicitacao.endereco],
+                            ["Porte", selectedSolicitacao.porte],
+                            ["Capital Social", selectedSolicitacao.capital_social !== undefined && selectedSolicitacao.capital_social !== null ? formatCurrency(Number(selectedSolicitacao.capital_social)) : undefined],
+                            ["Data de fundação", formatDate(selectedSolicitacao.data_fundacao)],
+                            ["Qtd. funcionários", selectedSolicitacao.qtd_funcionarios?.toString()],
+                            ["Enviada em", formatDate(selectedSolicitacao.created_at)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg bg-muted/40 p-3">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+                              <p className="mt-1 break-words text-[#1C1C1C]">{value || "—"}</p>
+                            </div>
+                          ))}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Responsável principal</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 text-sm">
+                          {[
+                            ["Nome", selectedSolicitacao.responsavel_nome],
+                            ["CPF", selectedSolicitacao.responsavel_cpf],
+                            ["E-mail", selectedSolicitacao.responsavel_email],
+                            ["WhatsApp", selectedSolicitacao.responsavel_whatsapp],
+                            ["Data de nascimento", formatDate(selectedSolicitacao.responsavel_data_nascimento)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg bg-muted/40 p-3">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+                              <p className="mt-1 break-words text-[#1C1C1C]">{value || "—"}</p>
+                            </div>
+                          ))}
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Dados adicionais enviados</CardTitle>
+                        <DialogDescription>
+                          Informações flexíveis armazenadas no payload da solicitação.
+                        </DialogDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div>
+                          <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Responsáveis no payload</h4>
+                          {(selectedSolicitacao.payload?.responsaveis?.length ?? 0) > 0 ? (
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {selectedSolicitacao.payload?.responsaveis?.map((responsavel, index) => (
+                                <div key={`${responsavel.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                  <p className="font-medium">{responsavel.nome || `Responsável ${index + 1}`}</p>
+                                  <p className="text-muted-foreground">CPF: {responsavel.cpf || "—"}</p>
+                                  <p className="text-muted-foreground">E-mail: {responsavel.email || "—"}</p>
+                                  <p className="text-muted-foreground">WhatsApp: {responsavel.whatsapp || "—"}</p>
+                                  <p className="text-muted-foreground">Nascimento: {formatDate(responsavel.dataAniversario)}</p>
+                                  {responsavel.contatoPrincipal && <Badge className="mt-2 bg-[#7E8C5E] text-white">Contato principal</Badge>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum responsável adicional enviado.</p>
+                          )}
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Colaboradores</h4>
+                            {(selectedSolicitacao.payload?.colaboradores?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.colaboradores?.map((colaborador, index) => (
+                                  <div key={`${colaborador.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{colaborador.nome || `Colaborador ${index + 1}`}</p>
+                                    <p className="text-muted-foreground">Cargo: {colaborador.cargo || "—"}</p>
+                                    <p className="text-muted-foreground">E-mail: {colaborador.email || "—"}</p>
+                                    <p className="text-muted-foreground">WhatsApp: {colaborador.whatsapp || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum colaborador enviado.</p>
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Vínculos</h4>
+                            {(selectedSolicitacao.payload?.relacionamentos?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.relacionamentos?.map((relacionamento, index) => (
+                                  <div key={`${relacionamento.tipo}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{relacionamento.tipo || `Vínculo ${index + 1}`}</p>
+                                    <p className="text-muted-foreground">Status: {relacionamento.status || "—"}</p>
+                                    <p className="text-muted-foreground">Categoria: {relacionamento.categoria || "—"}</p>
+                                    <p className="text-muted-foreground">Descrição: {relacionamento.descricao || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum vínculo enviado.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Observações</h4>
+                          <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+                            {selectedSolicitacao.observacoes || "Nenhuma observação enviada."}
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
               </DialogContent>
             </Dialog>
 
