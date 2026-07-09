@@ -20,6 +20,36 @@ const porteOptions = [
   { value: "Médias e Grandes Empresas", label: "Médias e Grandes Empresas (acima de R$ 4,8 milhões)" },
 ] as const;
 
+const ufOptions = [
+  "AC",
+  "AL",
+  "AP",
+  "AM",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MT",
+  "MS",
+  "MG",
+  "PA",
+  "PB",
+  "PR",
+  "PE",
+  "PI",
+  "RJ",
+  "RN",
+  "RS",
+  "RO",
+  "RR",
+  "SC",
+  "SP",
+  "SE",
+  "TO",
+] as const;
+
 type ReceitaWsResponse = {
   status?: "OK" | "ERROR" | string;
   message?: string;
@@ -64,6 +94,12 @@ const formatPhone = (value: string) =>
     .replace(/(\d{5})(\d{4})$/, "$1-$2")
     .slice(0, 15);
 
+const formatCep = (value: string) =>
+  value
+    .replace(/\D/g, "")
+    .replace(/(\d{5})(\d)/, "$1-$2")
+    .slice(0, 9);
+
 const parseReceitaWsDate = (value?: string) => {
   if (!value) return "";
   const [day, month, year] = value.split("/");
@@ -95,21 +131,19 @@ const parseReceitaWsCapital = (value?: string) => {
   return Number.isFinite(parsed) ? String(parsed) : "";
 };
 
-const buildReceitaWsEndereco = (payload: ReceitaWsResponse) => {
-  const street = [payload.logradouro, payload.numero].filter(Boolean).join(", ");
-  const details = [payload.complemento, payload.bairro].filter(Boolean).join(" - ");
-  const city = [payload.municipio, payload.uf].filter(Boolean).join("/");
-  const cep = payload.cep ? `CEP ${payload.cep}` : "";
-  return [street, details, city, cep].filter(Boolean).join(" • ");
-};
-
 type CadastroPublicoForm = {
   cnpj: string;
   razaoSocial: string;
   nomeFantasia: string;
   email: string;
   whatsapp: string;
-  endereco: string;
+  cep: string;
+  logradouro: string;
+  numero: string;
+  complemento: string;
+  bairro: string;
+  municipio: string;
+  uf: string;
   porte: string;
   capitalSocial: string;
   dataFundacao: string;
@@ -128,7 +162,13 @@ const initialForm: CadastroPublicoForm = {
   nomeFantasia: "",
   email: "",
   whatsapp: "",
-  endereco: "",
+  cep: "",
+  logradouro: "",
+  numero: "",
+  complemento: "",
+  bairro: "",
+  municipio: "",
+  uf: "",
   porte: "",
   capitalSocial: "",
   dataFundacao: "",
@@ -167,9 +207,16 @@ const CadastroAssociadoPublico = () => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const buildEnderecoFromForm = () => {
+    const street = [form.logradouro.trim(), form.numero.trim()].filter(Boolean).join(", ");
+    const details = [form.complemento.trim(), form.bairro.trim()].filter(Boolean).join(" - ");
+    const city = [form.municipio.trim(), form.uf.trim()].filter(Boolean).join("/");
+    const cep = form.cep.trim() ? `CEP ${form.cep.trim()}` : "";
+    return [street, details, city, cep].filter(Boolean).join(" • ");
+  };
+
   const applyReceitaWsData = (payload: ReceitaWsResponse, cnpj: string) => {
     const porte = normalizeReceitaWsPorte(payload.porte, payload.capital_social);
-    const endereco = buildReceitaWsEndereco(payload);
 
     setForm((prev) => ({
       ...prev,
@@ -178,7 +225,13 @@ const CadastroAssociadoPublico = () => {
       nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim() || "",
       email: payload.email?.trim().toLowerCase() || prev.email,
       whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
-      endereco: endereco || prev.endereco,
+      cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+      logradouro: payload.logradouro?.trim() || prev.logradouro,
+      numero: payload.numero?.trim() || prev.numero,
+      complemento: payload.complemento?.trim() || prev.complemento,
+      bairro: payload.bairro?.trim() || prev.bairro,
+      municipio: payload.municipio?.trim() || prev.municipio,
+      uf: payload.uf?.trim() || prev.uf,
       porte: porte || prev.porte,
       capitalSocial: parseReceitaWsCapital(payload.capital_social) || prev.capitalSocial,
       dataFundacao: parseReceitaWsDate(payload.abertura) || prev.dataFundacao,
@@ -251,6 +304,8 @@ const CadastroAssociadoPublico = () => {
       return;
     }
 
+    const endereco = buildEnderecoFromForm();
+
     try {
       setIsSubmitting(true);
       await hasuraRequest({
@@ -266,7 +321,7 @@ const CadastroAssociadoPublico = () => {
             nome_fantasia: form.nomeFantasia.trim() || null,
             email: form.email.trim().toLowerCase() || null,
             whatsapp: form.whatsapp || null,
-            endereco: form.endereco.trim() || null,
+            endereco: endereco || null,
             porte: form.porte.trim() || null,
             capital_social: form.capitalSocial ? Number(form.capitalSocial) : null,
             data_fundacao: form.dataFundacao || null,
@@ -290,6 +345,15 @@ const CadastroAssociadoPublico = () => {
               ],
               colaboradores: [],
               relacionamentos: [],
+              enderecoDetalhado: {
+                cep: form.cep,
+                logradouro: form.logradouro,
+                numero: form.numero,
+                complemento: form.complemento,
+                bairro: form.bairro,
+                municipio: form.municipio,
+                uf: form.uf,
+              },
             },
           },
         },
@@ -432,9 +496,55 @@ const CadastroAssociadoPublico = () => {
                   <Label htmlFor="dataFundacao">Data de fundação</Label>
                   <Input id="dataFundacao" type="date" value={form.dataFundacao} onChange={(event) => updateForm("dataFundacao", event.target.value)} />
                 </div>
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="endereco">Endereço</Label>
-                  <Input id="endereco" value={form.endereco} onChange={(event) => updateForm("endereco", event.target.value)} placeholder="Rua, número, bairro, cidade/UF" />
+              </div>
+
+              <div className="rounded-xl border border-[#DCE7CB] bg-white p-4">
+                <div className="mb-4">
+                  <h2 className="font-semibold text-[#1C1C1C]">Endereço da empresa</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Preencha os dados separados; no envio, eles serão consolidados no campo único de endereço da empresa.
+                  </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-6">
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="cep">CEP</Label>
+                    <Input id="cep" value={form.cep} onChange={(event) => updateForm("cep", formatCep(event.target.value))} placeholder="00000-000" />
+                  </div>
+                  <div className="space-y-2 md:col-span-3">
+                    <Label htmlFor="logradouro">Rua / Logradouro</Label>
+                    <Input id="logradouro" value={form.logradouro} onChange={(event) => updateForm("logradouro", event.target.value)} placeholder="Rua, avenida, travessa..." />
+                  </div>
+                  <div className="space-y-2 md:col-span-1">
+                    <Label htmlFor="numero">Número</Label>
+                    <Input id="numero" value={form.numero} onChange={(event) => updateForm("numero", event.target.value)} placeholder="123" />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="complemento">Complemento</Label>
+                    <Input id="complemento" value={form.complemento} onChange={(event) => updateForm("complemento", event.target.value)} placeholder="Sala, bloco, loja..." />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="bairro">Bairro</Label>
+                    <Input id="bairro" value={form.bairro} onChange={(event) => updateForm("bairro", event.target.value)} placeholder="Bairro" />
+                  </div>
+                  <div className="space-y-2 md:col-span-1">
+                    <Label htmlFor="uf">Estado</Label>
+                    <Select value={form.uf || undefined} onValueChange={(value) => updateForm("uf", value)}>
+                      <SelectTrigger id="uf">
+                        <SelectValue placeholder="UF" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ufOptions.map((uf) => (
+                          <SelectItem key={uf} value={uf}>
+                            {uf}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 md:col-span-1">
+                    <Label htmlFor="municipio">Cidade</Label>
+                    <Input id="municipio" value={form.municipio} onChange={(event) => updateForm("municipio", event.target.value)} placeholder="Cidade" />
+                  </div>
                 </div>
               </div>
 
