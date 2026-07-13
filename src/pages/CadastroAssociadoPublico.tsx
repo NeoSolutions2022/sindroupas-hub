@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { hasuraRequest } from "@/lib/api/hasura";
 
 const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
+const VIA_CEP_BASE_URL = "https://viacep.com.br/ws";
 
 const porteOptions = [
   { value: "MEI", label: "MEI (até R$ 81.000,00)" },
@@ -68,6 +69,16 @@ type ReceitaWsResponse = {
   email?: string;
   telefone?: string;
   capital_social?: string;
+};
+
+type ViaCepResponse = {
+  cep?: string;
+  logradouro?: string;
+  complemento?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
+  erro?: boolean;
 };
 
 const formatCnpj = (value: string) =>
@@ -186,8 +197,10 @@ const CadastroAssociadoPublico = () => {
   const [form, setForm] = useState<CadastroPublicoForm>(initialForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
+  const [isLookingUpCep, setIsLookingUpCep] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const lastReceitaWsLookupRef = useRef("");
+  const lastCepLookupRef = useRef("");
 
   const requiredFields = useMemo(
     () => [
@@ -290,6 +303,73 @@ const CadastroAssociadoPublico = () => {
     const digits = formattedCnpj.replace(/\D/g, "");
     if (digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
       void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
+  };
+
+  const applyViaCepData = (payload: ViaCepResponse) => {
+    setForm((prev) => ({
+      ...prev,
+      cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+      logradouro: payload.logradouro?.trim() || prev.logradouro,
+      complemento: payload.complemento?.trim() || prev.complemento,
+      bairro: payload.bairro?.trim() || prev.bairro,
+      municipio: payload.localidade?.trim() || prev.municipio,
+      uf: payload.uf?.trim() || prev.uf,
+    }));
+  };
+
+  const handleCepLookup = async (cepValue = form.cep, options?: { silent?: boolean }) => {
+    const cepDigits = cepValue.replace(/\D/g, "");
+    if (cepDigits.length !== 8) {
+      if (!options?.silent) {
+        toast({
+          title: "CEP incompleto",
+          description: "Informe os 8 dígitos do CEP para buscar o endereço.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCep || (options?.silent && lastCepLookupRef.current === cepDigits)) return;
+
+    try {
+      setIsLookingUpCep(true);
+      lastCepLookupRef.current = cepDigits;
+      const response = await fetch(`${VIA_CEP_BASE_URL}/${cepDigits}/json/`);
+      const payload = (await response.json()) as ViaCepResponse;
+
+      if (!response.ok || payload.erro) {
+        throw new Error("CEP não encontrado na ViaCEP.");
+      }
+
+      applyViaCepData(payload);
+      if (!options?.silent) {
+        toast({
+          title: "Endereço localizado",
+          description: "Preenchi os dados disponíveis para o CEP informado.",
+        });
+      }
+    } catch (error) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CEP",
+          description: error instanceof Error ? error.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCep(false);
+    }
+  };
+
+  const handleCepChange = (value: string) => {
+    const formattedCep = formatCep(value);
+    setForm((prev) => ({ ...prev, cep: formattedCep }));
+
+    const digits = formattedCep.replace(/\D/g, "");
+    if (digits.length === 8 && lastCepLookupRef.current !== digits) {
+      void handleCepLookup(formattedCep, { silent: true });
     }
   };
 
@@ -502,13 +582,31 @@ const CadastroAssociadoPublico = () => {
                 <div className="mb-4">
                   <h2 className="font-semibold text-[#1C1C1C]">Endereço da empresa</h2>
                   <p className="text-sm text-muted-foreground">
-                    Preencha os dados separados; no envio, eles serão consolidados no campo único de endereço da empresa.
+                    Informe o CEP para preencher automaticamente com a ViaCEP; no envio, os dados serão consolidados no campo único de endereço da empresa.
                   </p>
                 </div>
                 <div className="grid gap-4 md:grid-cols-6">
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="cep">CEP</Label>
-                    <Input id="cep" value={form.cep} onChange={(event) => updateForm("cep", formatCep(event.target.value))} placeholder="00000-000" />
+                    <div className="flex gap-2">
+                      <Input
+                        id="cep"
+                        value={form.cep}
+                        onChange={(event) => handleCepChange(event.target.value)}
+                        onBlur={() => void handleCepLookup(form.cep, { silent: true })}
+                        placeholder="00000-000"
+                        disabled={isLookingUpCep}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleCepLookup()}
+                        disabled={isLookingUpCep || form.cep.replace(/\D/g, "").length !== 8}
+                        className="shrink-0"
+                      >
+                        {isLookingUpCep ? "Buscando..." : "Buscar"}
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2 md:col-span-3">
                     <Label htmlFor="logradouro">Rua / Logradouro</Label>

@@ -113,6 +113,13 @@ type Empresa = {
   email?: string;
   whatsapp?: string;
   endereco?: string;
+  cep?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
   associado: boolean;
   situacaoFinanceira: "Regular" | "Inadimplente";
   porte: typeof portes[number];
@@ -183,6 +190,12 @@ const formatPhone = (value: string) => {
     .replace(/(\d{5})(\d{4})$/, "$1-$2")
     .slice(0, 15);
 };
+
+const formatCep = (value: string) =>
+  value
+    .replace(/\D/g, "")
+    .replace(/(\d{5})(\d)/, "$1-$2")
+    .slice(0, 9);
 
 type EmpresaRow = {
   id: string;
@@ -286,6 +299,47 @@ type ReceitaWsResponse = {
 };
 
 const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
+const VIA_CEP_BASE_URL = "https://viacep.com.br/ws";
+
+const ufOptions = [
+  "AC",
+  "AL",
+  "AP",
+  "AM",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MT",
+  "MS",
+  "MG",
+  "PA",
+  "PB",
+  "PR",
+  "PE",
+  "PI",
+  "RJ",
+  "RN",
+  "RS",
+  "RO",
+  "RR",
+  "SC",
+  "SP",
+  "SE",
+  "TO",
+] as const;
+
+type ViaCepResponse = {
+  cep?: string;
+  logradouro?: string;
+  complemento?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
+  erro?: boolean;
+};
 
 const buildReceitaWsRequestUrl = (cnpj: string) => `${RECEITA_WS_PROXY_BASE_PATH}/${cnpj}`;
 
@@ -314,12 +368,31 @@ const parseReceitaWsCapital = (value?: string) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const buildReceitaWsEndereco = (payload: ReceitaWsResponse) => {
-  const street = [payload.logradouro, payload.numero].filter(Boolean).join(", ");
-  const details = [payload.complemento, payload.bairro].filter(Boolean).join(" - ");
-  const city = [payload.municipio, payload.uf].filter(Boolean).join("/");
-  const cep = payload.cep ? `CEP ${payload.cep}` : "";
+const buildEmpresaEndereco = (values: Partial<Empresa>) => {
+  const street = [values.logradouro?.trim(), values.numero?.trim()].filter(Boolean).join(", ");
+  const details = [values.complemento?.trim(), values.bairro?.trim()].filter(Boolean).join(" - ");
+  const city = [values.municipio?.trim(), values.uf?.trim()].filter(Boolean).join("/");
+  const cep = values.cep?.trim() ? `CEP ${values.cep.trim()}` : "";
   return [street, details, city, cep].filter(Boolean).join(" • ");
+};
+
+const parseEnderecoParts = (endereco?: string | null): Partial<Empresa> => {
+  if (!endereco) return {};
+  const [streetPart = "", detailsPart = "", cityPart = "", cepPart = ""] = endereco.split(" • ").map((part) => part.trim());
+  const [logradouro = "", numero = ""] = streetPart.split(/,\s*/);
+  const [complementoOrBairro = "", bairroMaybe = ""] = detailsPart.split(/\s+-\s+/);
+  const [municipio = "", uf = ""] = cityPart.split("/");
+  const cep = cepPart.replace(/^CEP\s*/i, "");
+
+  return {
+    logradouro: logradouro || undefined,
+    numero: numero || undefined,
+    complemento: bairroMaybe ? complementoOrBairro : undefined,
+    bairro: bairroMaybe || complementoOrBairro || undefined,
+    municipio: municipio || undefined,
+    uf: uf || undefined,
+    cep: cep ? formatCep(cep) : undefined,
+  };
 };
 
 const EMPRESAS_QUERY = `
@@ -428,8 +501,10 @@ const Empresas = () => {
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
+  const [isLookingUpCep, setIsLookingUpCep] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const lastReceitaWsLookupRef = useRef<string>("");
+  const lastCepLookupRef = useRef<string>("");
   const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery({
@@ -483,6 +558,7 @@ const Empresas = () => {
         })) ?? [];
       const nomeFantasia = getEmpresaDisplayName(empresa);
       const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
+      const enderecoParts = parseEnderecoParts(empresa.endereco);
       return {
         id: empresa.id,
         logoUrl: "",
@@ -492,6 +568,7 @@ const Empresas = () => {
         email: empresa.email ?? undefined,
         whatsapp: empresa.whatsapp ?? undefined,
         endereco: empresa.endereco ?? undefined,
+        ...enderecoParts,
         associado: Boolean(empresa.associada),
         situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
         porte: (empresa.porte as Empresa["porte"]) ?? "ME",
@@ -520,6 +597,7 @@ const Empresas = () => {
 
   const saveEmpresaMutation = useMutation({
     mutationFn: async (payload: { values: Partial<Empresa>; id?: string | null }) => {
+      const enderecoConsolidado = buildEmpresaEndereco(payload.values);
       const input = {
         razao_social: payload.values.razaoSocial ?? "",
         nome_fantasia: payload.values.nomeFantasia ?? "",
@@ -532,7 +610,7 @@ const Empresas = () => {
         faixa_id: payload.values.faixaId ?? null,
         email: payload.values.email ?? null,
         whatsapp: payload.values.whatsapp ?? null,
-        endereco: payload.values.endereco ?? null,
+        endereco: enderecoConsolidado || payload.values.endereco || null,
         data_fundacao: payload.values.dataFundacao ?? null,
         data_associacao: payload.values.dataAssociacao ?? null,
         data_desassociacao: payload.values.dataDesassociacao ?? null,
@@ -877,6 +955,7 @@ const Empresas = () => {
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
     lastReceitaWsLookupRef.current = "";
+    lastCepLookupRef.current = "";
     setValidationErrors([]);
     setIsViewMode(viewMode);
     if (empresa) {
@@ -902,6 +981,13 @@ const Empresas = () => {
         situacaoFinanceira: "Regular",
         porte: "ME",
         descontoMensalidadePercentual: 0,
+        cep: "",
+        logradouro: "",
+        numero: "",
+        complemento: "",
+        bairro: "",
+        municipio: "",
+        uf: "",
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
         responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
         relacionamentos: [],
@@ -914,6 +1000,7 @@ const Empresas = () => {
 
   const handleCloseDialog = () => {
     lastReceitaWsLookupRef.current = "";
+    lastCepLookupRef.current = "";
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
@@ -1085,20 +1172,32 @@ const Empresas = () => {
     const porte = normalizeReceitaWsPorte(payload.porte);
     const capitalSocial = parseReceitaWsCapital(payload.capital_social);
     const dataFundacao = parseReceitaWsDate(payload.abertura);
-    const endereco = buildReceitaWsEndereco(payload);
 
-    setFormData((prev) => ({
-      ...prev,
-      cnpj: formatCnpj(payload.cnpj || cnpj),
-      razaoSocial: payload.nome?.trim() || prev.razaoSocial,
-      nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim(),
-      email: payload.email?.trim().toLowerCase() || prev.email,
-      whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
-      endereco: endereco || prev.endereco,
-      porte: porte || prev.porte,
-      capitalSocial: capitalSocial ?? prev.capitalSocial,
-      dataFundacao: dataFundacao || prev.dataFundacao,
-    }));
+    setFormData((prev) => {
+      const nextAddress = {
+        ...prev,
+        cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+        logradouro: payload.logradouro?.trim() || prev.logradouro,
+        numero: payload.numero?.trim() || prev.numero,
+        complemento: payload.complemento?.trim() || prev.complemento,
+        bairro: payload.bairro?.trim() || prev.bairro,
+        municipio: payload.municipio?.trim() || prev.municipio,
+        uf: payload.uf?.trim() || prev.uf,
+      };
+
+      return {
+        ...nextAddress,
+        cnpj: formatCnpj(payload.cnpj || cnpj),
+        razaoSocial: payload.nome?.trim() || prev.razaoSocial,
+        nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim(),
+        email: payload.email?.trim().toLowerCase() || prev.email,
+        whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
+        endereco: buildEmpresaEndereco(nextAddress) || prev.endereco,
+        porte: porte || prev.porte,
+        capitalSocial: capitalSocial ?? prev.capitalSocial,
+        dataFundacao: dataFundacao || prev.dataFundacao,
+      };
+    });
     setValidationErrors((prev) => prev.filter((field) => !["razaoSocial", "cnpj", "porte", "dataFundacao"].includes(field)));
   };
 
@@ -1153,6 +1252,80 @@ const Empresas = () => {
     const digits = formattedCnpj.replace(/\D/g, "");
     if (!isViewMode && digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
       void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
+  };
+
+  const applyViaCepData = (payload: ViaCepResponse) => {
+    setFormData((prev) => {
+      const nextAddress = {
+        ...prev,
+        cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+        logradouro: payload.logradouro?.trim() || prev.logradouro,
+        complemento: payload.complemento?.trim() || prev.complemento,
+        bairro: payload.bairro?.trim() || prev.bairro,
+        municipio: payload.localidade?.trim() || prev.municipio,
+        uf: payload.uf?.trim() || prev.uf,
+      };
+
+      return {
+        ...nextAddress,
+        endereco: buildEmpresaEndereco(nextAddress) || prev.endereco,
+      };
+    });
+  };
+
+  const handleCepLookup = async (cepValue = formData.cep || "", options?: { silent?: boolean }) => {
+    const cepDigits = cepValue.replace(/\D/g, "");
+    if (cepDigits.length !== 8) {
+      if (!options?.silent) {
+        toast({
+          title: "CEP incompleto",
+          description: "Informe os 8 dígitos do CEP para buscar o endereço.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCep || (options?.silent && lastCepLookupRef.current === cepDigits)) return;
+
+    try {
+      setIsLookingUpCep(true);
+      lastCepLookupRef.current = cepDigits;
+      const response = await fetch(`${VIA_CEP_BASE_URL}/${cepDigits}/json/`);
+      const payload = (await response.json()) as ViaCepResponse;
+
+      if (!response.ok || payload.erro) {
+        throw new Error("CEP não encontrado na ViaCEP.");
+      }
+
+      applyViaCepData(payload);
+      if (!options?.silent) {
+        toast({
+          title: "Endereço localizado",
+          description: "Preenchi os dados disponíveis para o CEP informado.",
+        });
+      }
+    } catch (err) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CEP",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCep(false);
+    }
+  };
+
+  const handleCepChange = (value: string) => {
+    const formattedCep = formatCep(value);
+    setFormData((prev) => ({ ...prev, cep: formattedCep }));
+
+    const digits = formattedCep.replace(/\D/g, "");
+    if (!isViewMode && digits.length === 8 && lastCepLookupRef.current !== digits) {
+      void handleCepLookup(formattedCep, { silent: true });
     }
   };
 
@@ -1981,15 +2154,109 @@ const Empresas = () => {
                         disabled={isViewMode}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="endereco">Endereço</Label>
-                      <Input
-                        id="endereco"
-                        placeholder="Rua, número, bairro, cidade"
-                        value={formData.endereco || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, endereco: e.target.value }))}
-                        disabled={isViewMode}
-                      />
+                  </div>
+
+                  <div className="rounded-xl border border-[#DCE7CB] bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="font-semibold text-[#1C1C1C]">Endereço da empresa</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Informe o CEP para preencher automaticamente com a ViaCEP. No salvamento, os campos são consolidados no endereço único da empresa.
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-6">
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaCep">CEP</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="empresaCep"
+                            placeholder="00000-000"
+                            value={formData.cep || ""}
+                            onChange={(e) => handleCepChange(e.target.value)}
+                            onBlur={() => void handleCepLookup(formData.cep || "", { silent: true })}
+                            disabled={isViewMode || isLookingUpCep}
+                          />
+                          {!isViewMode && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void handleCepLookup()}
+                              disabled={isLookingUpCep || (formData.cep || "").replace(/\D/g, "").length !== 8}
+                              className="shrink-0"
+                            >
+                              {isLookingUpCep ? "Buscando..." : "Buscar"}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-2 md:col-span-3">
+                        <Label htmlFor="empresaLogradouro">Rua / Logradouro</Label>
+                        <Input
+                          id="empresaLogradouro"
+                          placeholder="Rua, avenida, travessa..."
+                          value={formData.logradouro || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, logradouro: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaNumero">Número</Label>
+                        <Input
+                          id="empresaNumero"
+                          placeholder="123"
+                          value={formData.numero || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, numero: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaComplemento">Complemento</Label>
+                        <Input
+                          id="empresaComplemento"
+                          placeholder="Sala, bloco, loja..."
+                          value={formData.complemento || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, complemento: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaBairro">Bairro</Label>
+                        <Input
+                          id="empresaBairro"
+                          placeholder="Bairro"
+                          value={formData.bairro || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, bairro: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaUf">Estado</Label>
+                        <Select
+                          value={formData.uf || undefined}
+                          onValueChange={(value) => setFormData((prev) => ({ ...prev, uf: value }))}
+                          disabled={isViewMode}
+                        >
+                          <SelectTrigger id="empresaUf">
+                            <SelectValue placeholder="UF" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ufOptions.map((uf) => (
+                              <SelectItem key={uf} value={uf}>
+                                {uf}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaMunicipio">Cidade</Label>
+                        <Input
+                          id="empresaMunicipio"
+                          placeholder="Cidade"
+                          value={formData.municipio || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, municipio: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
                     </div>
                   </div>
 
