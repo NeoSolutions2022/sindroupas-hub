@@ -2233,13 +2233,13 @@ const Financeiro = () => {
                                       onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
                                       onDownload={() => handleDownloadBoleto(boleto)}
                                       onWhatsApp={
-                                        !isSendingCurrentBoletoCommunication && contato?.whatsapp && boleto.pdfUrl
-                                          ? () => handleSendBoletoWhatsapp(boleto, contato.whatsapp)
+                                        !isSendingCurrentBoletoCommunication
+                                          ? () => handleSendBoletoWhatsapp(boleto, contato?.whatsapp)
                                           : undefined
                                       }
                                       onEmail={
-                                        !isSendingCurrentBoletoCommunication && contato?.email && boleto.efiChargeId
-                                          ? () => handleSendBoletoEmail(boleto, contato.email)
+                                        !isSendingCurrentBoletoCommunication
+                                          ? () => handleSendBoletoEmail(boleto, contato?.email)
                                           : undefined
                                       }
                                       onReplicate={
