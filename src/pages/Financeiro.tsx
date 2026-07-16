@@ -52,7 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
-import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
+import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, resendBoletoEmailRequest, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -62,6 +62,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { Progress } from "@/components/ui/progress";
+import { sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type EmpresaLookupRow = {
   id: string;
@@ -96,6 +97,12 @@ type BoletoRow = {
   base?: number | string | null;
   percentual?: number | string | null;
   descontos?: number | string | null;
+  enviado_email_em?: string | null;
+  enviado_whatsapp_em?: string | null;
+  enviado_email_para?: string | null;
+  enviado_whatsapp_para?: string | null;
+  ultimo_envio_boleto_em?: string | null;
+  ultimo_envio_boleto_canal?: string | null;
   empresa?: { id: string; razao_social: string } | null;
 };
 
@@ -141,6 +148,12 @@ const FINANCEIRO_QUERY = `
       base
       percentual
       descontos
+      enviado_email_em
+      enviado_whatsapp_em
+      enviado_email_para
+      enviado_whatsapp_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
       empresa {
         id
         razao_social
@@ -250,6 +263,46 @@ const UPDATE_BOLETO_DESCRICAO_HASURA = `
     update_financeiro_boletos_by_pk(pk_columns: { id: $id }, _set: { descricao: $descricao }) {
       id
       descricao
+    }
+  }
+`;
+
+const UPDATE_BOLETO_ENVIO_EMAIL_HASURA = `
+  mutation UpdateBoletoEnvioEmail($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
+    update_financeiro_boletos_by_pk(
+      pk_columns: { id: $id }
+      _set: {
+        enviado_email_em: $enviadoEm
+        enviado_email_para: $destinatario
+        ultimo_envio_boleto_em: $enviadoEm
+        ultimo_envio_boleto_canal: "email"
+      }
+    ) {
+      id
+      enviado_email_em
+      enviado_email_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
+    }
+  }
+`;
+
+const UPDATE_BOLETO_ENVIO_WHATSAPP_HASURA = `
+  mutation UpdateBoletoEnvioWhatsapp($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
+    update_financeiro_boletos_by_pk(
+      pk_columns: { id: $id }
+      _set: {
+        enviado_whatsapp_em: $enviadoEm
+        enviado_whatsapp_para: $destinatario
+        ultimo_envio_boleto_em: $enviadoEm
+        ultimo_envio_boleto_canal: "whatsapp"
+      }
+    ) {
+      id
+      enviado_whatsapp_em
+      enviado_whatsapp_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
     }
   }
 `;
@@ -532,6 +585,7 @@ const Financeiro = () => {
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
   const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
+  const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -576,6 +630,12 @@ const Financeiro = () => {
           base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
           percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
           descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
+          enviadoEmailEm: boleto.enviado_email_em ?? null,
+          enviadoWhatsappEm: boleto.enviado_whatsapp_em ?? null,
+          enviadoEmailPara: boleto.enviado_email_para ?? null,
+          enviadoWhatsappPara: boleto.enviado_whatsapp_para ?? null,
+          ultimoEnvioBoletoEm: boleto.ultimo_envio_boleto_em ?? null,
+          ultimoEnvioBoletoCanal: boleto.ultimo_envio_boleto_canal ?? null,
         };
       }) ?? []
     );
@@ -976,6 +1036,100 @@ const Financeiro = () => {
         description: "Autorize pop-ups no navegador e tente baixar o boleto novamente.",
         variant: "destructive",
       });
+    }
+  };
+
+  const buildBoletoMessage = (boleto: BoletoView) => {
+    const competencia = getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal);
+    const competenciaTexto = competencia ? ` referente à competência ${competencia}` : "";
+    const vencimento = formatDateBR(boleto.vencimento) || boleto.vencimento;
+    const pdfUrl = boleto.pdfUrl?.trim();
+
+    return [
+      `Olá! Segue o boleto ${boleto.tipo}${competenciaTexto} da empresa ${boleto.empresa}.`,
+      `Valor: ${formatCurrencyBRL(boleto.valor)}.`,
+      vencimento ? `Vencimento: ${vencimento}.` : "",
+      pdfUrl ? `Acesse o boleto em: ${pdfUrl}` : "",
+      "Em caso de dúvidas, estamos à disposição.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
+  const markBoletoEmailSent = async (boletoId: string, destinatario: string) => {
+    await hasuraRequest({
+      query: UPDATE_BOLETO_ENVIO_EMAIL_HASURA,
+      variables: { id: boletoId, enviadoEm: new Date().toISOString(), destinatario },
+      token,
+    });
+  };
+
+  const markBoletoWhatsappSent = async (boletoId: string, destinatario: string) => {
+    await hasuraRequest({
+      query: UPDATE_BOLETO_ENVIO_WHATSAPP_HASURA,
+      variables: { id: boletoId, enviadoEm: new Date().toISOString(), destinatario },
+      token,
+    });
+  };
+
+  const handleSendBoletoEmail = async (boleto: BoletoView, email?: string) => {
+    const destinatario = email?.trim();
+    const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
+
+    if (!chargeId) {
+      toast({ title: "Boleto sem charge_id", description: "Não foi possível reenviar por e-mail sem charge_id da EFI.", variant: "destructive" });
+      return;
+    }
+
+    if (!destinatario) {
+      toast({ title: "E-mail ausente", description: "Cadastre um e-mail na empresa antes de enviar o boleto.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      setSendingBoletoCommunication(`${boleto.id}:email`);
+      await resendBoletoEmailRequest(chargeId, destinatario);
+      await markBoletoEmailSent(boleto.id, destinatario);
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      toast({ title: "Boleto enviado por e-mail", description: `Envio registrado para ${destinatario}.` });
+    } catch (err) {
+      toast({
+        title: "Falha ao enviar por e-mail",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingBoletoCommunication(null);
+    }
+  };
+
+  const handleSendBoletoWhatsapp = async (boleto: BoletoView, whatsapp?: string) => {
+    const digits = whatsapp?.replace(/\D/g, "") ?? "";
+
+    if (!digits) {
+      toast({ title: "WhatsApp ausente", description: "Cadastre um WhatsApp na empresa antes de enviar o boleto.", variant: "destructive" });
+      return;
+    }
+
+    if (!boleto.pdfUrl?.trim()) {
+      toast({ title: "PDF indisponível", description: "Este boleto não possui pdf_url para envio por WhatsApp.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      setSendingBoletoCommunication(`${boleto.id}:whatsapp`);
+      await sendEvolutionTextRequest({ number: digits, text: buildBoletoMessage(boleto) });
+      await markBoletoWhatsappSent(boleto.id, digits);
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      toast({ title: "Boleto enviado por WhatsApp", description: `Envio registrado para ${digits}.` });
+    } catch (err) {
+      toast({
+        title: "Falha ao enviar por WhatsApp",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingBoletoCommunication(null);
     }
   };
 
@@ -1961,6 +2115,7 @@ const Financeiro = () => {
                               };
                               const whatsappLink = formatWhatsappLink(contato?.whatsapp);
                               const effectiveStatus = getBoletoEffectiveStatus(boleto);
+                              const isSendingCurrentBoletoCommunication = sendingBoletoCommunication?.startsWith(`${boleto.id}:`);
 
                               return (
                                 <TableRow key={boleto.id}>
@@ -1979,29 +2134,49 @@ const Financeiro = () => {
                                     </span>
                                   </TableCell>
                                   <TableCell>
-                                    <div className="flex items-center gap-1">
-                                      {whatsappLink ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label={`Abrir WhatsApp de ${contato?.nome || boleto.empresa}`}>
-                                            <MessageCircle className="h-4 w-4 text-green-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
-                                          <MessageCircle className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
-                                      {contato?.email ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
-                                            <Mail className="h-4 w-4 text-blue-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
-                                          <Mail className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-1">
+                                        {whatsappLink ? (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                            <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label={`Abrir WhatsApp de ${contato?.nome || boleto.empresa}`}>
+                                              <MessageCircle className="h-4 w-4 text-green-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                            <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
+                                        {contato?.email ? (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                            <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                              <Mail className="h-4 w-4 text-blue-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                            <Mail className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-wrap gap-1">
+                                        {boleto.enviadoWhatsappEm && (
+                                          <Badge variant="outline" className="border-green-200 bg-green-50 text-[11px] text-green-700">
+                                            WhatsApp enviado
+                                          </Badge>
+                                        )}
+                                        {boleto.enviadoEmailEm && (
+                                          <Badge variant="outline" className="border-blue-200 bg-blue-50 text-[11px] text-blue-700">
+                                            E-mail enviado
+                                          </Badge>
+                                        )}
+                                        {isSendingCurrentBoletoCommunication && (
+                                          <span className="text-xs text-muted-foreground">Enviando...</span>
+                                        )}
+                                        {!isSendingCurrentBoletoCommunication && !boleto.enviadoWhatsappEm && !boleto.enviadoEmailEm && (
+                                          <span className="text-xs text-muted-foreground">Não enviado</span>
+                                        )}
+                                      </div>
                                     </div>
                                   </TableCell>
                                   <TableCell>
@@ -2010,6 +2185,16 @@ const Financeiro = () => {
                                       whatsappLink={whatsappLink}
                                       onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
                                       onDownload={() => handleDownloadBoleto(boleto)}
+                                      onWhatsApp={
+                                        !isSendingCurrentBoletoCommunication && contato?.whatsapp && boleto.pdfUrl
+                                          ? () => handleSendBoletoWhatsapp(boleto, contato.whatsapp)
+                                          : undefined
+                                      }
+                                      onEmail={
+                                        !isSendingCurrentBoletoCommunication && contato?.email && boleto.efiChargeId
+                                          ? () => handleSendBoletoEmail(boleto, contato.email)
+                                          : undefined
+                                      }
                                       onGenerateNew={() => {
                                         if (regeneratedFromCancel.includes(boleto.id)) {
                                           toast({ title: "Boleto já regenerado", description: "Este boleto cancelado já foi utilizado para gerar um novo boleto." });
@@ -3134,4 +3319,10 @@ export default Financeiro;
     efiChargeId?: string | null;
     pdfUrl?: string | null;
     descricao?: string;
+    enviadoEmailEm?: string | null;
+    enviadoWhatsappEm?: string | null;
+    enviadoEmailPara?: string | null;
+    enviadoWhatsappPara?: string | null;
+    ultimoEnvioBoletoEm?: string | null;
+    ultimoEnvioBoletoCanal?: string | null;
   };

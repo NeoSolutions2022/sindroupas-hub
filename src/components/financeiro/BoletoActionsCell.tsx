@@ -9,6 +9,7 @@ import {
   Eye,
   Download,
   MessageCircle,
+  Mail,
   RefreshCw,
   MoreHorizontal,
 } from "lucide-react";
@@ -23,6 +24,7 @@ interface BoletoActionsCellProps {
   onCancel?: () => void;
   onDescription?: () => void;
   onWhatsApp?: () => void;
+  onEmail?: () => void;
   onCommunication?: () => void;
   onEditCompany?: () => void;
 }
@@ -36,11 +38,29 @@ export function BoletoActionsCell({
   onChangeDueDate,
   onCancel,
   onDescription,
+  onWhatsApp,
+  onEmail,
   onCommunication,
   onEditCompany,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
   const isCanceled = status === "Cancelado";
+  const communicationItems = (
+    <>
+      {onWhatsApp && (
+        <DropdownMenuItem onClick={onWhatsApp}>
+          <MessageCircle className="h-4 w-4 mr-2" />
+          Enviar por WhatsApp
+        </DropdownMenuItem>
+      )}
+      {onEmail && (
+        <DropdownMenuItem onClick={onEmail}>
+          <Mail className="h-4 w-4 mr-2" />
+          Enviar por e-mail
+        </DropdownMenuItem>
+      )}
+    </>
+  );
 
   if (isOverdue) {
     return (
@@ -78,6 +98,7 @@ export function BoletoActionsCell({
                 </a>
               </DropdownMenuItem>
             )}
+            {communicationItems}
             <DropdownMenuItem onClick={onDetails}>
               <Eye className="h-4 w-4 mr-2" />
               Detalhes
@@ -142,6 +163,7 @@ export function BoletoActionsCell({
               </a>
             </DropdownMenuItem>
           )}
+          {communicationItems}
           {onChangeDueDate && (
             <DropdownMenuItem onClick={onChangeDueDate}>
               Alterar vencimento
