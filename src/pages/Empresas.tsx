@@ -497,6 +497,8 @@ const Empresas = () => {
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
   const [selectedSolicitacao, setSelectedSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
+  const [solicitacaoFaixaOverrides, setSolicitacaoFaixaOverrides] = useState<Record<string, string>>({});
+  const [solicitacoesComFaixaAberta, setSolicitacoesComFaixaAberta] = useState<string[]>([]);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -531,6 +533,28 @@ const Empresas = () => {
       })) ?? []
     );
   }, [data?.faixas]);
+
+  const getFaixaByQtdFuncionarios = (qtdFuncionarios?: number | null) => {
+    const qtd = Number(qtdFuncionarios ?? 0);
+    if (!Number.isFinite(qtd) || qtd <= 0) return undefined;
+
+    return faixas.find((faixa) => {
+      const min = Number(faixa.min ?? 0);
+      const max = Number(faixa.max ?? 0);
+      const hasNoUpperLimit = max <= 0;
+      return qtd >= min && (hasNoUpperLimit || qtd <= max);
+    });
+  };
+
+  const getSolicitacaoFaixaId = (solicitacao: SolicitacaoAssociacaoRow) => {
+    return solicitacaoFaixaOverrides[solicitacao.id] || getFaixaByQtdFuncionarios(solicitacao.qtd_funcionarios)?.id || "";
+  };
+
+  const toggleSolicitacaoFaixaSelect = (solicitacaoId: string) => {
+    setSolicitacoesComFaixaAberta((prev) =>
+      prev.includes(solicitacaoId) ? prev.filter((id) => id !== solicitacaoId) : [...prev, solicitacaoId],
+    );
+  };
 
   const empresas = useMemo<Empresa[]>(() => {
     if (!data?.empresas) return [];
@@ -736,6 +760,7 @@ const Empresas = () => {
         porte: solicitacao.porte || "ME",
         capital_social: solicitacao.capital_social ?? null,
         desconto_mensalidade_percentual: 0,
+        faixa_id: getSolicitacaoFaixaId(solicitacao) || null,
         email: solicitacao.email || solicitacao.responsavel_email || null,
         whatsapp: solicitacao.whatsapp || solicitacao.responsavel_whatsapp || null,
         endereco: solicitacao.endereco || null,
@@ -802,7 +827,13 @@ const Empresas = () => {
         token,
       });
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, solicitacao) => {
+      setSolicitacaoFaixaOverrides((prev) => {
+        const next = { ...prev };
+        delete next[solicitacao.id];
+        return next;
+      });
+      setSolicitacoesComFaixaAberta((prev) => prev.filter((id) => id !== solicitacao.id));
       await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
     },
   });
@@ -1485,8 +1516,14 @@ const Empresas = () => {
                   </div>
                 </CardHeader>
                 <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-                  {solicitacoesAssociacao.map((solicitacao) => (
-                    <div key={solicitacao.id} className="flex flex-col gap-3 rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
+                  {solicitacoesAssociacao.map((solicitacao) => {
+                    const faixaSugerida = getFaixaByQtdFuncionarios(solicitacao.qtd_funcionarios);
+                    const faixaSelecionadaId = getSolicitacaoFaixaId(solicitacao);
+                    const faixaSelecionada = faixas.find((faixa) => faixa.id === faixaSelecionadaId);
+                    const deveExibirSelectFaixa = !faixaSugerida || solicitacoesComFaixaAberta.includes(solicitacao.id);
+
+                    return (
+                      <div key={solicitacao.id} className="flex flex-col gap-3 rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-semibold text-[#1C1C1C]">{solicitacao.nome_fantasia || solicitacao.razao_social}</h3>
@@ -1499,7 +1536,56 @@ const Empresas = () => {
                         <span><strong className="text-[#1C1C1C]">Responsável:</strong> {solicitacao.responsavel_nome || "—"}</span>
                         <span><strong className="text-[#1C1C1C]">Contato:</strong> {solicitacao.responsavel_whatsapp || solicitacao.whatsapp || "—"}</span>
                         <span><strong className="text-[#1C1C1C]">E-mail:</strong> {solicitacao.responsavel_email || solicitacao.email || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Funcionários:</strong> {solicitacao.qtd_funcionarios ?? "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Faixa na aprovação:</strong> {faixaSelecionada?.label || "Sem faixa definida"}</span>
                         <span><strong className="text-[#1C1C1C]">Enviada em:</strong> {formatDate(solicitacao.created_at)}</span>
+                      </div>
+                      <div className="rounded-lg border border-[#DCE7CB] bg-white p-3 text-xs">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="font-semibold text-[#1C1C1C]">Faixa sugerida</p>
+                            <p className="text-muted-foreground">
+                              {faixaSugerida
+                                ? `${faixaSugerida.label} baseada em ${solicitacao.qtd_funcionarios ?? 0} funcionário(s).`
+                                : "Nenhuma faixa encontrada para a quantidade de funcionários informada."}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={() => toggleSolicitacaoFaixaSelect(solicitacao.id)}
+                          >
+                            {deveExibirSelectFaixa ? "Ocultar seleção" : "Editar faixa"}
+                          </Button>
+                        </div>
+                        {deveExibirSelectFaixa && (
+                          <div className="mt-3 space-y-2">
+                            <Label htmlFor={`faixa-solicitacao-${solicitacao.id}`}>Selecionar faixa manualmente</Label>
+                            <Select
+                              value={faixaSelecionadaId || "none"}
+                              onValueChange={(value) =>
+                                setSolicitacaoFaixaOverrides((prev) => ({
+                                  ...prev,
+                                  [solicitacao.id]: value === "none" ? "" : value,
+                                }))
+                              }
+                            >
+                              <SelectTrigger id={`faixa-solicitacao-${solicitacao.id}`}>
+                                <SelectValue placeholder="Selecione uma faixa" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Sem faixa</SelectItem>
+                                {faixas.map((faixa) => (
+                                  <SelectItem key={faixa.id} value={faixa.id}>
+                                    {faixa.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
                       </div>
                       {solicitacao.observacoes && (
                         <p className="rounded-lg bg-white p-2 text-xs text-muted-foreground">{solicitacao.observacoes}</p>
@@ -1568,8 +1654,9 @@ const Empresas = () => {
                           Recusar
                         </Button>
                       </div>
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </CardContent>
               </Card>
             )}
