@@ -103,7 +103,7 @@ type BoletoRow = {
   enviado_whatsapp_para?: string | null;
   ultimo_envio_boleto_em?: string | null;
   ultimo_envio_boleto_canal?: string | null;
-  empresa?: { id: string; razao_social: string } | null;
+  empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
 type ContribuicaoRow = {
@@ -117,7 +117,7 @@ type ContribuicaoRow = {
   valor?: number | string | null;
   vencimento?: string | null;
   situacao?: string | null;
-  empresa?: { id: string; razao_social: string } | null;
+  empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
 type FaixaRow = {
@@ -157,6 +157,7 @@ const FINANCEIRO_QUERY = `
       empresa {
         id
         razao_social
+        nome_fantasia
       }
     }
     contribuicoes_assistenciais(order_by: { vencimento: desc }) {
@@ -582,6 +583,10 @@ const Financeiro = () => {
   const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
+  const [replicateDialogOpen, setReplicateDialogOpen] = useState(false);
+  const [selectedBoletoForReplication, setSelectedBoletoForReplication] = useState<BoletoView | null>(null);
+  const [replicateCancelAfter, setReplicateCancelAfter] = useState(false);
+  const [replicateCancelReason, setReplicateCancelReason] = useState("Boleto replicado e cancelado após nova emissão.");
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
   const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
@@ -617,6 +622,7 @@ const Financeiro = () => {
           tipo: tipoNormalizado,
           empresaId: boleto.empresa?.id,
           empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
+          empresaFantasia: boleto.empresa?.nome_fantasia?.trim() || undefined,
           valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
           vencimento: boleto.vencimento ?? "",
           status: normalizeBoletoStatus(boleto.efi_status),
@@ -1090,6 +1096,7 @@ const Financeiro = () => {
       setSendingBoletoCommunication(`${boleto.id}:email`);
       await resendBoletoEmailRequest(chargeId, destinatario);
       await markBoletoEmailSent(boleto.id, destinatario);
+      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por e-mail para ${destinatario}.`);
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
       toast({ title: "Boleto enviado por e-mail", description: `Envio registrado para ${destinatario}.` });
     } catch (err) {
@@ -1120,6 +1127,7 @@ const Financeiro = () => {
       setSendingBoletoCommunication(`${boleto.id}:whatsapp`);
       await sendEvolutionTextRequest({ number: digits, text: buildBoletoMessage(boleto) });
       await markBoletoWhatsappSent(boleto.id, digits);
+      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por WhatsApp para ${digits}.`);
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
       toast({ title: "Boleto enviado por WhatsApp", description: `Envio registrado para ${digits}.` });
     } catch (err) {
@@ -1131,6 +1139,38 @@ const Financeiro = () => {
     } finally {
       setSendingBoletoCommunication(null);
     }
+  };
+
+  const startBoletoReplication = (boleto: BoletoView) => {
+    setSelectedBoletoForReplication(boleto);
+    setReplicateCancelAfter(false);
+    setReplicateCancelReason("Boleto replicado e cancelado após nova emissão.");
+    setReplicateDialogOpen(true);
+  };
+
+  const continueBoletoReplication = () => {
+    if (!selectedBoletoForReplication) return;
+    setSelectedBoletoForNew({
+      id: selectedBoletoForReplication.id,
+      empresa: selectedBoletoForReplication.empresa,
+      vencimento: selectedBoletoForReplication.vencimento,
+      valor: selectedBoletoForReplication.valor,
+    });
+    setReplicateDialogOpen(false);
+    setGerarNovoOpen(true);
+  };
+
+  const cancelReplicatedOriginalBoleto = async (boleto: BoletoView) => {
+    const reason = replicateCancelReason.trim() || "Boleto replicado e cancelado após nova emissão.";
+    const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
+
+    if (chargeId) {
+      await cancelBoletoRequest(chargeId);
+    }
+
+    await syncStatusInHasura(boleto.id, "cancelado");
+    await syncDescricaoInHasura(boleto.id, `Cancelado: ${reason}`);
+    await appendObservacaoEmpresa(boleto.empresa, `Cancelamento de boleto (${boleto.id}) após replicação: ${reason}`);
   };
 
   const filteredBoletos = useMemo(() => {
@@ -2106,7 +2146,7 @@ const Financeiro = () => {
                             </TableRow>
                           ) : (
                             paginatedBoletos.map((boleto) => {
-                              const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
+                              const empresa = mockEmpresas.find((e) => e.id === boleto.empresaId) ?? mockEmpresas.find((e) => e.razaoSocial === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
                                 if (!whatsapp) return null;
@@ -2119,7 +2159,14 @@ const Financeiro = () => {
 
                               return (
                                 <TableRow key={boleto.id}>
-                                  <TableCell className="font-medium">{boleto.empresa}</TableCell>
+                                  <TableCell className="font-medium">
+                                    <div className="space-y-0.5">
+                                      <p>{boleto.empresa}</p>
+                                      {boleto.empresaFantasia && boleto.empresaFantasia !== boleto.empresa && (
+                                        <p className="text-xs font-normal text-muted-foreground">{boleto.empresaFantasia}</p>
+                                      )}
+                                    </div>
+                                  </TableCell>
                                   <TableCell>
                                     <span className="text-sm">{boleto.tipo}</span>
                                   </TableCell>
@@ -2149,7 +2196,7 @@ const Financeiro = () => {
                                         )}
                                         {contato?.email ? (
                                           <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                            <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                            <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
                                               <Mail className="h-4 w-4 text-blue-600" />
                                             </a>
                                           </Button>
@@ -2193,6 +2240,11 @@ const Financeiro = () => {
                                       onEmail={
                                         !isSendingCurrentBoletoCommunication && contato?.email && boleto.efiChargeId
                                           ? () => handleSendBoletoEmail(boleto, contato.email)
+                                          : undefined
+                                      }
+                                      onReplicate={
+                                        effectiveStatus === "Inadimplente"
+                                          ? () => startBoletoReplication(boleto)
                                           : undefined
                                       }
                                       onGenerateNew={() => {
@@ -2262,11 +2314,11 @@ const Financeiro = () => {
                   open={gerarNovoOpen}
                   onOpenChange={setGerarNovoOpen}
                   boleto={selectedBoletoForNew}
-                  onGenerate={(boletoId, novaData, novoValor) => {
+                  onGenerate={async (boletoId, novaData, novoValor) => {
                     const original = boletos.find((b) => b.id === boletoId);
                     if (original) {
                       const empresaMatch = data?.empresas.find(
-                        (empresa) => empresa.razao_social === original.empresa,
+                        (empresa) => empresa.id === original.empresaId || empresa.razao_social === original.empresa,
                       );
                       const tipoOriginal = original.tipo === "Contribuição Assistencial"
                         ? "contribuicao"
@@ -2275,14 +2327,14 @@ const Financeiro = () => {
                           : "mensalidade";
                       const payload: BoletoForm = {
                         tipo: tipoOriginal,
-                        empresaId: empresaMatch?.id ?? "",
+                        empresaId: empresaMatch?.id ?? original.empresaId ?? "",
                         empresaNome: original.empresa,
                         competenciaInicial: original.competenciaInicial ?? "",
                         competenciaFinal: original.competenciaFinal ?? "",
                         dataVencimento: format(novaData, "yyyy-MM-dd"),
                         faixaId: original.faixaId ?? "",
                         unificarCompetencias: "Não",
-                        mensagemPersonalizada: "",
+                        mensagemPersonalizada: original.descricao ?? "",
                         anoContribuicao: original.ano ?? "",
                         periodicidade: original.periodicidade ?? "",
                         parcelas: original.parcelas ? String(original.parcelas) : "",
@@ -2295,25 +2347,81 @@ const Financeiro = () => {
                         valorAvulso: novoValor ? String(novoValor) : String(original.valor),
                         motivoCobranca: original.descricao ?? "",
                       };
-                      createBoletoMutation.mutate(payload, {
-                        onSuccess: () => {
-                          toast({
-                            title: "Novo boleto gerado",
-                            description: `Boleto para ${original.empresa} atualizado.`,
-                          });
-                        },
-                        onError: (err) => {
-                          toast({
-                            title: "Falha ao gerar novo boleto",
-                            description: err instanceof Error ? err.message : "Tente novamente.",
-                            variant: "destructive",
-                          });
-                        },
-                      });
+
+                      try {
+                        const isReplication = selectedBoletoForReplication?.id === original.id;
+                        await createBoletoMutation.mutateAsync(payload);
+                        if (isReplication && replicateCancelAfter) {
+                          await cancelReplicatedOriginalBoleto(original);
+                        }
+                        toast({
+                          title: isReplication ? "Boleto replicado" : "Novo boleto gerado",
+                          description: isReplication && replicateCancelAfter
+                            ? `Novo boleto para ${original.empresa} gerado e original cancelado.`
+                            : `Novo boleto para ${original.empresa} gerado.`,
+                        });
+                      } catch (err) {
+                        toast({
+                          title: "Falha ao replicar boleto",
+                          description: err instanceof Error ? err.message : "Tente novamente.",
+                          variant: "destructive",
+                        });
+                      }
                     }
                     setSelectedBoletoForNew(null);
+                    setSelectedBoletoForReplication(null);
+                    setReplicateCancelAfter(false);
                   }}
                 />
+
+                <AlertDialog open={replicateDialogOpen} onOpenChange={setReplicateDialogOpen}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Replicar boleto inadimplente</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        O novo boleto será criado copiando empresa, tipo, competência, descrição e valor do boleto original.
+                        Depois você poderá ajustar vencimento e valor antes de confirmar.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-3 py-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={replicateCancelAfter}
+                          onChange={(event) => setReplicateCancelAfter(event.target.checked)}
+                        />
+                        Cancelar o boleto original após replicar
+                      </label>
+                      {replicateCancelAfter && (
+                        <div className="space-y-2">
+                          <Label htmlFor="replicate-cancel-reason">Motivo do cancelamento</Label>
+                          <Input
+                            id="replicate-cancel-reason"
+                            value={replicateCancelReason}
+                            onChange={(event) => setReplicateCancelReason(event.target.value)}
+                            placeholder="Informe o motivo que ficará registrado no boleto cancelado"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Voltar</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(event) => {
+                          if (replicateCancelAfter && !replicateCancelReason.trim()) {
+                            event.preventDefault();
+                            toast({ title: "Motivo obrigatório", description: "Informe o motivo para cancelar o boleto original.", variant: "destructive" });
+                            return;
+                          }
+                          continueBoletoReplication();
+                        }}
+                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                      >
+                        Continuar replicação
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
 
                 <Dialog open={dueDateDialogOpen} onOpenChange={setDueDateDialogOpen}>
                   <DialogContent className="max-w-md">
@@ -3316,6 +3424,7 @@ const Financeiro = () => {
 export default Financeiro;
   type BoletoView = BoletoRegistro & {
     empresaId?: string;
+    empresaFantasia?: string;
     efiChargeId?: string | null;
     pdfUrl?: string | null;
     descricao?: string;

@@ -25,6 +25,7 @@ interface BoletoActionsCellProps {
   onDescription?: () => void;
   onWhatsApp?: () => void;
   onEmail?: () => void;
+  onReplicate?: () => void;
   onCommunication?: () => void;
   onEditCompany?: () => void;
 }
@@ -40,6 +41,7 @@ export function BoletoActionsCell({
   onDescription,
   onWhatsApp,
   onEmail,
+  onReplicate,
   onCommunication,
   onEditCompany,
 }: BoletoActionsCellProps) {
@@ -164,6 +166,12 @@ export function BoletoActionsCell({
             </DropdownMenuItem>
           )}
           {communicationItems}
+          {onReplicate && (
+            <DropdownMenuItem onClick={onReplicate}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Replicar
+            </DropdownMenuItem>
+          )}
           {onChangeDueDate && (
             <DropdownMenuItem onClick={onChangeDueDate}>
               Alterar vencimento
