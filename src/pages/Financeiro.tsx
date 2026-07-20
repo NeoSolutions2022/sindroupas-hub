@@ -62,7 +62,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { Progress } from "@/components/ui/progress";
-import { sendEvolutionTextRequest } from "@/lib/api/evolution";
+import { normalizeBrazilianWhatsappNumber, sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type EmpresaLookupRow = {
   id: string;
@@ -1124,12 +1124,13 @@ const Financeiro = () => {
     }
 
     try {
+      const destinatario = normalizeBrazilianWhatsappNumber(digits);
       setSendingBoletoCommunication(`${boleto.id}:whatsapp`);
-      await sendEvolutionTextRequest({ number: digits, text: buildBoletoMessage(boleto) });
-      await markBoletoWhatsappSent(boleto.id, digits);
-      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por WhatsApp para ${digits}.`);
+      await sendEvolutionTextRequest({ number: destinatario, text: buildBoletoMessage(boleto) });
+      await markBoletoWhatsappSent(boleto.id, destinatario);
+      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por WhatsApp para ${destinatario}.`);
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
-      toast({ title: "Boleto enviado por WhatsApp", description: `Envio registrado para ${digits}.` });
+      toast({ title: "Boleto enviado por WhatsApp", description: `Envio registrado para ${destinatario}.` });
     } catch (err) {
       toast({
         title: "Falha ao enviar por WhatsApp",
