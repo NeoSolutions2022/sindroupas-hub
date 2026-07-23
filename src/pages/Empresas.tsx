@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSearchParams } from "react-router-dom";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
@@ -482,6 +483,7 @@ const Empresas = () => {
   const isMobile = useIsMobile();
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState("");
   const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
@@ -503,6 +505,7 @@ const Empresas = () => {
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
+  const [hasReceitaWsSuggestions, setHasReceitaWsSuggestions] = useState(false);
   const [isLookingUpCep, setIsLookingUpCep] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const lastReceitaWsLookupRef = useRef<string>("");
@@ -539,6 +542,7 @@ const Empresas = () => {
     if (!Number.isFinite(qtd) || qtd <= 0) return undefined;
 
     return faixas.find((faixa) => {
+      if (normalizeSearchText(faixa.label).includes("cotista")) return false;
       const min = Number(faixa.min ?? 0);
       const max = Number(faixa.max ?? 0);
       const hasNoUpperLimit = max <= 0;
@@ -988,6 +992,7 @@ const Empresas = () => {
     lastReceitaWsLookupRef.current = "";
     lastCepLookupRef.current = "";
     setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
     setIsViewMode(viewMode);
     if (empresa) {
       setEditingEmpresa(empresa);
@@ -1038,10 +1043,31 @@ const Empresas = () => {
     setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [] });
     setLogoPreview("");
     setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
     if (logoInputRef.current) {
       logoInputRef.current.value = "";
     }
   };
+
+  useEffect(() => {
+    const empresaId = searchParams.get("editar");
+    if (!empresaId || !empresas.length) return;
+
+    const empresa = empresas.find((item) => item.id === empresaId);
+    if (empresa) {
+      handleOpenDialog(empresa, false);
+    } else {
+      toast({
+        title: "Empresa não encontrada",
+        description: "Não foi possível abrir os dados completos desta empresa.",
+        variant: "destructive",
+      });
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("editar");
+    setSearchParams(nextParams, { replace: true });
+  }, [empresas, searchParams, setSearchParams, toast]);
 
   const clearValidationError = (field: string) => {
     setValidationErrors((prev) => prev.filter((item) => item !== field));
@@ -1229,6 +1255,7 @@ const Empresas = () => {
         dataFundacao: dataFundacao || prev.dataFundacao,
       };
     });
+    setHasReceitaWsSuggestions(true);
     setValidationErrors((prev) => prev.filter((field) => !["razaoSocial", "cnpj", "porte", "dataFundacao"].includes(field)));
   };
 
@@ -1260,7 +1287,7 @@ const Empresas = () => {
       applyReceitaWsData(payload, cnpjDigits);
       toast({
         title: "Dados localizados",
-        description: "Preenchi automaticamente as informações disponíveis na ReceitaWS.",
+        description: "Os dados da ReceitaWS foram aplicados como sugestões e podem ser alterados.",
       });
     } catch (err) {
       if (!options?.silent) {
@@ -2216,9 +2243,16 @@ const Empresas = () => {
                           </Button>
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        Ao informar um CNPJ válido, os dados públicos serão buscados na ReceitaWS e preenchidos automaticamente.
-                      </p>
+                      {hasReceitaWsSuggestions ? (
+                        <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span>Dados sugeridos pela ReceitaWS. Revise e altere qualquer campo antes de salvar.</span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Ao informar um CNPJ válido, os dados públicos serão usados como sugestões editáveis para o cadastro.
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="email">E-mail</Label>

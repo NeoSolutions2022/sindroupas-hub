@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail, AlertTriangle } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -379,6 +379,12 @@ const formatDateBR = (value?: string) => {
   if (!value) return "";
   const parsed = parseISO(value);
   return isValid(parsed) ? format(parsed, "dd/MM/yyyy") : value;
+};
+
+const formatDueDateBR = (value?: string) => {
+  if (!value) return "—";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "dd-MM-yyyy") : value.replace(/\//g, "-");
 };
 
 const formatCompetenciaBR = (value?: string) => {
@@ -927,8 +933,6 @@ const Financeiro = () => {
   const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
   const [novaNotaComunicacao, setNovaNotaComunicacao] = useState("");
   const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
-  const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
-  const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
   const [emailFallbackDialogOpen, setEmailFallbackDialogOpen] = useState(false);
   const [emailFallbackEmpresaIds, setEmailFallbackEmpresaIds] = useState<string[]>([]);
   const [emailFallbackDraft, setEmailFallbackDraft] = useState("");
@@ -1573,13 +1577,22 @@ const Financeiro = () => {
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
-    setBoletoForm({
-      ...boletoForm,
+    setBoletoForm((prev) => ({
+      ...prev,
       empresaId: empresa.id,
       empresaNome: empresa.nome,
-    });
+      faixaId: empresa.faixaId || "",
+    }));
     setEmpresaSearch(`${empresa.nome} - ${empresa.cnpj}`);
     setShowEmpresaSuggestions(false);
+
+    if (!empresa.faixaId) {
+      toast({
+        title: "Empresa sem faixa cadastrada",
+        description: "Selecione uma faixa na próxima etapa ou edite o cadastro completo da empresa antes de emitir.",
+        variant: "destructive",
+      });
+    }
   };
 
   const empresasFiltradas = mockEmpresas.filter((emp) => {
@@ -2174,7 +2187,7 @@ const Financeiro = () => {
                                   <TableCell>
                                     R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                                   </TableCell>
-                                  <TableCell>{boleto.vencimento}</TableCell>
+                                  <TableCell>{formatDueDateBR(boleto.vencimento)}</TableCell>
                                   <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
                                   <TableCell>
                                     <span className="text-sm text-muted-foreground line-clamp-2">
@@ -2277,10 +2290,9 @@ const Financeiro = () => {
                                         setComunicacaoDialogOpen(true);
                                       }}
                                       onEditCompany={() => {
-                                        const empresaRow = data?.empresas.find((e) => e.razao_social === boleto.empresa);
+                                        const empresaRow = data?.empresas.find((e) => e.id === boleto.empresaId) ?? data?.empresas.find((e) => e.razao_social === boleto.empresa);
                                         if (!empresaRow) return;
-                                        setEmpresaEditDraft({ id: empresaRow.id, razao_social: empresaRow.razao_social, email: empresaRow.email ?? "", whatsapp: empresaRow.whatsapp ?? "" });
-                                        setEditEmpresaDialogOpen(true);
+                                        navigate(`/dashboard/empresas?editar=${empresaRow.id}`);
                                       }}
                                       onCancel={() => {
                                         setSelectedBoletoForCancel(boleto as BoletoView);
@@ -2953,6 +2965,15 @@ const Financeiro = () => {
                 {/* Etapa 2: Detalhes por tipo */}
                 {wizardStep === 2 && boletoForm.tipo === "mensalidade" && (
                   <div className="space-y-6">
+                    {!isBatchMode && boletoForm.empresaId && !boletoForm.faixaId && (
+                      <div role="alert" className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <div>
+                          <p className="font-semibold">Empresa sem faixa cadastrada</p>
+                          <p className="text-sm">Selecione uma faixa abaixo para esta emissão ou atualize o cadastro completo da empresa.</p>
+                        </div>
+                      </div>
+                    )}
                     <Card>
                       <CardHeader>
                         <CardTitle className="text-lg">Detalhes do Boleto - Mensalidade por Faixa</CardTitle>
@@ -3395,25 +3416,6 @@ const Financeiro = () => {
               </DialogContent>
             </Dialog>
 
-            <Dialog open={editEmpresaDialogOpen} onOpenChange={setEditEmpresaDialogOpen}>
-              <DialogContent className="max-w-md">
-                <DialogHeader><DialogTitle>Editar dados da empresa</DialogTitle></DialogHeader>
-                <div className="space-y-3">
-                  <Input value={empresaEditDraft?.razao_social || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, razao_social: e.target.value } : p)} placeholder="Razão social" />
-                  <Input value={empresaEditDraft?.email || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, email: e.target.value } : p)} placeholder="E-mail" />
-                  <Input value={empresaEditDraft?.whatsapp || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, whatsapp: e.target.value } : p)} placeholder="WhatsApp" />
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setEditEmpresaDialogOpen(false)}>Cancelar</Button>
-                  <Button onClick={async () => {
-                    if (!empresaEditDraft) return;
-                    await hasuraRequest({ query: `mutation UpdateEmpresaRapido($id: uuid!, $razao: String!, $email: String, $whatsapp: String) { update_empresas_by_pk(pk_columns: {id: $id}, _set: { razao_social: $razao, email: $email, whatsapp: $whatsapp }) { id } }`, variables: { id: empresaEditDraft.id, razao: empresaEditDraft.razao_social, email: empresaEditDraft.email || null, whatsapp: empresaEditDraft.whatsapp || null }, token });
-                    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
-                    setEditEmpresaDialogOpen(false);
-                  }}>Salvar</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
             </div>
           </main>
         </div>
