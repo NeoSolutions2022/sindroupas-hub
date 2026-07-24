@@ -262,20 +262,24 @@ type EmpresaRow = {
     email?: string | null;
     observacoes?: string | null;
   }[];
-  socios?: {
-    id: string;
-    nome: string;
-    qualificacao?: string | null;
-    pais_origem?: string | null;
-    nome_representante_legal?: string | null;
-    qualificacao_representante_legal?: string | null;
-  }[];
-  atividades_economicas?: {
-    id: string;
-    codigo: string;
-    descricao: string;
-    principal: boolean;
-  }[];
+};
+
+type SocioRow = {
+  id: string;
+  empresa_id: string;
+  nome: string;
+  qualificacao?: string | null;
+  pais_origem?: string | null;
+  nome_representante_legal?: string | null;
+  qualificacao_representante_legal?: string | null;
+};
+
+type AtividadeEconomicaRow = {
+  id: string;
+  empresa_id: string;
+  codigo: string;
+  descricao: string;
+  principal: boolean;
 };
 
 type SolicitacaoAssociacaoRow = {
@@ -485,20 +489,22 @@ const EMPRESAS_QUERY = `
         email
         observacoes
       }
-      socios(order_by: { nome: asc }) {
-        id
-        nome
-        qualificacao
-        pais_origem
-        nome_representante_legal
-        qualificacao_representante_legal
-      }
-      atividades_economicas(order_by: [{ principal: desc }, { codigo: asc }]) {
-        id
-        codigo
-        descricao
-        principal
-      }
+    }
+    empresa_socios(order_by: { nome: asc }) {
+      id
+      empresa_id
+      nome
+      qualificacao
+      pais_origem
+      nome_representante_legal
+      qualificacao_representante_legal
+    }
+    empresa_atividades_economicas(order_by: [{ principal: desc }, { codigo: asc }]) {
+      id
+      empresa_id
+      codigo
+      descricao
+      principal
     }
     faixas(order_by: { min_colaboradores: asc }) {
       id
@@ -572,7 +578,13 @@ const Empresas = () => {
   const { data, isLoading, error } = useQuery({
     queryKey: ["empresas-page"],
     queryFn: () =>
-      hasuraRequest<{ empresas: EmpresaRow[]; faixas: FaixaRow[]; solicitacoes_associacao: SolicitacaoAssociacaoRow[] }>({
+      hasuraRequest<{
+        empresas: EmpresaRow[];
+        empresa_socios: SocioRow[];
+        empresa_atividades_economicas: AtividadeEconomicaRow[];
+        faixas: FaixaRow[];
+        solicitacoes_associacao: SolicitacaoAssociacaoRow[];
+      }>({
         query: EMPRESAS_QUERY,
         token,
       }),
@@ -668,21 +680,25 @@ const Empresas = () => {
         responsaveis,
         relacionamentos,
         socios:
-          empresa.socios?.map((socio) => ({
-            id: socio.id,
-            nome: socio.nome,
-            qualificacao: socio.qualificacao ?? undefined,
-            paisOrigem: socio.pais_origem ?? undefined,
-            nomeRepresentanteLegal: socio.nome_representante_legal ?? undefined,
-            qualificacaoRepresentanteLegal: socio.qualificacao_representante_legal ?? undefined,
-          })) ?? [],
+          (data.empresa_socios ?? [])
+            .filter((socio) => socio.empresa_id === empresa.id)
+            .map((socio) => ({
+              id: socio.id,
+              nome: socio.nome,
+              qualificacao: socio.qualificacao ?? undefined,
+              paisOrigem: socio.pais_origem ?? undefined,
+              nomeRepresentanteLegal: socio.nome_representante_legal ?? undefined,
+              qualificacaoRepresentanteLegal: socio.qualificacao_representante_legal ?? undefined,
+            })),
         atividadesEconomicas:
-          empresa.atividades_economicas?.map((atividade) => ({
-            id: atividade.id,
-            codigo: atividade.codigo,
-            descricao: atividade.descricao,
-            principal: atividade.principal,
-          })) ?? [],
+          (data.empresa_atividades_economicas ?? [])
+            .filter((atividade) => atividade.empresa_id === empresa.id)
+            .map((atividade) => ({
+              id: atividade.id,
+              codigo: atividade.codigo,
+              descricao: atividade.descricao,
+              principal: atividade.principal,
+            })),
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -694,7 +710,7 @@ const Empresas = () => {
           })) ?? [],
       };
     });
-  }, [data?.empresas, faixas]);
+  }, [data?.empresa_atividades_economicas, data?.empresa_socios, data?.empresas, faixas]);
 
   const saveEmpresaMutation = useMutation({
     mutationFn: async (payload: { values: Partial<Empresa>; id?: string | null }) => {
