@@ -54,7 +54,7 @@ import {
   UserCheck,
 } from "lucide-react";
 
-const portes = ["MEI", "ME", "EPP", "LTDA", "SA"] as const;
+const portes = ["MEI", "ME", "EPP", "Médias e Grandes Empresas", "LTDA", "SA"] as const;
 const periodoOptions = [
   { value: "fundacao", label: "Fundação" },
   { value: "associacao", label: "Associação" },
@@ -153,6 +153,8 @@ type Empresa = {
   relacionamentos: RelacionamentoEmpresa[];
   socios: SocioEmpresa[];
   atividadesEconomicas: AtividadeEconomica[];
+  qtdFuncionarios?: number;
+  observacoesSolicitacao?: string;
 };
 
 type SolicitacaoAssociacaoPayload = {
@@ -161,6 +163,15 @@ type SolicitacaoAssociacaoPayload = {
   relacionamentos?: RelacionamentoEmpresa[];
   socios?: SocioEmpresa[];
   atividadesEconomicas?: AtividadeEconomica[];
+  enderecoDetalhado?: {
+    cep?: string;
+    logradouro?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    municipio?: string;
+    uf?: string;
+  };
 };
 
 type Faixa = {
@@ -560,6 +571,7 @@ const Empresas = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
+  const [editingSolicitacao, setEditingSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
   const [selectedSolicitacao, setSelectedSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
   const [solicitacaoFaixaOverrides, setSolicitacaoFaixaOverrides] = useState<Record<string, string>>({});
@@ -855,6 +867,70 @@ const Empresas = () => {
     },
   });
 
+  const saveSolicitacaoMutation = useMutation({
+    mutationFn: async ({ solicitacao, values }: { solicitacao: SolicitacaoAssociacaoRow; values: Partial<Empresa> }) => {
+      const responsaveis = (values.responsaveis ?? []).filter(
+        (responsavel) => responsavel.nome || responsavel.cpf || responsavel.email || responsavel.whatsapp,
+      );
+      const responsavelPrincipal = responsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? responsaveis[0];
+      const endereco = buildEmpresaEndereco(values) || values.endereco || null;
+      const payload: SolicitacaoAssociacaoPayload = {
+        ...(solicitacao.payload ?? {}),
+        responsaveis,
+        colaboradores: values.colaboradores ?? [],
+        relacionamentos: values.relacionamentos ?? [],
+        socios: values.socios ?? [],
+        atividadesEconomicas: values.atividadesEconomicas ?? [],
+        enderecoDetalhado: {
+          cep: values.cep,
+          logradouro: values.logradouro,
+          numero: values.numero,
+          complemento: values.complemento,
+          bairro: values.bairro,
+          municipio: values.municipio,
+          uf: values.uf,
+        },
+      };
+
+      await hasuraRequest({
+        query: `
+          mutation AtualizarSolicitacao($id: uuid!, $input: solicitacoes_associacao_set_input!) {
+            update_solicitacoes_associacao_by_pk(pk_columns: { id: $id }, _set: $input) {
+              id
+              status
+            }
+          }
+        `,
+        variables: {
+          id: solicitacao.id,
+          input: {
+            cnpj: values.cnpj ?? "",
+            razao_social: values.razaoSocial?.trim() ?? "",
+            nome_fantasia: values.nomeFantasia?.trim() || null,
+            email: values.email?.trim().toLowerCase() || null,
+            whatsapp: values.whatsapp || null,
+            endereco,
+            porte: values.porte || null,
+            capital_social: values.capitalSocial ?? null,
+            data_fundacao: values.dataFundacao || null,
+            qtd_funcionarios: values.qtdFuncionarios ?? null,
+            responsavel_nome: responsavelPrincipal?.nome?.trim() || null,
+            responsavel_cpf: responsavelPrincipal?.cpf || null,
+            responsavel_email: responsavelPrincipal?.email?.trim().toLowerCase() || null,
+            responsavel_whatsapp: responsavelPrincipal?.whatsapp || null,
+            responsavel_data_nascimento: responsavelPrincipal?.dataAniversario || null,
+            observacoes: values.observacoesSolicitacao?.trim() || null,
+            payload,
+          },
+        },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
   const approveSolicitacaoMutation = useMutation({
     mutationFn: async (solicitacao: SolicitacaoAssociacaoRow) => {
       const payload = solicitacao.payload ?? {};
@@ -1134,6 +1210,7 @@ const Empresas = () => {
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
     lastReceitaWsLookupRef.current = "";
     lastCepLookupRef.current = "";
+    setEditingSolicitacao(null);
     setValidationErrors([]);
     setHasReceitaWsSuggestions(false);
     setIsViewMode(viewMode);
@@ -1181,11 +1258,62 @@ const Empresas = () => {
     setIsDialogOpen(true);
   };
 
+  const handleOpenSolicitacaoEditor = (solicitacao: SolicitacaoAssociacaoRow) => {
+    const payload = solicitacao.payload ?? {};
+    const enderecoParts = {
+      ...parseEnderecoParts(solicitacao.endereco),
+      ...(payload.enderecoDetalhado ?? {}),
+    };
+    const responsaveis = payload.responsaveis?.length
+      ? payload.responsaveis.map((responsavel) => ({ ...responsavel }))
+      : [{
+          nome: solicitacao.responsavel_nome ?? "",
+          cpf: solicitacao.responsavel_cpf ?? "",
+          email: solicitacao.responsavel_email ?? "",
+          whatsapp: solicitacao.responsavel_whatsapp ?? "",
+          dataAniversario: solicitacao.responsavel_data_nascimento ?? "",
+          contatoPrincipal: true,
+        }];
+
+    setSelectedSolicitacao(null);
+    setEditingEmpresa(null);
+    setEditingSolicitacao(solicitacao);
+    setIsViewMode(false);
+    setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
+    setFormData({
+      razaoSocial: solicitacao.razao_social,
+      nomeFantasia: solicitacao.nome_fantasia ?? "",
+      cnpj: solicitacao.cnpj,
+      email: solicitacao.email ?? "",
+      whatsapp: solicitacao.whatsapp ?? "",
+      endereco: solicitacao.endereco ?? undefined,
+      ...enderecoParts,
+      associado: true,
+      situacaoFinanceira: "Regular",
+      porte: (solicitacao.porte as Empresa["porte"]) || "ME",
+      capitalSocial: solicitacao.capital_social ?? undefined,
+      faixaId: getSolicitacaoFaixaId(solicitacao) || undefined,
+      dataFundacao: solicitacao.data_fundacao ?? "",
+      responsaveis,
+      responsavel: responsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? responsaveis[0],
+      colaboradores: payload.colaboradores?.map((colaborador) => ({ ...colaborador })) ?? [],
+      relacionamentos: payload.relacionamentos?.map((relacionamento) => ({ ...relacionamento })) ?? [],
+      socios: payload.socios?.map((socio) => ({ ...socio })) ?? [],
+      atividadesEconomicas: payload.atividadesEconomicas?.map((atividade) => ({ ...atividade })) ?? [],
+      qtdFuncionarios: solicitacao.qtd_funcionarios ?? undefined,
+      observacoesSolicitacao: solicitacao.observacoes ?? "",
+    });
+    setLogoPreview("");
+    setIsDialogOpen(true);
+  };
+
   const handleCloseDialog = () => {
     lastReceitaWsLookupRef.current = "";
     lastCepLookupRef.current = "";
     setIsDialogOpen(false);
     setEditingEmpresa(null);
+    setEditingSolicitacao(null);
     setIsViewMode(false);
     setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [], socios: [], atividadesEconomicas: [] });
     setLogoPreview("");
@@ -1627,6 +1755,33 @@ const Empresas = () => {
     }
     setValidationErrors([]);
 
+    if (editingSolicitacao) {
+      saveSolicitacaoMutation.mutate(
+        { solicitacao: editingSolicitacao, values: formData },
+        {
+          onSuccess: () => {
+            setSolicitacaoFaixaOverrides((prev) => ({
+              ...prev,
+              [editingSolicitacao.id]: formData.faixaId || "",
+            }));
+            toast({
+              title: "Solicitação atualizada",
+              description: "As alterações foram salvas e serão usadas na aprovação.",
+            });
+            handleCloseDialog();
+          },
+          onError: (err) => {
+            toast({
+              title: "Não foi possível atualizar a solicitação",
+              description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+              variant: "destructive",
+            });
+          },
+        },
+      );
+      return;
+    }
+
     saveEmpresaMutation.mutate(
       { values: formData, id: editingEmpresa?.id ?? null },
       {
@@ -1836,7 +1991,7 @@ const Empresas = () => {
                       {solicitacao.observacoes && (
                         <p className="rounded-lg bg-white p-2 text-xs text-muted-foreground">{solicitacao.observacoes}</p>
                       )}
-                      <div className="mt-auto grid gap-2 sm:grid-cols-3">
+                      <div className="mt-auto grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                         <Button
                           type="button"
                           size="sm"
@@ -1846,6 +2001,17 @@ const Empresas = () => {
                         >
                           <Eye className="mr-2 h-4 w-4" />
                           Detalhes
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => handleOpenSolicitacaoEditor(solicitacao)}
+                        >
+                          <Edit className="mr-2 h-4 w-4" />
+                          Editar
                         </Button>
                         <Button
                           type="button"
@@ -2349,9 +2515,17 @@ const Empresas = () => {
             >
               <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>{editingEmpresa ? (isViewMode ? "Visualizar Empresa" : "Editar Empresa") : "Cadastrar Empresa"}</DialogTitle>
+                  <DialogTitle>
+                    {editingSolicitacao
+                      ? "Editar solicitação de associação"
+                      : editingEmpresa
+                        ? (isViewMode ? "Visualizar Empresa" : "Editar Empresa")
+                        : "Cadastrar Empresa"}
+                  </DialogTitle>
                   <DialogDescription>
-                    Preencha os campos obrigatórios para manter os dados atualizados.
+                    {editingSolicitacao
+                      ? "Revise e altere os dados enviados antes de aprovar ou recusar a solicitação."
+                      : "Preencha os campos obrigatórios para manter os dados atualizados."}
                   </DialogDescription>
                 </DialogHeader>
 
@@ -2743,6 +2917,33 @@ const Empresas = () => {
                       />
                     </div>
                   </div>
+
+                  {editingSolicitacao && (
+                    <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                      <div className="space-y-2">
+                        <Label htmlFor="qtdFuncionariosSolicitacao">Quantidade de funcionários</Label>
+                        <Input
+                          id="qtdFuncionariosSolicitacao"
+                          type="number"
+                          min="0"
+                          value={formData.qtdFuncionarios ?? ""}
+                          onChange={(event) => setFormData((prev) => ({
+                            ...prev,
+                            qtdFuncionarios: event.target.value ? Number(event.target.value) : undefined,
+                          }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="observacoesSolicitacao">Observações da solicitação</Label>
+                        <Textarea
+                          id="observacoesSolicitacao"
+                          value={formData.observacoesSolicitacao || ""}
+                          onChange={(event) => setFormData((prev) => ({ ...prev, observacoesSolicitacao: event.target.value }))}
+                          placeholder="Observações enviadas pela empresa ou registradas durante a revisão"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
                     <div className="space-y-2">
@@ -3189,12 +3390,12 @@ const Empresas = () => {
                   </div>
 
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending}>
+                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending}>
                       Cancelar
                     </Button>
                     {!isViewMode && (
-                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending}>
-                        {saveEmpresaMutation.isPending ? "Salvando..." : "Salvar"}
+                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending}>
+                        {saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending ? "Salvando..." : "Salvar"}
                       </Button>
                     )}
                   </div>
@@ -3218,6 +3419,12 @@ const Empresas = () => {
 
                 {selectedSolicitacao && (
                   <div className="space-y-5">
+                    <div className="flex justify-end">
+                      <Button type="button" variant="outline" onClick={() => handleOpenSolicitacaoEditor(selectedSolicitacao)}>
+                        <Edit className="mr-2 h-4 w-4" />
+                        Editar todos os dados
+                      </Button>
+                    </div>
                     <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                         <div>
