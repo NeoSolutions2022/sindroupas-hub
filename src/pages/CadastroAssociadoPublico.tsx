@@ -69,6 +69,29 @@ type ReceitaWsResponse = {
   email?: string;
   telefone?: string;
   capital_social?: string;
+  qsa?: {
+    nome?: string;
+    qual?: string;
+    pais_origem?: string;
+    nome_rep_legal?: string;
+    qual_rep_legal?: string;
+  }[];
+  atividade_principal?: { code?: string; text?: string }[];
+  atividades_secundarias?: { code?: string; text?: string }[];
+};
+
+type SocioReceitaWs = {
+  nome: string;
+  qualificacao?: string;
+  paisOrigem?: string;
+  nomeRepresentanteLegal?: string;
+  qualificacaoRepresentanteLegal?: string;
+};
+
+type AtividadeReceitaWs = {
+  codigo: string;
+  descricao: string;
+  principal: boolean;
 };
 
 type ViaCepResponse = {
@@ -199,6 +222,8 @@ const CadastroAssociadoPublico = () => {
   const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
   const [isLookingUpCep, setIsLookingUpCep] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [sociosReceitaWs, setSociosReceitaWs] = useState<SocioReceitaWs[]>([]);
+  const [atividadesReceitaWs, setAtividadesReceitaWs] = useState<AtividadeReceitaWs[]>([]);
   const lastReceitaWsLookupRef = useRef("");
   const lastCepLookupRef = useRef("");
 
@@ -249,6 +274,29 @@ const CadastroAssociadoPublico = () => {
       capitalSocial: parseReceitaWsCapital(payload.capital_social) || prev.capitalSocial,
       dataFundacao: parseReceitaWsDate(payload.abertura) || prev.dataFundacao,
     }));
+    setSociosReceitaWs(
+      (payload.qsa ?? [])
+        .filter((socio) => socio.nome?.trim())
+        .map((socio) => ({
+          nome: socio.nome!.trim(),
+          qualificacao: socio.qual?.trim() || undefined,
+          paisOrigem: socio.pais_origem?.trim() || undefined,
+          nomeRepresentanteLegal: socio.nome_rep_legal?.trim() || undefined,
+          qualificacaoRepresentanteLegal: socio.qual_rep_legal?.trim() || undefined,
+        })),
+    );
+    setAtividadesReceitaWs(
+      [
+        ...(payload.atividade_principal ?? []).map((atividade) => ({ ...atividade, principal: true })),
+        ...(payload.atividades_secundarias ?? []).map((atividade) => ({ ...atividade, principal: false })),
+      ]
+        .filter((atividade) => atividade.code?.trim() && atividade.text?.trim())
+        .map((atividade) => ({
+          codigo: atividade.code!.trim(),
+          descricao: atividade.text!.trim(),
+          principal: atividade.principal,
+        })),
+    );
   };
 
   const handleReceitaWsLookup = async (cnpjValue = form.cnpj, options?: { silent?: boolean }) => {
@@ -425,6 +473,8 @@ const CadastroAssociadoPublico = () => {
               ],
               colaboradores: [],
               relacionamentos: [],
+              socios: sociosReceitaWs,
+              atividadesEconomicas: atividadesReceitaWs,
               enderecoDetalhado: {
                 cep: form.cep,
                 logradouro: form.logradouro,
@@ -441,6 +491,8 @@ const CadastroAssociadoPublico = () => {
 
       setSubmitted(true);
       setForm(initialForm);
+      setSociosReceitaWs([]);
+      setAtividadesReceitaWs([]);
       toast({
         title: "Solicitação enviada",
         description: "Seu cadastro foi encaminhado para análise do SindRoupas.",
@@ -577,6 +629,42 @@ const CadastroAssociadoPublico = () => {
                   <Input id="dataFundacao" type="date" value={form.dataFundacao} onChange={(event) => updateForm("dataFundacao", event.target.value)} />
                 </div>
               </div>
+
+              {(sociosReceitaWs.length > 0 || atividadesReceitaWs.length > 0) && (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
+                    <h2 className="font-semibold text-[#1C1C1C]">Quadro societário localizado</h2>
+                    <p className="mb-3 text-xs text-muted-foreground">Esses dados serão encaminhados para revisão do sindicato.</p>
+                    {sociosReceitaWs.length ? (
+                      <div className="space-y-2">
+                        {sociosReceitaWs.map((socio, index) => (
+                          <div key={`${socio.nome}-${index}`} className="rounded-md border bg-white p-2 text-sm">
+                            <p className="font-medium">{socio.nome}</p>
+                            <p className="text-xs text-muted-foreground">{socio.qualificacao || "Qualificação não informada"}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <p className="text-sm text-muted-foreground">Nenhum sócio retornado.</p>}
+                  </div>
+                  <div className="rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
+                    <h2 className="font-semibold text-[#1C1C1C]">Atividades econômicas localizadas</h2>
+                    <p className="mb-3 text-xs text-muted-foreground">CNAE principal e atividades secundárias retornadas pela ReceitaWS.</p>
+                    {atividadesReceitaWs.length ? (
+                      <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+                        {atividadesReceitaWs.map((atividade, index) => (
+                          <div key={`${atividade.codigo}-${index}`} className="rounded-md border bg-white p-2 text-sm">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{atividade.codigo}</span>
+                              {atividade.principal && <span className="rounded-full bg-[#DCE7CB] px-2 py-0.5 text-[10px] font-semibold">Principal</span>}
+                            </div>
+                            <p className="text-xs text-muted-foreground">{atividade.descricao}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <p className="text-sm text-muted-foreground">Nenhuma atividade retornada.</p>}
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-xl border border-[#DCE7CB] bg-white p-4">
                 <div className="mb-4">

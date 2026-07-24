@@ -96,6 +96,22 @@ type RelacionamentoEmpresa = {
   observacoes?: string;
 };
 
+type SocioEmpresa = {
+  id?: string;
+  nome: string;
+  qualificacao?: string;
+  paisOrigem?: string;
+  nomeRepresentanteLegal?: string;
+  qualificacaoRepresentanteLegal?: string;
+};
+
+type AtividadeEconomica = {
+  id?: string;
+  codigo: string;
+  descricao: string;
+  principal: boolean;
+};
+
 const relacionamentoTipoOptions: TipoRelacionamento[] = ["Parceiro", "Mantenedor", "Fornecedor"];
 const categoriasParceiro = ["Universidade", "IEL", "FIRJAN", "SEBRAE", "Associação", "Fomento"];
 const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"];
@@ -135,12 +151,16 @@ type Empresa = {
   responsaveis: Responsavel[];
   colaboradores: Colaborador[];
   relacionamentos: RelacionamentoEmpresa[];
+  socios: SocioEmpresa[];
+  atividadesEconomicas: AtividadeEconomica[];
 };
 
 type SolicitacaoAssociacaoPayload = {
   responsaveis?: Responsavel[];
   colaboradores?: Colaborador[];
   relacionamentos?: RelacionamentoEmpresa[];
+  socios?: SocioEmpresa[];
+  atividadesEconomicas?: AtividadeEconomica[];
 };
 
 type Faixa = {
@@ -242,6 +262,20 @@ type EmpresaRow = {
     email?: string | null;
     observacoes?: string | null;
   }[];
+  socios?: {
+    id: string;
+    nome: string;
+    qualificacao?: string | null;
+    pais_origem?: string | null;
+    nome_representante_legal?: string | null;
+    qualificacao_representante_legal?: string | null;
+  }[];
+  atividades_economicas?: {
+    id: string;
+    codigo: string;
+    descricao: string;
+    principal: boolean;
+  }[];
 };
 
 type SolicitacaoAssociacaoRow = {
@@ -297,6 +331,15 @@ type ReceitaWsResponse = {
   cep?: string;
   porte?: string;
   capital_social?: string;
+  qsa?: {
+    nome?: string;
+    qual?: string;
+    pais_origem?: string;
+    nome_rep_legal?: string;
+    qual_rep_legal?: string;
+  }[];
+  atividade_principal?: { code?: string; text?: string }[];
+  atividades_secundarias?: { code?: string; text?: string }[];
 };
 
 const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
@@ -441,6 +484,20 @@ const EMPRESAS_QUERY = `
         cargo
         email
         observacoes
+      }
+      socios(order_by: { nome: asc }) {
+        id
+        nome
+        qualificacao
+        pais_origem
+        nome_representante_legal
+        qualificacao_representante_legal
+      }
+      atividades_economicas(order_by: [{ principal: desc }, { codigo: asc }]) {
+        id
+        codigo
+        descricao
+        principal
       }
     }
     faixas(order_by: { min_colaboradores: asc }) {
@@ -610,6 +667,22 @@ const Empresas = () => {
         responsavel: responsavel ?? null,
         responsaveis,
         relacionamentos,
+        socios:
+          empresa.socios?.map((socio) => ({
+            id: socio.id,
+            nome: socio.nome,
+            qualificacao: socio.qualificacao ?? undefined,
+            paisOrigem: socio.pais_origem ?? undefined,
+            nomeRepresentanteLegal: socio.nome_representante_legal ?? undefined,
+            qualificacaoRepresentanteLegal: socio.qualificacao_representante_legal ?? undefined,
+          })) ?? [],
+        atividadesEconomicas:
+          empresa.atividades_economicas?.map((atividade) => ({
+            id: atividade.id,
+            codigo: atividade.codigo,
+            descricao: atividade.descricao,
+            principal: atividade.principal,
+          })) ?? [],
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -665,6 +738,24 @@ const Empresas = () => {
         payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
       const relacionamentosInput =
         payload.values.relacionamentos?.filter((relacionamento) => relacionamento.tipo) ?? [];
+      const sociosInput = (payload.values.socios ?? [])
+        .filter((socio) => socio.nome.trim())
+        .map((socio) => ({
+          nome: socio.nome.trim(),
+          qualificacao: socio.qualificacao?.trim() || null,
+          pais_origem: socio.paisOrigem?.trim() || null,
+          nome_representante_legal: socio.nomeRepresentanteLegal?.trim() || null,
+          qualificacao_representante_legal: socio.qualificacaoRepresentanteLegal?.trim() || null,
+          origem: "receitaws",
+        }));
+      const atividadesInput = (payload.values.atividadesEconomicas ?? [])
+        .filter((atividade) => atividade.codigo.trim() && atividade.descricao.trim())
+        .map((atividade) => ({
+          codigo: atividade.codigo.trim(),
+          descricao: atividade.descricao.trim(),
+          principal: atividade.principal,
+          origem: "receitaws",
+        }));
 
       if (payload.id) {
         await hasuraRequest({
@@ -681,13 +772,17 @@ const Empresas = () => {
 
         await hasuraRequest({
           query: `
-            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
+            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!, $socios: [empresa_socios_insert_input!]!, $atividades: [empresa_atividades_economicas_insert_input!]!) {
               delete_responsaveis(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               delete_colaboradores(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               delete_relacionamentos(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_empresa_socios(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_empresa_atividades_economicas(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
               insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+              insert_empresa_socios(objects: $socios) { affected_rows }
+              insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
             }
           `,
           variables: {
@@ -695,6 +790,8 @@ const Empresas = () => {
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: payload.id })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: payload.id })),
             relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: payload.id })),
+            socios: sociosInput.map((socio) => ({ ...socio, empresa_id: payload.id })),
+            atividades: atividadesInput.map((atividade) => ({ ...atividade, empresa_id: payload.id })),
           },
           token,
         });
@@ -713,19 +810,23 @@ const Empresas = () => {
       });
 
       const empresaId = created.insert_empresas_one.id;
-      if (responsavelInput.length || colaboradoresInput.length || relacionamentosInput.length) {
+      if (responsavelInput.length || colaboradoresInput.length || relacionamentosInput.length || sociosInput.length || atividadesInput.length) {
         await hasuraRequest({
           query: `
-            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!) {
+            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!, $socios: [empresa_socios_insert_input!]!, $atividades: [empresa_atividades_economicas_insert_input!]!) {
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
               insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+              insert_empresa_socios(objects: $socios) { affected_rows }
+              insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
             }
           `,
           variables: {
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: empresaId })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: empresaId })),
             relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId })),
+            socios: sociosInput.map((socio) => ({ ...socio, empresa_id: empresaId })),
+            atividades: atividadesInput.map((atividade) => ({ ...atividade, empresa_id: empresaId })),
           },
           token,
         });
@@ -800,6 +901,26 @@ const Empresas = () => {
       const relacionamentosInput = (payload.relacionamentos ?? [])
         .filter((relacionamento) => relacionamento.tipo)
         .map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId }));
+      const sociosInput = (payload.socios ?? [])
+        .filter((socio) => socio.nome?.trim())
+        .map((socio) => ({
+          empresa_id: empresaId,
+          nome: socio.nome.trim(),
+          qualificacao: socio.qualificacao?.trim() || null,
+          pais_origem: socio.paisOrigem?.trim() || null,
+          nome_representante_legal: socio.nomeRepresentanteLegal?.trim() || null,
+          qualificacao_representante_legal: socio.qualificacaoRepresentanteLegal?.trim() || null,
+          origem: "receitaws",
+        }));
+      const atividadesInput = (payload.atividadesEconomicas ?? [])
+        .filter((atividade) => atividade.codigo?.trim() && atividade.descricao?.trim())
+        .map((atividade) => ({
+          empresa_id: empresaId,
+          codigo: atividade.codigo.trim(),
+          descricao: atividade.descricao.trim(),
+          principal: Boolean(atividade.principal),
+          origem: "receitaws",
+        }));
 
       await hasuraRequest({
         query: `
@@ -808,12 +929,16 @@ const Empresas = () => {
             $responsaveis: [responsaveis_insert_input!]!
             $colaboradores: [colaboradores_insert_input!]!
             $relacionamentos: [relacionamentos_insert_input!]!
+            $socios: [empresa_socios_insert_input!]!
+            $atividades: [empresa_atividades_economicas_insert_input!]!
             $empresaId: uuid!
             $aprovadoEm: timestamptz!
           ) {
             insert_responsaveis(objects: $responsaveis) { affected_rows }
             insert_colaboradores(objects: $colaboradores) { affected_rows }
             insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+            insert_empresa_socios(objects: $socios) { affected_rows }
+            insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
             update_solicitacoes_associacao_by_pk(
               pk_columns: { id: $solicitacaoId }
               _set: { status: "convertido", empresa_id: $empresaId, aprovado_em: $aprovadoEm }
@@ -825,6 +950,8 @@ const Empresas = () => {
           responsaveis: responsaveisInput,
           colaboradores: colaboradoresInput,
           relacionamentos: relacionamentosInput,
+          socios: sociosInput,
+          atividades: atividadesInput,
           empresaId,
           aprovadoEm: new Date().toISOString(),
         },
@@ -1007,6 +1134,8 @@ const Empresas = () => {
           ? empresa.responsaveis.map((responsavel) => ({ ...responsavel }))
           : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
         relacionamentos: empresa.relacionamentos.length ? empresa.relacionamentos.map((relacionamento) => ({ ...relacionamento })) : [],
+        socios: empresa.socios.map((socio) => ({ ...socio })),
+        atividadesEconomicas: empresa.atividadesEconomicas.map((atividade) => ({ ...atividade })),
         responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview(empresa.logoUrl);
@@ -1027,6 +1156,8 @@ const Empresas = () => {
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
         responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
         relacionamentos: [],
+        socios: [],
+        atividadesEconomicas: [],
         responsavel: { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview("");
@@ -1040,7 +1171,7 @@ const Empresas = () => {
     setIsDialogOpen(false);
     setEditingEmpresa(null);
     setIsViewMode(false);
-    setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [] });
+    setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [], socios: [], atividadesEconomicas: [] });
     setLogoPreview("");
     setValidationErrors([]);
     setHasReceitaWsSuggestions(false);
@@ -1177,6 +1308,57 @@ const Empresas = () => {
     });
   };
 
+  const addSocio = () => {
+    setFormData((prev) => ({
+      ...prev,
+      socios: [...(prev.socios || []), { nome: "", qualificacao: "" }],
+    }));
+  };
+
+  const updateSocio = (index: number, field: keyof SocioEmpresa, value: string) => {
+    setFormData((prev) => {
+      const socios = [...(prev.socios || [])];
+      socios[index] = { ...socios[index], [field]: value };
+      return { ...prev, socios };
+    });
+  };
+
+  const removeSocio = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      socios: (prev.socios || []).filter((_, socioIndex) => socioIndex !== index),
+    }));
+  };
+
+  const addAtividadeEconomica = () => {
+    setFormData((prev) => ({
+      ...prev,
+      atividadesEconomicas: [
+        ...(prev.atividadesEconomicas || []),
+        { codigo: "", descricao: "", principal: !(prev.atividadesEconomicas || []).some((atividade) => atividade.principal) },
+      ],
+    }));
+  };
+
+  const updateAtividadeEconomica = (index: number, field: keyof AtividadeEconomica, value: string | boolean) => {
+    setFormData((prev) => {
+      const atividades = (prev.atividadesEconomicas || []).map((atividade, atividadeIndex) => {
+        if (field === "principal" && value === true) {
+          return { ...atividade, principal: atividadeIndex === index };
+        }
+        return atividadeIndex === index ? { ...atividade, [field]: value } : atividade;
+      });
+      return { ...prev, atividadesEconomicas: atividades };
+    });
+  };
+
+  const removeAtividadeEconomica = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      atividadesEconomicas: (prev.atividadesEconomicas || []).filter((_, atividadeIndex) => atividadeIndex !== index),
+    }));
+  };
+
   const addRelacionamento = () => {
     setFormData((prev) => ({
       ...prev,
@@ -1229,6 +1411,25 @@ const Empresas = () => {
     const porte = normalizeReceitaWsPorte(payload.porte);
     const capitalSocial = parseReceitaWsCapital(payload.capital_social);
     const dataFundacao = parseReceitaWsDate(payload.abertura);
+    const socios = (payload.qsa ?? [])
+      .filter((socio) => socio.nome?.trim())
+      .map((socio) => ({
+        nome: socio.nome!.trim(),
+        qualificacao: socio.qual?.trim() || undefined,
+        paisOrigem: socio.pais_origem?.trim() || undefined,
+        nomeRepresentanteLegal: socio.nome_rep_legal?.trim() || undefined,
+        qualificacaoRepresentanteLegal: socio.qual_rep_legal?.trim() || undefined,
+      }));
+    const atividadesEconomicas = [
+      ...(payload.atividade_principal ?? []).map((atividade) => ({ ...atividade, principal: true })),
+      ...(payload.atividades_secundarias ?? []).map((atividade) => ({ ...atividade, principal: false })),
+    ]
+      .filter((atividade) => atividade.code?.trim() && atividade.text?.trim())
+      .map((atividade) => ({
+        codigo: atividade.code!.trim(),
+        descricao: atividade.text!.trim(),
+        principal: atividade.principal,
+      }));
 
     setFormData((prev) => {
       const nextAddress = {
@@ -1253,6 +1454,8 @@ const Empresas = () => {
         porte: porte || prev.porte,
         capitalSocial: capitalSocial ?? prev.capitalSocial,
         dataFundacao: dataFundacao || prev.dataFundacao,
+        socios: socios.length ? socios : prev.socios,
+        atividadesEconomicas: atividadesEconomicas.length ? atividadesEconomicas : prev.atividadesEconomicas,
       };
     });
     setHasReceitaWsSuggestions(true);
@@ -2572,6 +2775,103 @@ const Empresas = () => {
                   <div className="space-y-4 rounded-lg border p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Quadro societário</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Sócios sugeridos pela ReceitaWS. Revise, complemente ou remova os registros antes de salvar.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addSocio}>+ Sócio</Button>
+                      )}
+                    </div>
+                    {(formData.socios || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhum sócio informado.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {(formData.socios || []).map((socio, index) => (
+                          <div key={`${socio.id || "novo"}-${index}`} className="space-y-3 rounded-md border bg-muted/10 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium">Sócio {index + 1}</p>
+                              {!isViewMode && <Button type="button" variant="ghost" size="sm" onClick={() => removeSocio(index)}>Remover</Button>}
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label>Nome</Label>
+                                <Input value={socio.nome} onChange={(event) => updateSocio(index, "nome", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Qualificação</Label>
+                                <Input value={socio.qualificacao || ""} onChange={(event) => updateSocio(index, "qualificacao", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>País de origem</Label>
+                                <Input value={socio.paisOrigem || ""} onChange={(event) => updateSocio(index, "paisOrigem", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Representante legal</Label>
+                                <Input value={socio.nomeRepresentanteLegal || ""} onChange={(event) => updateSocio(index, "nomeRepresentanteLegal", event.target.value)} disabled={isViewMode} />
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Qualificação do representante legal</Label>
+                              <Input value={socio.qualificacaoRepresentanteLegal || ""} onChange={(event) => updateSocio(index, "qualificacaoRepresentanteLegal", event.target.value)} disabled={isViewMode} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Atividades econômicas (CNAEs)</h3>
+                        <p className="text-sm text-muted-foreground">
+                          A atividade principal e as secundárias são importadas da ReceitaWS e permanecem editáveis.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addAtividadeEconomica}>+ CNAE</Button>
+                      )}
+                    </div>
+                    {(formData.atividadesEconomicas || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhuma atividade econômica informada.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {(formData.atividadesEconomicas || []).map((atividade, index) => (
+                          <div key={`${atividade.id || "novo"}-${index}`} className="space-y-3 rounded-md border bg-muted/10 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <label className="flex items-center gap-2 text-sm font-medium">
+                                <input
+                                  type="radio"
+                                  name="atividade-principal"
+                                  checked={atividade.principal}
+                                  onChange={() => updateAtividadeEconomica(index, "principal", true)}
+                                  disabled={isViewMode}
+                                />
+                                CNAE principal
+                              </label>
+                              {!isViewMode && <Button type="button" variant="ghost" size="sm" onClick={() => removeAtividadeEconomica(index)}>Remover</Button>}
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                              <div className="space-y-2">
+                                <Label>Código</Label>
+                                <Input value={atividade.codigo} onChange={(event) => updateAtividadeEconomica(index, "codigo", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Descrição</Label>
+                                <Input value={atividade.descricao} onChange={(event) => updateAtividadeEconomica(index, "descricao", event.target.value)} disabled={isViewMode} />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
                         <h3 className="text-lg font-semibold text-[#1C1C1C]">Vínculos institucionais/comerciais</h3>
                         <p className="text-sm text-muted-foreground">
                           Use para indicar quando a empresa também é parceira, mantenedora ou fornecedora. Isso não altera o campo Associado.
@@ -3025,6 +3325,43 @@ const Empresas = () => {
                               </div>
                             ) : (
                               <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum vínculo enviado.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Quadro societário</h4>
+                            {(selectedSolicitacao.payload?.socios?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.socios?.map((socio, index) => (
+                                  <div key={`${socio.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{socio.nome}</p>
+                                    <p className="text-muted-foreground">Qualificação: {socio.qualificacao || "—"}</p>
+                                    <p className="text-muted-foreground">País de origem: {socio.paisOrigem || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum sócio retornado pela ReceitaWS.</p>
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Atividades econômicas</h4>
+                            {(selectedSolicitacao.payload?.atividadesEconomicas?.length ?? 0) > 0 ? (
+                              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                                {selectedSolicitacao.payload?.atividadesEconomicas?.map((atividade, index) => (
+                                  <div key={`${atividade.codigo}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="font-medium">{atividade.codigo}</p>
+                                      {atividade.principal && <Badge variant="outline">Principal</Badge>}
+                                    </div>
+                                    <p className="text-muted-foreground">{atividade.descricao}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum CNAE retornado pela ReceitaWS.</p>
                             )}
                           </div>
                         </div>
