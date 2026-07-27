@@ -182,6 +182,29 @@ type Faixa = {
   label: string;
 };
 
+const FAIXA_LIMITES_POR_NUMERO: Record<number, { min: number; max: number | null }> = {
+  1: { min: 0, max: 50 },
+  2: { min: 51, max: 100 },
+  3: { min: 101, max: 200 },
+  4: { min: 201, max: 500 },
+  5: { min: 501, max: null },
+};
+
+const getFaixaLimites = (faixa: Faixa) => {
+  const labelNormalizado = normalizeSearchText(faixa.label);
+  const numeroFaixa = Number(labelNormalizado.match(/\bfaixa\s*([1-5])\b/)?.[1]);
+  const limitesPadrao = FAIXA_LIMITES_POR_NUMERO[numeroFaixa];
+
+  if (limitesPadrao) return limitesPadrao;
+
+  const min = Number(faixa.min ?? 0);
+  const max = Number(faixa.max ?? 0);
+  return {
+    min: Number.isFinite(min) ? min : 0,
+    max: Number.isFinite(max) && max > 0 ? max : null,
+  };
+};
+
 const formatCurrency = (value?: number) => {
   if (value === undefined || value === null) return "-";
   return new Intl.NumberFormat("pt-BR", {
@@ -619,15 +642,14 @@ const Empresas = () => {
   }, [data?.faixas]);
 
   const getFaixaByQtdFuncionarios = (qtdFuncionarios?: number | null) => {
-    const qtd = Number(qtdFuncionarios ?? 0);
-    if (!Number.isFinite(qtd) || qtd <= 0) return undefined;
+    if (qtdFuncionarios === undefined || qtdFuncionarios === null) return undefined;
+    const qtd = Number(qtdFuncionarios);
+    if (!Number.isFinite(qtd) || qtd < 0) return undefined;
 
     return faixas.find((faixa) => {
       if (normalizeSearchText(faixa.label).includes("cotista")) return false;
-      const min = Number(faixa.min ?? 0);
-      const max = Number(faixa.max ?? 0);
-      const hasNoUpperLimit = max <= 0;
-      return qtd >= min && (hasNoUpperLimit || qtd <= max);
+      const { min, max } = getFaixaLimites(faixa);
+      return qtd >= min && (max === null || qtd <= max);
     });
   };
 
