@@ -9,6 +9,7 @@ import {
   Eye,
   Download,
   MessageCircle,
+  Mail,
   RefreshCw,
   MoreHorizontal,
 } from "lucide-react";
@@ -23,6 +24,8 @@ interface BoletoActionsCellProps {
   onCancel?: () => void;
   onDescription?: () => void;
   onWhatsApp?: () => void;
+  onEmail?: () => void;
+  onReplicate?: () => void;
   onCommunication?: () => void;
   onEditCompany?: () => void;
 }
@@ -36,12 +39,30 @@ export function BoletoActionsCell({
   onChangeDueDate,
   onCancel,
   onDescription,
+  onWhatsApp,
+  onEmail,
+  onReplicate,
   onCommunication,
   onEditCompany,
 }: BoletoActionsCellProps) {
   const isOverdue = status === "Atrasado" || status === "Vencido";
-  const isPaid = status === "Pago";
   const isCanceled = status === "Cancelado";
+  const communicationItems = (
+    <>
+      {onWhatsApp && (
+        <DropdownMenuItem onClick={onWhatsApp}>
+          <MessageCircle className="h-4 w-4 mr-2" />
+          Enviar por WhatsApp
+        </DropdownMenuItem>
+      )}
+      {onEmail && (
+        <DropdownMenuItem onClick={onEmail}>
+          <Mail className="h-4 w-4 mr-2" />
+          Enviar por e-mail
+        </DropdownMenuItem>
+      )}
+    </>
+  );
 
   if (isOverdue) {
     return (
@@ -79,6 +100,7 @@ export function BoletoActionsCell({
                 </a>
               </DropdownMenuItem>
             )}
+            {communicationItems}
             <DropdownMenuItem onClick={onDetails}>
               <Eye className="h-4 w-4 mr-2" />
               Detalhes
@@ -102,21 +124,7 @@ export function BoletoActionsCell({
     );
   }
 
-  if (isPaid) {
-    return (
-      <div className="flex items-center justify-end gap-1">
-        <Button variant="outline" size="sm" onClick={onDetails} className="h-8 text-xs">
-          <Eye className="h-3.5 w-3.5 mr-1" />
-          Detalhes
-        </Button>
-        <Button variant="ghost" size="icon" onClick={onDownload} className="h-8 w-8">
-          <Download className="h-4 w-4" />
-        </Button>
-      </div>
-    );
-  }
-
-  // Pendente / Emitida / Cancelada
+  // Pendente / Emitida / Pago / Cancelada
   return (
     <div className="flex items-center justify-end gap-1">
       {isCanceled && (
@@ -155,6 +163,13 @@ export function BoletoActionsCell({
                 <MessageCircle className="h-4 w-4 mr-2" />
                 WhatsApp
               </a>
+            </DropdownMenuItem>
+          )}
+          {communicationItems}
+          {onReplicate && (
+            <DropdownMenuItem onClick={onReplicate}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Replicar
             </DropdownMenuItem>
           )}
           {onChangeDueDate && (

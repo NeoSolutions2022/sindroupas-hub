@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -29,16 +29,19 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSearchParams } from "react-router-dom";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
 import {
   Calendar,
+  CheckCircle2,
   ChevronDown,
   Download,
   Edit,
@@ -48,9 +51,10 @@ import {
   Search,
   Trash2,
   Upload,
+  UserCheck,
 } from "lucide-react";
 
-const portes = ["MEI", "ME", "EPP", "LTDA", "SA"] as const;
+const portes = ["MEI", "ME", "EPP", "Médias e Grandes Empresas", "LTDA", "SA"] as const;
 const periodoOptions = [
   { value: "fundacao", label: "Fundação" },
   { value: "associacao", label: "Associação" },
@@ -65,7 +69,11 @@ const normalizeSearchText = (value?: string | null) =>
 
 type Responsavel = {
   nome?: string;
+  cpf?: string;
+  dataAniversario?: string;
   whatsapp?: string;
+  email?: string;
+  contatoPrincipal?: boolean;
 };
 
 type Colaborador = {
@@ -77,6 +85,42 @@ type Colaborador = {
   observacoes?: string;
 };
 
+type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
+type RelacionamentoEmpresa = {
+  id?: string;
+  tipo: TipoRelacionamento;
+  categoria?: string;
+  status: string;
+  descricao?: string;
+  contrapartidas?: string;
+  observacoes?: string;
+};
+
+type SocioEmpresa = {
+  id?: string;
+  nome: string;
+  qualificacao?: string;
+  paisOrigem?: string;
+  nomeRepresentanteLegal?: string;
+  qualificacaoRepresentanteLegal?: string;
+};
+
+type AtividadeEconomica = {
+  id?: string;
+  codigo: string;
+  descricao: string;
+  principal: boolean;
+};
+
+const relacionamentoTipoOptions: TipoRelacionamento[] = ["Parceiro", "Mantenedor", "Fornecedor"];
+const categoriasParceiro = ["Universidade", "IEL", "FIRJAN", "SEBRAE", "Associação", "Fomento"];
+const categoriasFornecedor = ["Estrutura", "Papelaria", "Brindes", "Audiovisual"];
+const relacionamentoStatusOptions: Record<TipoRelacionamento, string[]> = {
+  Parceiro: ["Ativo", "Em avaliação", "Encerrado"],
+  Mantenedor: ["Ativo", "Encerrado"],
+  Fornecedor: ["Ativo", "Em análise", "Recusado"],
+};
+
 type Empresa = {
   id: string;
   logoUrl: string;
@@ -86,17 +130,48 @@ type Empresa = {
   email?: string;
   whatsapp?: string;
   endereco?: string;
+  cep?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
   associado: boolean;
   situacaoFinanceira: "Regular" | "Inadimplente";
   porte: typeof portes[number];
   capitalSocial?: number;
+  descontoMensalidadePercentual?: number;
   faixaId?: string;
   faixaLabel?: string;
   dataFundacao: string;
   dataAssociacao?: string | null;
   dataDesassociacao?: string | null;
   responsavel?: Responsavel | null;
+  responsaveis: Responsavel[];
   colaboradores: Colaborador[];
+  relacionamentos: RelacionamentoEmpresa[];
+  socios: SocioEmpresa[];
+  atividadesEconomicas: AtividadeEconomica[];
+  qtdFuncionarios?: number;
+  observacoesSolicitacao?: string;
+};
+
+type SolicitacaoAssociacaoPayload = {
+  responsaveis?: Responsavel[];
+  colaboradores?: Colaborador[];
+  relacionamentos?: RelacionamentoEmpresa[];
+  socios?: SocioEmpresa[];
+  atividadesEconomicas?: AtividadeEconomica[];
+  enderecoDetalhado?: {
+    cep?: string;
+    logradouro?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    municipio?: string;
+    uf?: string;
+  };
 };
 
 type Faixa = {
@@ -105,6 +180,29 @@ type Faixa = {
   max: number;
   valor: number;
   label: string;
+};
+
+const FAIXA_LIMITES_POR_NUMERO: Record<number, { min: number; max: number | null }> = {
+  1: { min: 0, max: 50 },
+  2: { min: 51, max: 100 },
+  3: { min: 101, max: 200 },
+  4: { min: 201, max: 500 },
+  5: { min: 501, max: null },
+};
+
+const getFaixaLimites = (faixa: Faixa) => {
+  const labelNormalizado = normalizeSearchText(faixa.label);
+  const numeroFaixa = Number(labelNormalizado.match(/\bfaixa\s*([1-5])\b/)?.[1]);
+  const limitesPadrao = FAIXA_LIMITES_POR_NUMERO[numeroFaixa];
+
+  if (limitesPadrao) return limitesPadrao;
+
+  const min = Number(faixa.min ?? 0);
+  const max = Number(faixa.max ?? 0);
+  return {
+    min: Number.isFinite(min) ? min : 0,
+    max: Number.isFinite(max) && max > 0 ? max : null,
+  };
 };
 
 const formatCurrency = (value?: number) => {
@@ -148,6 +246,12 @@ const formatPhone = (value: string) => {
     .slice(0, 15);
 };
 
+const formatCep = (value: string) =>
+  value
+    .replace(/\D/g, "")
+    .replace(/(\d{5})(\d)/, "$1-$2")
+    .slice(0, 9);
+
 type EmpresaRow = {
   id: string;
   razao_social?: string | null;
@@ -160,11 +264,29 @@ type EmpresaRow = {
   situacao_financeira?: "Regular" | "Inadimplente" | null;
   porte?: string | null;
   capital_social?: number | null;
+  desconto_mensalidade_percentual?: number | null;
   faixa_id?: string | null;
   data_fundacao?: string | null;
   data_associacao?: string | null;
   data_desassociacao?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
+  responsaveis?: {
+    id: string;
+    nome?: string | null;
+    whatsapp?: string | null;
+    email?: string | null;
+    data_aniversario?: string | null;
+    cpf?: string | null;
+    contato_principal?: boolean | null;
+  }[];
+  relacionamentos?: {
+    id: string;
+    tipo?: string | null;
+    categoria?: string | null;
+    status?: string | null;
+    descricao?: string | null;
+    contrapartidas?: string | null;
+    observacoes?: string | null;
+  }[];
   colaboradores?: {
     id: string;
     nome?: string | null;
@@ -174,6 +296,47 @@ type EmpresaRow = {
     email?: string | null;
     observacoes?: string | null;
   }[];
+};
+
+type SocioRow = {
+  id: string;
+  empresa_id: string;
+  nome: string;
+  qualificacao?: string | null;
+  pais_origem?: string | null;
+  nome_representante_legal?: string | null;
+  qualificacao_representante_legal?: string | null;
+};
+
+type AtividadeEconomicaRow = {
+  id: string;
+  empresa_id: string;
+  codigo: string;
+  descricao: string;
+  principal: boolean;
+};
+
+type SolicitacaoAssociacaoRow = {
+  id: string;
+  status: "pendente" | "em_analise" | "aprovado" | "recusado" | "convertido" | string;
+  cnpj: string;
+  razao_social: string;
+  nome_fantasia?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
+  endereco?: string | null;
+  porte?: string | null;
+  capital_social?: number | null;
+  data_fundacao?: string | null;
+  qtd_funcionarios?: number | null;
+  responsavel_nome?: string | null;
+  responsavel_cpf?: string | null;
+  responsavel_email?: string | null;
+  responsavel_whatsapp?: string | null;
+  responsavel_data_nascimento?: string | null;
+  payload?: SolicitacaoAssociacaoPayload | null;
+  observacoes?: string | null;
+  created_at?: string | null;
 };
 
 const getEmpresaDisplayName = (empresa: Pick<EmpresaRow, "nome_fantasia" | "razao_social">) => {
@@ -186,6 +349,132 @@ type FaixaRow = {
   min_colaboradores?: number | null;
   max_colaboradores?: number | null;
   valor_mensalidade?: number | null;
+};
+
+type ReceitaWsResponse = {
+  status?: "OK" | "ERROR" | string;
+  message?: string;
+  cnpj?: string;
+  abertura?: string;
+  nome?: string;
+  fantasia?: string;
+  email?: string;
+  telefone?: string;
+  logradouro?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  municipio?: string;
+  uf?: string;
+  cep?: string;
+  porte?: string;
+  capital_social?: string;
+  qsa?: {
+    nome?: string;
+    qual?: string;
+    pais_origem?: string;
+    nome_rep_legal?: string;
+    qual_rep_legal?: string;
+  }[];
+  atividade_principal?: { code?: string; text?: string }[];
+  atividades_secundarias?: { code?: string; text?: string }[];
+};
+
+const RECEITA_WS_PROXY_BASE_PATH = "/api/receitaws/v1/cnpj";
+const VIA_CEP_BASE_URL = "https://viacep.com.br/ws";
+
+const ufOptions = [
+  "AC",
+  "AL",
+  "AP",
+  "AM",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MT",
+  "MS",
+  "MG",
+  "PA",
+  "PB",
+  "PR",
+  "PE",
+  "PI",
+  "RJ",
+  "RN",
+  "RS",
+  "RO",
+  "RR",
+  "SC",
+  "SP",
+  "SE",
+  "TO",
+] as const;
+
+type ViaCepResponse = {
+  cep?: string;
+  logradouro?: string;
+  complemento?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
+  erro?: boolean;
+};
+
+const buildReceitaWsRequestUrl = (cnpj: string) => `${RECEITA_WS_PROXY_BASE_PATH}/${cnpj}`;
+
+const parseReceitaWsDate = (value?: string) => {
+  if (!value) return undefined;
+  const [day, month, year] = value.split("/");
+  if (!day || !month || !year) return undefined;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+};
+
+const normalizeReceitaWsPorte = (value?: string): Empresa["porte"] | undefined => {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return undefined;
+  if (normalized.includes("mei") || normalized.includes("microempreendedor")) return "MEI";
+  if (normalized.includes("micro empresa") || normalized.includes("microempresa")) return "ME";
+  if (normalized.includes("pequeno porte") || normalized.includes("epp")) return "EPP";
+  if (normalized.includes("sociedade anonima") || normalized === "sa" || normalized.includes("s/a")) return "SA";
+  if (normalized.includes("ltda") || normalized.includes("limitada")) return "LTDA";
+  return undefined;
+};
+
+const parseReceitaWsCapital = (value?: string) => {
+  if (!value) return undefined;
+  const normalized = value.replace(/[^\d,.-]/g, "").replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const buildEmpresaEndereco = (values: Partial<Empresa>) => {
+  const street = [values.logradouro?.trim(), values.numero?.trim()].filter(Boolean).join(", ");
+  const details = [values.complemento?.trim(), values.bairro?.trim()].filter(Boolean).join(" - ");
+  const city = [values.municipio?.trim(), values.uf?.trim()].filter(Boolean).join("/");
+  const cep = values.cep?.trim() ? `CEP ${values.cep.trim()}` : "";
+  return [street, details, city, cep].filter(Boolean).join(" • ");
+};
+
+const parseEnderecoParts = (endereco?: string | null): Partial<Empresa> => {
+  if (!endereco) return {};
+  const [streetPart = "", detailsPart = "", cityPart = "", cepPart = ""] = endereco.split(" • ").map((part) => part.trim());
+  const [logradouro = "", numero = ""] = streetPart.split(/,\s*/);
+  const [complementoOrBairro = "", bairroMaybe = ""] = detailsPart.split(/\s+-\s+/);
+  const [municipio = "", uf = ""] = cityPart.split("/");
+  const cep = cepPart.replace(/^CEP\s*/i, "");
+
+  return {
+    logradouro: logradouro || undefined,
+    numero: numero || undefined,
+    complemento: bairroMaybe ? complementoOrBairro : undefined,
+    bairro: bairroMaybe || complementoOrBairro || undefined,
+    municipio: municipio || undefined,
+    uf: uf || undefined,
+    cep: cep ? formatCep(cep) : undefined,
+  };
 };
 
 const EMPRESAS_QUERY = `
@@ -202,6 +491,7 @@ const EMPRESAS_QUERY = `
       situacao_financeira
       porte
       capital_social
+      desconto_mensalidade_percentual
       faixa_id
       data_fundacao
       data_associacao
@@ -210,6 +500,19 @@ const EMPRESAS_QUERY = `
         id
         nome
         whatsapp
+        email
+        data_aniversario
+        cpf
+        contato_principal
+      }
+      relacionamentos {
+        id
+        tipo
+        categoria
+        status
+        descricao
+        contrapartidas
+        observacoes
       }
       colaboradores {
         id
@@ -221,12 +524,54 @@ const EMPRESAS_QUERY = `
         observacoes
       }
     }
+    empresa_socios(order_by: { nome: asc }) {
+      id
+      empresa_id
+      nome
+      qualificacao
+      pais_origem
+      nome_representante_legal
+      qualificacao_representante_legal
+    }
+    empresa_atividades_economicas(order_by: [{ principal: desc }, { codigo: asc }]) {
+      id
+      empresa_id
+      codigo
+      descricao
+      principal
+    }
     faixas(order_by: { min_colaboradores: asc }) {
       id
       label
       min_colaboradores
       max_colaboradores
       valor_mensalidade
+    }
+    solicitacoes_associacao(
+      where: { status: { _in: ["pendente", "em_analise", "aprovado"] } }
+      order_by: { created_at: desc }
+      limit: 20
+    ) {
+      id
+      status
+      cnpj
+      razao_social
+      nome_fantasia
+      email
+      whatsapp
+      endereco
+      porte
+      capital_social
+      data_fundacao
+      qtd_funcionarios
+      responsavel_nome
+      responsavel_cpf
+      responsavel_email
+      responsavel_whatsapp
+      responsavel_data_nascimento
+      payload
+      observacoes
+      created_at
     }
   }
 `;
@@ -235,6 +580,7 @@ const Empresas = () => {
   const isMobile = useIsMobile();
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState("");
   const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
@@ -248,21 +594,38 @@ const Empresas = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
+  const [editingSolicitacao, setEditingSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
   const [empresaToDelete, setEmpresaToDelete] = useState<Empresa | null>(null);
+  const [selectedSolicitacao, setSelectedSolicitacao] = useState<SolicitacaoAssociacaoRow | null>(null);
+  const [solicitacaoFaixaOverrides, setSolicitacaoFaixaOverrides] = useState<Record<string, string>>({});
+  const [solicitacoesComFaixaAberta, setSolicitacoesComFaixaAberta] = useState<string[]>([]);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const [formData, setFormData] = useState<Partial<Empresa>>({ colaboradores: [] });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [isLookingUpCnpj, setIsLookingUpCnpj] = useState(false);
+  const [hasReceitaWsSuggestions, setHasReceitaWsSuggestions] = useState(false);
+  const [isLookingUpCep, setIsLookingUpCep] = useState(false);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const lastReceitaWsLookupRef = useRef<string>("");
+  const lastCepLookupRef = useRef<string>("");
   const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["empresas-page"],
     queryFn: () =>
-      hasuraRequest<{ empresas: EmpresaRow[]; faixas: FaixaRow[] }>({
+      hasuraRequest<{
+        empresas: EmpresaRow[];
+        empresa_socios: SocioRow[];
+        empresa_atividades_economicas: AtividadeEconomicaRow[];
+        faixas: FaixaRow[];
+        solicitacoes_associacao: SolicitacaoAssociacaoRow[];
+      }>({
         query: EMPRESAS_QUERY,
         token,
       }),
   });
+
+  const solicitacoesAssociacao = data?.solicitacoes_associacao ?? [];
 
   const faixas = useMemo<Faixa[]>(() => {
     return (
@@ -278,13 +641,55 @@ const Empresas = () => {
     );
   }, [data?.faixas]);
 
+  const getFaixaByQtdFuncionarios = (qtdFuncionarios?: number | null) => {
+    if (qtdFuncionarios === undefined || qtdFuncionarios === null) return undefined;
+    const qtd = Number(qtdFuncionarios);
+    if (!Number.isFinite(qtd) || qtd < 0) return undefined;
+
+    return faixas.find((faixa) => {
+      if (normalizeSearchText(faixa.label).includes("cotista")) return false;
+      const { min, max } = getFaixaLimites(faixa);
+      return qtd >= min && (max === null || qtd <= max);
+    });
+  };
+
+  const getSolicitacaoFaixaId = (solicitacao: SolicitacaoAssociacaoRow) => {
+    return solicitacaoFaixaOverrides[solicitacao.id] || getFaixaByQtdFuncionarios(solicitacao.qtd_funcionarios)?.id || "";
+  };
+
+  const toggleSolicitacaoFaixaSelect = (solicitacaoId: string) => {
+    setSolicitacoesComFaixaAberta((prev) =>
+      prev.includes(solicitacaoId) ? prev.filter((id) => id !== solicitacaoId) : [...prev, solicitacaoId],
+    );
+  };
+
   const empresas = useMemo<Empresa[]>(() => {
     if (!data?.empresas) return [];
     return data.empresas.map((empresa) => {
       const faixaLabel = empresa.faixa_id ? faixas.find((faixa) => faixa.id === empresa.faixa_id)?.label : undefined;
-      const responsavel = empresa.responsaveis?.[0];
+      const responsaveis =
+        empresa.responsaveis?.map((responsavel) => ({
+          nome: responsavel.nome ?? undefined,
+          cpf: responsavel.cpf ?? undefined,
+          dataAniversario: responsavel.data_aniversario ?? undefined,
+          whatsapp: responsavel.whatsapp ?? undefined,
+          email: responsavel.email ?? undefined,
+          contatoPrincipal: Boolean(responsavel.contato_principal),
+        })) ?? [];
+      const responsavel = responsaveis.find((item) => item.contatoPrincipal) ?? responsaveis[0];
+      const relacionamentos =
+        empresa.relacionamentos?.map((relacionamento) => ({
+          id: relacionamento.id,
+          tipo: (relacionamento.tipo as TipoRelacionamento) ?? "Parceiro",
+          categoria: relacionamento.categoria ?? undefined,
+          status: relacionamento.status ?? "Ativo",
+          descricao: relacionamento.descricao ?? undefined,
+          contrapartidas: relacionamento.contrapartidas ?? undefined,
+          observacoes: relacionamento.observacoes ?? undefined,
+        })) ?? [];
       const nomeFantasia = getEmpresaDisplayName(empresa);
       const razaoSocial = empresa.razao_social?.trim() || nomeFantasia;
+      const enderecoParts = parseEnderecoParts(empresa.endereco);
       return {
         id: empresa.id,
         logoUrl: "",
@@ -294,18 +699,40 @@ const Empresas = () => {
         email: empresa.email ?? undefined,
         whatsapp: empresa.whatsapp ?? undefined,
         endereco: empresa.endereco ?? undefined,
+        ...enderecoParts,
         associado: Boolean(empresa.associada),
         situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
         porte: (empresa.porte as Empresa["porte"]) ?? "ME",
         capitalSocial: empresa.capital_social ?? undefined,
+        descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
         faixaId: empresa.faixa_id ?? undefined,
         faixaLabel,
         dataFundacao: empresa.data_fundacao ?? "",
         dataAssociacao: empresa.data_associacao ?? null,
         dataDesassociacao: empresa.data_desassociacao ?? null,
-        responsavel: responsavel
-          ? { nome: responsavel.nome ?? undefined, whatsapp: responsavel.whatsapp ?? undefined }
-          : null,
+        responsavel: responsavel ?? null,
+        responsaveis,
+        relacionamentos,
+        socios:
+          (data.empresa_socios ?? [])
+            .filter((socio) => socio.empresa_id === empresa.id)
+            .map((socio) => ({
+              id: socio.id,
+              nome: socio.nome,
+              qualificacao: socio.qualificacao ?? undefined,
+              paisOrigem: socio.pais_origem ?? undefined,
+              nomeRepresentanteLegal: socio.nome_representante_legal ?? undefined,
+              qualificacaoRepresentanteLegal: socio.qualificacao_representante_legal ?? undefined,
+            })),
+        atividadesEconomicas:
+          (data.empresa_atividades_economicas ?? [])
+            .filter((atividade) => atividade.empresa_id === empresa.id)
+            .map((atividade) => ({
+              id: atividade.id,
+              codigo: atividade.codigo,
+              descricao: atividade.descricao,
+              principal: atividade.principal,
+            })),
         colaboradores:
           empresa.colaboradores?.map((colaborador) => ({
             nome: colaborador.nome ?? "",
@@ -317,10 +744,11 @@ const Empresas = () => {
           })) ?? [],
       };
     });
-  }, [data?.empresas, faixas]);
+  }, [data?.empresa_atividades_economicas, data?.empresa_socios, data?.empresas, faixas]);
 
   const saveEmpresaMutation = useMutation({
     mutationFn: async (payload: { values: Partial<Empresa>; id?: string | null }) => {
+      const enderecoConsolidado = buildEmpresaEndereco(payload.values);
       const input = {
         razao_social: payload.values.razaoSocial ?? "",
         nome_fantasia: payload.values.nomeFantasia ?? "",
@@ -329,23 +757,55 @@ const Empresas = () => {
         situacao_financeira: payload.values.situacaoFinanceira ?? "Regular",
         porte: payload.values.porte ?? "ME",
         capital_social: payload.values.capitalSocial ?? null,
+        desconto_mensalidade_percentual: payload.values.descontoMensalidadePercentual ?? 0,
         faixa_id: payload.values.faixaId ?? null,
         email: payload.values.email ?? null,
         whatsapp: payload.values.whatsapp ?? null,
-        endereco: payload.values.endereco ?? null,
+        endereco: enderecoConsolidado || payload.values.endereco || null,
         data_fundacao: payload.values.dataFundacao ?? null,
         data_associacao: payload.values.dataAssociacao ?? null,
         data_desassociacao: payload.values.dataDesassociacao ?? null,
       };
 
-      const responsavel = payload.values.responsavel;
-      const responsavelInput =
-        responsavel?.nome || responsavel?.whatsapp
-          ? [{ nome: responsavel?.nome ?? "", whatsapp: responsavel?.whatsapp ?? "" }]
-          : [];
+      const responsaveisBase =
+        payload.values.responsaveis?.length
+          ? payload.values.responsaveis
+          : payload.values.responsavel
+            ? [payload.values.responsavel]
+            : [];
+      const responsavelInput = responsaveisBase
+        .filter((responsavel) => responsavel.nome || responsavel.whatsapp || responsavel.email || responsavel.cpf)
+        .map((responsavel) => ({
+          nome: responsavel.nome ?? "",
+          whatsapp: responsavel.whatsapp ?? "",
+          email: responsavel.email || null,
+          data_aniversario: responsavel.dataAniversario || null,
+          cpf: responsavel.cpf || null,
+          contato_principal: Boolean(responsavel.contatoPrincipal),
+        }));
 
       const colaboradoresInput =
         payload.values.colaboradores?.filter((colaborador) => colaborador.nome || colaborador.cpf) ?? [];
+      const relacionamentosInput =
+        payload.values.relacionamentos?.filter((relacionamento) => relacionamento.tipo) ?? [];
+      const sociosInput = (payload.values.socios ?? [])
+        .filter((socio) => socio.nome.trim())
+        .map((socio) => ({
+          nome: socio.nome.trim(),
+          qualificacao: socio.qualificacao?.trim() || null,
+          pais_origem: socio.paisOrigem?.trim() || null,
+          nome_representante_legal: socio.nomeRepresentanteLegal?.trim() || null,
+          qualificacao_representante_legal: socio.qualificacaoRepresentanteLegal?.trim() || null,
+          origem: "receitaws",
+        }));
+      const atividadesInput = (payload.values.atividadesEconomicas ?? [])
+        .filter((atividade) => atividade.codigo.trim() && atividade.descricao.trim())
+        .map((atividade) => ({
+          codigo: atividade.codigo.trim(),
+          descricao: atividade.descricao.trim(),
+          principal: atividade.principal,
+          origem: "receitaws",
+        }));
 
       if (payload.id) {
         await hasuraRequest({
@@ -362,17 +822,26 @@ const Empresas = () => {
 
         await hasuraRequest({
           query: `
-            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation RefreshRelacionados($empresaId: uuid!, $responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!, $socios: [empresa_socios_insert_input!]!, $atividades: [empresa_atividades_economicas_insert_input!]!) {
               delete_responsaveis(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               delete_colaboradores(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_relacionamentos(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_empresa_socios(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
+              delete_empresa_atividades_economicas(where: { empresa_id: { _eq: $empresaId } }) { affected_rows }
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+              insert_empresa_socios(objects: $socios) { affected_rows }
+              insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
             }
           `,
           variables: {
             empresaId: payload.id,
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: payload.id })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: payload.id })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: payload.id })),
+            socios: sociosInput.map((socio) => ({ ...socio, empresa_id: payload.id })),
+            atividades: atividadesInput.map((atividade) => ({ ...atividade, empresa_id: payload.id })),
           },
           token,
         });
@@ -391,23 +860,243 @@ const Empresas = () => {
       });
 
       const empresaId = created.insert_empresas_one.id;
-      if (responsavelInput.length || colaboradoresInput.length) {
+      if (responsavelInput.length || colaboradoresInput.length || relacionamentosInput.length || sociosInput.length || atividadesInput.length) {
         await hasuraRequest({
           query: `
-            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!) {
+            mutation InsertRelacionados($responsaveis: [responsaveis_insert_input!]!, $colaboradores: [colaboradores_insert_input!]!, $relacionamentos: [relacionamentos_insert_input!]!, $socios: [empresa_socios_insert_input!]!, $atividades: [empresa_atividades_economicas_insert_input!]!) {
               insert_responsaveis(objects: $responsaveis) { affected_rows }
               insert_colaboradores(objects: $colaboradores) { affected_rows }
+              insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+              insert_empresa_socios(objects: $socios) { affected_rows }
+              insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
             }
           `,
           variables: {
             responsaveis: responsavelInput.map((r) => ({ ...r, empresa_id: empresaId })),
             colaboradores: colaboradoresInput.map((c) => ({ ...c, empresa_id: empresaId })),
+            relacionamentos: relacionamentosInput.map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId })),
+            socios: sociosInput.map((socio) => ({ ...socio, empresa_id: empresaId })),
+            atividades: atividadesInput.map((atividade) => ({ ...atividade, empresa_id: empresaId })),
           },
           token,
         });
       }
 
       return empresaId;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const saveSolicitacaoMutation = useMutation({
+    mutationFn: async ({ solicitacao, values }: { solicitacao: SolicitacaoAssociacaoRow; values: Partial<Empresa> }) => {
+      const responsaveis = (values.responsaveis ?? []).filter(
+        (responsavel) => responsavel.nome || responsavel.cpf || responsavel.email || responsavel.whatsapp,
+      );
+      const responsavelPrincipal = responsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? responsaveis[0];
+      const endereco = buildEmpresaEndereco(values) || values.endereco || null;
+      const payload: SolicitacaoAssociacaoPayload = {
+        ...(solicitacao.payload ?? {}),
+        responsaveis,
+        colaboradores: values.colaboradores ?? [],
+        relacionamentos: values.relacionamentos ?? [],
+        socios: values.socios ?? [],
+        atividadesEconomicas: values.atividadesEconomicas ?? [],
+        enderecoDetalhado: {
+          cep: values.cep,
+          logradouro: values.logradouro,
+          numero: values.numero,
+          complemento: values.complemento,
+          bairro: values.bairro,
+          municipio: values.municipio,
+          uf: values.uf,
+        },
+      };
+
+      await hasuraRequest({
+        query: `
+          mutation AtualizarSolicitacao($id: uuid!, $input: solicitacoes_associacao_set_input!) {
+            update_solicitacoes_associacao_by_pk(pk_columns: { id: $id }, _set: $input) {
+              id
+              status
+            }
+          }
+        `,
+        variables: {
+          id: solicitacao.id,
+          input: {
+            cnpj: values.cnpj ?? "",
+            razao_social: values.razaoSocial?.trim() ?? "",
+            nome_fantasia: values.nomeFantasia?.trim() || null,
+            email: values.email?.trim().toLowerCase() || null,
+            whatsapp: values.whatsapp || null,
+            endereco,
+            porte: values.porte || null,
+            capital_social: values.capitalSocial ?? null,
+            data_fundacao: values.dataFundacao || null,
+            qtd_funcionarios: values.qtdFuncionarios ?? null,
+            responsavel_nome: responsavelPrincipal?.nome?.trim() || null,
+            responsavel_cpf: responsavelPrincipal?.cpf || null,
+            responsavel_email: responsavelPrincipal?.email?.trim().toLowerCase() || null,
+            responsavel_whatsapp: responsavelPrincipal?.whatsapp || null,
+            responsavel_data_nascimento: responsavelPrincipal?.dataAniversario || null,
+            observacoes: values.observacoesSolicitacao?.trim() || null,
+            payload,
+          },
+        },
+        token,
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const approveSolicitacaoMutation = useMutation({
+    mutationFn: async (solicitacao: SolicitacaoAssociacaoRow) => {
+      const payload = solicitacao.payload ?? {};
+      const responsaveisFromPayload = payload.responsaveis ?? [];
+      const responsaveis: Responsavel[] = responsaveisFromPayload.length
+        ? responsaveisFromPayload
+        : [
+            {
+              nome: solicitacao.responsavel_nome ?? "",
+              cpf: solicitacao.responsavel_cpf ?? "",
+              dataAniversario: solicitacao.responsavel_data_nascimento ?? "",
+              whatsapp: solicitacao.responsavel_whatsapp ?? "",
+              email: solicitacao.responsavel_email ?? "",
+              contatoPrincipal: true,
+            },
+          ];
+
+      const empresaInput = {
+        razao_social: solicitacao.razao_social,
+        nome_fantasia: solicitacao.nome_fantasia || solicitacao.razao_social,
+        cnpj: solicitacao.cnpj,
+        associada: true,
+        situacao_financeira: "Regular",
+        porte: solicitacao.porte || "ME",
+        capital_social: solicitacao.capital_social ?? null,
+        desconto_mensalidade_percentual: 0,
+        faixa_id: getSolicitacaoFaixaId(solicitacao) || null,
+        email: solicitacao.email || solicitacao.responsavel_email || null,
+        whatsapp: solicitacao.whatsapp || solicitacao.responsavel_whatsapp || null,
+        endereco: solicitacao.endereco || null,
+        data_fundacao: solicitacao.data_fundacao || null,
+        data_associacao: new Date().toISOString().slice(0, 10),
+      };
+
+      const created = await hasuraRequest<{ insert_empresas_one: { id: string } }>({
+        query: `
+          mutation AprovarSolicitacaoEmpresa($input: empresas_insert_input!) {
+            insert_empresas_one(object: $input) { id }
+          }
+        `,
+        variables: { input: empresaInput },
+        token,
+      });
+
+      const empresaId = created.insert_empresas_one.id;
+      const responsaveisInput = responsaveis
+        .filter((responsavel) => responsavel.nome || responsavel.whatsapp || responsavel.email || responsavel.cpf)
+        .map((responsavel, index) => ({
+          empresa_id: empresaId,
+          nome: responsavel.nome ?? "",
+          whatsapp: responsavel.whatsapp ?? "",
+          email: responsavel.email || null,
+          data_aniversario: responsavel.dataAniversario || null,
+          cpf: responsavel.cpf || null,
+          contato_principal: responsavel.contatoPrincipal ?? index === 0,
+        }));
+      const colaboradoresInput = (payload.colaboradores ?? [])
+        .filter((colaborador) => colaborador.nome || colaborador.cpf)
+        .map((colaborador) => ({ ...colaborador, empresa_id: empresaId }));
+      const relacionamentosInput = (payload.relacionamentos ?? [])
+        .filter((relacionamento) => relacionamento.tipo)
+        .map((relacionamento) => ({ ...relacionamento, empresa_id: empresaId }));
+      const sociosInput = (payload.socios ?? [])
+        .filter((socio) => socio.nome?.trim())
+        .map((socio) => ({
+          empresa_id: empresaId,
+          nome: socio.nome.trim(),
+          qualificacao: socio.qualificacao?.trim() || null,
+          pais_origem: socio.paisOrigem?.trim() || null,
+          nome_representante_legal: socio.nomeRepresentanteLegal?.trim() || null,
+          qualificacao_representante_legal: socio.qualificacaoRepresentanteLegal?.trim() || null,
+          origem: "receitaws",
+        }));
+      const atividadesInput = (payload.atividadesEconomicas ?? [])
+        .filter((atividade) => atividade.codigo?.trim() && atividade.descricao?.trim())
+        .map((atividade) => ({
+          empresa_id: empresaId,
+          codigo: atividade.codigo.trim(),
+          descricao: atividade.descricao.trim(),
+          principal: Boolean(atividade.principal),
+          origem: "receitaws",
+        }));
+
+      await hasuraRequest({
+        query: `
+          mutation FinalizarSolicitacao(
+            $solicitacaoId: uuid!
+            $responsaveis: [responsaveis_insert_input!]!
+            $colaboradores: [colaboradores_insert_input!]!
+            $relacionamentos: [relacionamentos_insert_input!]!
+            $socios: [empresa_socios_insert_input!]!
+            $atividades: [empresa_atividades_economicas_insert_input!]!
+            $empresaId: uuid!
+            $aprovadoEm: timestamptz!
+          ) {
+            insert_responsaveis(objects: $responsaveis) { affected_rows }
+            insert_colaboradores(objects: $colaboradores) { affected_rows }
+            insert_relacionamentos(objects: $relacionamentos) { affected_rows }
+            insert_empresa_socios(objects: $socios) { affected_rows }
+            insert_empresa_atividades_economicas(objects: $atividades) { affected_rows }
+            update_solicitacoes_associacao_by_pk(
+              pk_columns: { id: $solicitacaoId }
+              _set: { status: "convertido", empresa_id: $empresaId, aprovado_em: $aprovadoEm }
+            ) { id status empresa_id }
+          }
+        `,
+        variables: {
+          solicitacaoId: solicitacao.id,
+          responsaveis: responsaveisInput,
+          colaboradores: colaboradoresInput,
+          relacionamentos: relacionamentosInput,
+          socios: sociosInput,
+          atividades: atividadesInput,
+          empresaId,
+          aprovadoEm: new Date().toISOString(),
+        },
+        token,
+      });
+    },
+    onSuccess: async (_data, solicitacao) => {
+      setSolicitacaoFaixaOverrides((prev) => {
+        const next = { ...prev };
+        delete next[solicitacao.id];
+        return next;
+      });
+      setSolicitacoesComFaixaAberta((prev) => prev.filter((id) => id !== solicitacao.id));
+      await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
+    },
+  });
+
+  const rejectSolicitacaoMutation = useMutation({
+    mutationFn: async (solicitacaoId: string) => {
+      await hasuraRequest({
+        query: `
+          mutation RecusarSolicitacao($id: uuid!, $recusadoEm: timestamptz!) {
+            update_solicitacoes_associacao_by_pk(
+              pk_columns: { id: $id }
+              _set: { status: "recusado", recusado_em: $recusadoEm }
+            ) { id status }
+          }
+        `,
+        variables: { id: solicitacaoId, recusadoEm: new Date().toISOString() },
+        token,
+      });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["empresas-page"] });
@@ -456,6 +1145,7 @@ const Empresas = () => {
         empresa.razaoSocial,
         empresa.nomeFantasia,
         empresa.responsavel?.nome,
+        ...empresa.responsaveis.map((responsavel) => [responsavel.nome, responsavel.cpf, responsavel.email].filter(Boolean).join(" ")),
         ...empresa.colaboradores.map((colaborador) => colaborador.nome),
       ].join(" "));
       const cnpjDigits = empresa.cnpj.replace(/\D/g, "");
@@ -540,7 +1230,11 @@ const Empresas = () => {
   };
 
   const handleOpenDialog = (empresa?: Empresa, viewMode = false) => {
+    lastReceitaWsLookupRef.current = "";
+    lastCepLookupRef.current = "";
+    setEditingSolicitacao(null);
     setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
     setIsViewMode(viewMode);
     if (empresa) {
       setEditingEmpresa(empresa);
@@ -551,7 +1245,13 @@ const Empresas = () => {
           : [
               { nome: "", cpf: "", whatsapp: "", cargo: "", email: "" },
             ],
-        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", whatsapp: "" },
+        responsaveis: empresa.responsaveis.length
+          ? empresa.responsaveis.map((responsavel) => ({ ...responsavel }))
+          : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: empresa.relacionamentos.length ? empresa.relacionamentos.map((relacionamento) => ({ ...relacionamento })) : [],
+        socios: empresa.socios.map((socio) => ({ ...socio })),
+        atividadesEconomicas: empresa.atividadesEconomicas.map((atividade) => ({ ...atividade })),
+        responsavel: empresa.responsavel ? { ...empresa.responsavel } : { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview(empresa.logoUrl);
     } else {
@@ -560,25 +1260,111 @@ const Empresas = () => {
         associado: true,
         situacaoFinanceira: "Regular",
         porte: "ME",
+        descontoMensalidadePercentual: 0,
+        cep: "",
+        logradouro: "",
+        numero: "",
+        complemento: "",
+        bairro: "",
+        municipio: "",
+        uf: "",
         colaboradores: [{ nome: "", cpf: "", whatsapp: "", cargo: "", email: "" }],
-        responsavel: { nome: "", whatsapp: "" },
+        responsaveis: [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }],
+        relacionamentos: [],
+        socios: [],
+        atividadesEconomicas: [],
+        responsavel: { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
       });
       setLogoPreview("");
     }
     setIsDialogOpen(true);
   };
 
+  const handleOpenSolicitacaoEditor = (solicitacao: SolicitacaoAssociacaoRow) => {
+    const payload = solicitacao.payload ?? {};
+    const enderecoParts = {
+      ...parseEnderecoParts(solicitacao.endereco),
+      ...(payload.enderecoDetalhado ?? {}),
+    };
+    const responsaveis = payload.responsaveis?.length
+      ? payload.responsaveis.map((responsavel) => ({ ...responsavel }))
+      : [{
+          nome: solicitacao.responsavel_nome ?? "",
+          cpf: solicitacao.responsavel_cpf ?? "",
+          email: solicitacao.responsavel_email ?? "",
+          whatsapp: solicitacao.responsavel_whatsapp ?? "",
+          dataAniversario: solicitacao.responsavel_data_nascimento ?? "",
+          contatoPrincipal: true,
+        }];
+
+    setSelectedSolicitacao(null);
+    setEditingEmpresa(null);
+    setEditingSolicitacao(solicitacao);
+    setIsViewMode(false);
+    setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
+    setFormData({
+      razaoSocial: solicitacao.razao_social,
+      nomeFantasia: solicitacao.nome_fantasia ?? "",
+      cnpj: solicitacao.cnpj,
+      email: solicitacao.email ?? "",
+      whatsapp: solicitacao.whatsapp ?? "",
+      endereco: solicitacao.endereco ?? undefined,
+      ...enderecoParts,
+      associado: true,
+      situacaoFinanceira: "Regular",
+      porte: (solicitacao.porte as Empresa["porte"]) || "ME",
+      capitalSocial: solicitacao.capital_social ?? undefined,
+      faixaId: getSolicitacaoFaixaId(solicitacao) || undefined,
+      dataFundacao: solicitacao.data_fundacao ?? "",
+      responsaveis,
+      responsavel: responsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? responsaveis[0],
+      colaboradores: payload.colaboradores?.map((colaborador) => ({ ...colaborador })) ?? [],
+      relacionamentos: payload.relacionamentos?.map((relacionamento) => ({ ...relacionamento })) ?? [],
+      socios: payload.socios?.map((socio) => ({ ...socio })) ?? [],
+      atividadesEconomicas: payload.atividadesEconomicas?.map((atividade) => ({ ...atividade })) ?? [],
+      qtdFuncionarios: solicitacao.qtd_funcionarios ?? undefined,
+      observacoesSolicitacao: solicitacao.observacoes ?? "",
+    });
+    setLogoPreview("");
+    setIsDialogOpen(true);
+  };
+
   const handleCloseDialog = () => {
+    lastReceitaWsLookupRef.current = "";
+    lastCepLookupRef.current = "";
     setIsDialogOpen(false);
     setEditingEmpresa(null);
+    setEditingSolicitacao(null);
     setIsViewMode(false);
-    setFormData({ colaboradores: [] });
+    setFormData({ colaboradores: [], responsaveis: [], relacionamentos: [], socios: [], atividadesEconomicas: [] });
     setLogoPreview("");
     setValidationErrors([]);
+    setHasReceitaWsSuggestions(false);
     if (logoInputRef.current) {
       logoInputRef.current.value = "";
     }
   };
+
+  useEffect(() => {
+    const empresaId = searchParams.get("editar");
+    if (!empresaId || !empresas.length) return;
+
+    const empresa = empresas.find((item) => item.id === empresaId);
+    if (empresa) {
+      handleOpenDialog(empresa, false);
+    } else {
+      toast({
+        title: "Empresa não encontrada",
+        description: "Não foi possível abrir os dados completos desta empresa.",
+        variant: "destructive",
+      });
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("editar");
+    setSearchParams(nextParams, { replace: true });
+  }, [empresas, searchParams, setSearchParams, toast]);
 
   const clearValidationError = (field: string) => {
     setValidationErrors((prev) => prev.filter((item) => item !== field));
@@ -637,14 +1423,145 @@ const Empresas = () => {
     });
   };
 
-  const handleResponsavelChange = (field: keyof Responsavel, value: string) => {
+  const addResponsavel = () => {
     setFormData((prev) => ({
       ...prev,
-      responsavel: {
-        ...(prev.responsavel || {}),
-        [field]: field === "whatsapp" ? formatPhone(value) : value,
-      },
+      responsaveis: [
+        ...(prev.responsaveis || []),
+        { nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false },
+      ],
     }));
+  };
+
+  const removeResponsavel = (index: number) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      responsaveis.splice(index, 1);
+      return { ...prev, responsaveis };
+    });
+  };
+
+  const updateResponsavel = (index: number, field: keyof Responsavel, value: string | boolean) => {
+    setFormData((prev) => {
+      const responsaveis = [...(prev.responsaveis || [])];
+      const current = responsaveis[index] || {};
+      const formattedValue =
+        field === "cpf" && typeof value === "string"
+          ? formatCpf(value)
+          : field === "whatsapp" && typeof value === "string"
+            ? formatPhone(value)
+            : value;
+
+      const nextResponsaveis = responsaveis.map((responsavel, responsavelIndex) => {
+        if (field === "contatoPrincipal" && value === true) {
+          return {
+            ...responsavel,
+            contatoPrincipal: responsavelIndex === index,
+          };
+        }
+        return responsavelIndex === index ? { ...current, [field]: formattedValue } : responsavel;
+      });
+
+      if (!nextResponsaveis[index]) {
+        nextResponsaveis[index] = { ...current, [field]: formattedValue };
+      }
+
+      return {
+        ...prev,
+        responsaveis: nextResponsaveis,
+        responsavel: nextResponsaveis.find((responsavel) => responsavel.contatoPrincipal) ?? nextResponsaveis[0],
+      };
+    });
+  };
+
+  const addSocio = () => {
+    setFormData((prev) => ({
+      ...prev,
+      socios: [...(prev.socios || []), { nome: "", qualificacao: "" }],
+    }));
+  };
+
+  const updateSocio = (index: number, field: keyof SocioEmpresa, value: string) => {
+    setFormData((prev) => {
+      const socios = [...(prev.socios || [])];
+      socios[index] = { ...socios[index], [field]: value };
+      return { ...prev, socios };
+    });
+  };
+
+  const removeSocio = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      socios: (prev.socios || []).filter((_, socioIndex) => socioIndex !== index),
+    }));
+  };
+
+  const addAtividadeEconomica = () => {
+    setFormData((prev) => ({
+      ...prev,
+      atividadesEconomicas: [
+        ...(prev.atividadesEconomicas || []),
+        { codigo: "", descricao: "", principal: !(prev.atividadesEconomicas || []).some((atividade) => atividade.principal) },
+      ],
+    }));
+  };
+
+  const updateAtividadeEconomica = (index: number, field: keyof AtividadeEconomica, value: string | boolean) => {
+    setFormData((prev) => {
+      const atividades = (prev.atividadesEconomicas || []).map((atividade, atividadeIndex) => {
+        if (field === "principal" && value === true) {
+          return { ...atividade, principal: atividadeIndex === index };
+        }
+        return atividadeIndex === index ? { ...atividade, [field]: value } : atividade;
+      });
+      return { ...prev, atividadesEconomicas: atividades };
+    });
+  };
+
+  const removeAtividadeEconomica = (index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      atividadesEconomicas: (prev.atividadesEconomicas || []).filter((_, atividadeIndex) => atividadeIndex !== index),
+    }));
+  };
+
+  const addRelacionamento = () => {
+    setFormData((prev) => ({
+      ...prev,
+      relacionamentos: [
+        ...(prev.relacionamentos || []),
+        { tipo: "Parceiro", status: "Ativo", categoria: "", descricao: "", contrapartidas: "", observacoes: "" },
+      ],
+    }));
+  };
+
+  const removeRelacionamento = (index: number) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      relacionamentos.splice(index, 1);
+      return { ...prev, relacionamentos };
+    });
+  };
+
+  const updateRelacionamento = (index: number, field: keyof RelacionamentoEmpresa, value: string) => {
+    setFormData((prev) => {
+      const relacionamentos = [...(prev.relacionamentos || [])];
+      const current = relacionamentos[index] || { tipo: "Parceiro", status: "Ativo" };
+      const next = { ...current, [field]: value } as RelacionamentoEmpresa;
+
+      if (field === "tipo") {
+        const tipo = value as TipoRelacionamento;
+        next.tipo = tipo;
+        next.status = relacionamentoStatusOptions[tipo][0];
+        next.categoria = "";
+        next.descricao = "";
+        next.contrapartidas = "";
+        next.observacoes = "";
+      }
+
+      relacionamentos[index] = next;
+      return { ...prev, relacionamentos };
+    });
   };
 
   const handleFaixaChange = (value: string) => {
@@ -656,6 +1573,189 @@ const Empresas = () => {
     setFormData((prev) => ({ ...prev, faixaId: value, faixaLabel: faixaSelecionada?.label }));
   };
 
+  const applyReceitaWsData = (payload: ReceitaWsResponse, cnpj: string) => {
+    const porte = normalizeReceitaWsPorte(payload.porte);
+    const capitalSocial = parseReceitaWsCapital(payload.capital_social);
+    const dataFundacao = parseReceitaWsDate(payload.abertura);
+    const socios = (payload.qsa ?? [])
+      .filter((socio) => socio.nome?.trim())
+      .map((socio) => ({
+        nome: socio.nome!.trim(),
+        qualificacao: socio.qual?.trim() || undefined,
+        paisOrigem: socio.pais_origem?.trim() || undefined,
+        nomeRepresentanteLegal: socio.nome_rep_legal?.trim() || undefined,
+        qualificacaoRepresentanteLegal: socio.qual_rep_legal?.trim() || undefined,
+      }));
+    const atividadesEconomicas = [
+      ...(payload.atividade_principal ?? []).map((atividade) => ({ ...atividade, principal: true })),
+      ...(payload.atividades_secundarias ?? []).map((atividade) => ({ ...atividade, principal: false })),
+    ]
+      .filter((atividade) => atividade.code?.trim() && atividade.text?.trim())
+      .map((atividade) => ({
+        codigo: atividade.code!.trim(),
+        descricao: atividade.text!.trim(),
+        principal: atividade.principal,
+      }));
+
+    setFormData((prev) => {
+      const nextAddress = {
+        ...prev,
+        cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+        logradouro: payload.logradouro?.trim() || prev.logradouro,
+        numero: payload.numero?.trim() || prev.numero,
+        complemento: payload.complemento?.trim() || prev.complemento,
+        bairro: payload.bairro?.trim() || prev.bairro,
+        municipio: payload.municipio?.trim() || prev.municipio,
+        uf: payload.uf?.trim() || prev.uf,
+      };
+
+      return {
+        ...nextAddress,
+        cnpj: formatCnpj(payload.cnpj || cnpj),
+        razaoSocial: payload.nome?.trim() || prev.razaoSocial,
+        nomeFantasia: payload.fantasia?.trim() || prev.nomeFantasia || payload.nome?.trim(),
+        email: payload.email?.trim().toLowerCase() || prev.email,
+        whatsapp: payload.telefone ? formatPhone(payload.telefone) : prev.whatsapp,
+        endereco: buildEmpresaEndereco(nextAddress) || prev.endereco,
+        porte: porte || prev.porte,
+        capitalSocial: capitalSocial ?? prev.capitalSocial,
+        dataFundacao: dataFundacao || prev.dataFundacao,
+        socios: socios.length ? socios : prev.socios,
+        atividadesEconomicas: atividadesEconomicas.length ? atividadesEconomicas : prev.atividadesEconomicas,
+      };
+    });
+    setHasReceitaWsSuggestions(true);
+    setValidationErrors((prev) => prev.filter((field) => !["razaoSocial", "cnpj", "porte", "dataFundacao"].includes(field)));
+  };
+
+  const handleReceitaWsLookup = async (cnpjValue = formData.cnpj || "", options?: { silent?: boolean }) => {
+    const cnpjDigits = cnpjValue.replace(/\D/g, "");
+    if (cnpjDigits.length !== 14) {
+      if (!options?.silent) {
+        toast({
+          title: "CNPJ incompleto",
+          description: "Informe os 14 dígitos do CNPJ para buscar na ReceitaWS.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCnpj || (options?.silent && lastReceitaWsLookupRef.current === cnpjDigits)) return;
+
+    try {
+      setIsLookingUpCnpj(true);
+      lastReceitaWsLookupRef.current = cnpjDigits;
+      const response = await fetch(buildReceitaWsRequestUrl(cnpjDigits));
+      const payload = (await response.json()) as ReceitaWsResponse;
+
+      if (!response.ok || payload.status === "ERROR") {
+        throw new Error(payload.message || "Não foi possível consultar esse CNPJ na ReceitaWS.");
+      }
+
+      applyReceitaWsData(payload, cnpjDigits);
+      toast({
+        title: "Dados localizados",
+        description: "Os dados da ReceitaWS foram aplicados como sugestões e podem ser alterados.",
+      });
+    } catch (err) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CNPJ",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCnpj(false);
+    }
+  };
+
+  const handleCnpjChange = (value: string) => {
+    const formattedCnpj = formatCnpj(value);
+    clearValidationError("cnpj");
+    setFormData((prev) => ({ ...prev, cnpj: formattedCnpj }));
+
+    const digits = formattedCnpj.replace(/\D/g, "");
+    if (!isViewMode && digits.length === 14 && lastReceitaWsLookupRef.current !== digits) {
+      void handleReceitaWsLookup(formattedCnpj, { silent: true });
+    }
+  };
+
+  const applyViaCepData = (payload: ViaCepResponse) => {
+    setFormData((prev) => {
+      const nextAddress = {
+        ...prev,
+        cep: payload.cep ? formatCep(payload.cep) : prev.cep,
+        logradouro: payload.logradouro?.trim() || prev.logradouro,
+        complemento: payload.complemento?.trim() || prev.complemento,
+        bairro: payload.bairro?.trim() || prev.bairro,
+        municipio: payload.localidade?.trim() || prev.municipio,
+        uf: payload.uf?.trim() || prev.uf,
+      };
+
+      return {
+        ...nextAddress,
+        endereco: buildEmpresaEndereco(nextAddress) || prev.endereco,
+      };
+    });
+  };
+
+  const handleCepLookup = async (cepValue = formData.cep || "", options?: { silent?: boolean }) => {
+    const cepDigits = cepValue.replace(/\D/g, "");
+    if (cepDigits.length !== 8) {
+      if (!options?.silent) {
+        toast({
+          title: "CEP incompleto",
+          description: "Informe os 8 dígitos do CEP para buscar o endereço.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    if (isLookingUpCep || (options?.silent && lastCepLookupRef.current === cepDigits)) return;
+
+    try {
+      setIsLookingUpCep(true);
+      lastCepLookupRef.current = cepDigits;
+      const response = await fetch(`${VIA_CEP_BASE_URL}/${cepDigits}/json/`);
+      const payload = (await response.json()) as ViaCepResponse;
+
+      if (!response.ok || payload.erro) {
+        throw new Error("CEP não encontrado na ViaCEP.");
+      }
+
+      applyViaCepData(payload);
+      if (!options?.silent) {
+        toast({
+          title: "Endereço localizado",
+          description: "Preenchi os dados disponíveis para o CEP informado.",
+        });
+      }
+    } catch (err) {
+      if (!options?.silent) {
+        toast({
+          title: "Falha ao consultar CEP",
+          description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLookingUpCep(false);
+    }
+  };
+
+  const handleCepChange = (value: string) => {
+    const formattedCep = formatCep(value);
+    setFormData((prev) => ({ ...prev, cep: formattedCep }));
+
+    const digits = formattedCep.replace(/\D/g, "");
+    if (!isViewMode && digits.length === 8 && lastCepLookupRef.current !== digits) {
+      void handleCepLookup(formattedCep, { silent: true });
+    }
+  };
+
   const handleSave = () => {
     const requiredChecks = [
       { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
@@ -663,7 +1763,6 @@ const Empresas = () => {
       { key: "associado", label: "Associado", value: typeof formData.associado === "boolean" ? "ok" : "" },
       { key: "situacaoFinanceira", label: "Situação Financeira", value: formData.situacaoFinanceira },
       { key: "porte", label: "Porte", value: formData.porte },
-      { key: "dataFundacao", label: "Fundação", value: formData.dataFundacao },
     ];
     const missing = requiredChecks.filter((field) => field.value === undefined || field.value === "");
 
@@ -677,6 +1776,33 @@ const Empresas = () => {
       return;
     }
     setValidationErrors([]);
+
+    if (editingSolicitacao) {
+      saveSolicitacaoMutation.mutate(
+        { solicitacao: editingSolicitacao, values: formData },
+        {
+          onSuccess: () => {
+            setSolicitacaoFaixaOverrides((prev) => ({
+              ...prev,
+              [editingSolicitacao.id]: formData.faixaId || "",
+            }));
+            toast({
+              title: "Solicitação atualizada",
+              description: "As alterações foram salvas e serão usadas na aprovação.",
+            });
+            handleCloseDialog();
+          },
+          onError: (err) => {
+            toast({
+              title: "Não foi possível atualizar a solicitação",
+              description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+              variant: "destructive",
+            });
+          },
+        },
+      );
+      return;
+    }
 
     saveEmpresaMutation.mutate(
       { values: formData, id: editingEmpresa?.id ?? null },
@@ -725,20 +1851,28 @@ const Empresas = () => {
   };
 
   const getContatoPrincipal = (empresa: Empresa) => {
-    const responsavelTemWhats = Boolean(empresa.responsavel?.whatsapp);
-    if (empresa.responsavel?.nome && responsavelTemWhats) {
-      return { nome: empresa.responsavel.nome, whatsapp: empresa.responsavel.whatsapp };
+    const responsavelPrincipal = empresa.responsaveis.find((responsavel) => responsavel.contatoPrincipal);
+    if (responsavelPrincipal?.nome) {
+      return {
+        nome: responsavelPrincipal.nome,
+        whatsapp: responsavelPrincipal.whatsapp || "—",
+      };
     }
 
-    if ((!empresa.responsavel || !responsavelTemWhats) && empresa.colaboradores.length) {
-      const colaboradorComWhats = empresa.colaboradores.find((colaborador) => colaborador.whatsapp);
-      if (colaboradorComWhats) {
-        return { nome: colaboradorComWhats.nome, whatsapp: colaboradorComWhats.whatsapp };
-      }
+    const colaboradorContato = empresa.colaboradores.find((colaborador) => colaborador.nome || colaborador.whatsapp);
+    if (colaboradorContato) {
+      return {
+        nome: colaboradorContato.nome || "Colaborador sem nome",
+        whatsapp: colaboradorContato.whatsapp || "—",
+      };
     }
 
-    if (empresa.responsavel?.nome) {
-      return { nome: empresa.responsavel.nome, whatsapp: "—" };
+    const primeiroResponsavel = empresa.responsaveis.find((responsavel) => responsavel.nome || responsavel.whatsapp);
+    if (primeiroResponsavel) {
+      return {
+        nome: primeiroResponsavel.nome || "Responsável sem nome",
+        whatsapp: primeiroResponsavel.whatsapp || "—",
+      };
     }
 
     return null;
@@ -782,6 +1916,183 @@ const Empresas = () => {
               <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
                 {error instanceof Error ? error.message : "Erro ao carregar empresas."}
               </div>
+            )}
+
+            {solicitacoesAssociacao.length > 0 && (
+              <Card className="overflow-hidden border-[#DCE7CB] bg-white shadow-sm">
+                <CardHeader className="border-b bg-[#F7F8F4]">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-full bg-[#DCE7CB] p-2 text-[#1C1C1C]">
+                        <UserCheck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-lg text-[#1C1C1C]">Solicitações públicas de associação</CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                          Revise os cadastros enviados pelo formulário público antes de converter em empresa associada.
+                        </p>
+                      </div>
+                    </div>
+                    <Badge className="w-fit bg-[#7E8C5E] text-white">
+                      {solicitacoesAssociacao.length} pendente(s)
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+                  {solicitacoesAssociacao.map((solicitacao) => {
+                    const faixaSugerida = getFaixaByQtdFuncionarios(solicitacao.qtd_funcionarios);
+                    const faixaSelecionadaId = getSolicitacaoFaixaId(solicitacao);
+                    const faixaSelecionada = faixas.find((faixa) => faixa.id === faixaSelecionadaId);
+                    const deveExibirSelectFaixa = !faixaSugerida || solicitacoesComFaixaAberta.includes(solicitacao.id);
+
+                    return (
+                      <div key={solicitacao.id} className="flex flex-col gap-3 rounded-xl border border-[#DCE7CB] bg-[#FBFCF8] p-4">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold text-[#1C1C1C]">{solicitacao.nome_fantasia || solicitacao.razao_social}</h3>
+                          <Badge variant="outline" className="capitalize">{solicitacao.status.replace("_", " ")}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{solicitacao.razao_social}</p>
+                        <p className="text-xs text-muted-foreground">{solicitacao.cnpj}</p>
+                      </div>
+                      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                        <span><strong className="text-[#1C1C1C]">Responsável:</strong> {solicitacao.responsavel_nome || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Contato:</strong> {solicitacao.responsavel_whatsapp || solicitacao.whatsapp || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">E-mail:</strong> {solicitacao.responsavel_email || solicitacao.email || "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Funcionários:</strong> {solicitacao.qtd_funcionarios ?? "—"}</span>
+                        <span><strong className="text-[#1C1C1C]">Faixa na aprovação:</strong> {faixaSelecionada?.label || "Sem faixa definida"}</span>
+                        <span><strong className="text-[#1C1C1C]">Enviada em:</strong> {formatDate(solicitacao.created_at)}</span>
+                      </div>
+                      <div className="rounded-lg border border-[#DCE7CB] bg-white p-3 text-xs">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="font-semibold text-[#1C1C1C]">Faixa sugerida</p>
+                            <p className="text-muted-foreground">
+                              {faixaSugerida
+                                ? `${faixaSugerida.label} baseada em ${solicitacao.qtd_funcionarios ?? 0} funcionário(s).`
+                                : "Nenhuma faixa encontrada para a quantidade de funcionários informada."}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            onClick={() => toggleSolicitacaoFaixaSelect(solicitacao.id)}
+                          >
+                            {deveExibirSelectFaixa ? "Ocultar seleção" : "Editar faixa"}
+                          </Button>
+                        </div>
+                        {deveExibirSelectFaixa && (
+                          <div className="mt-3 space-y-2">
+                            <Label htmlFor={`faixa-solicitacao-${solicitacao.id}`}>Selecionar faixa manualmente</Label>
+                            <Select
+                              value={faixaSelecionadaId || "none"}
+                              onValueChange={(value) =>
+                                setSolicitacaoFaixaOverrides((prev) => ({
+                                  ...prev,
+                                  [solicitacao.id]: value === "none" ? "" : value,
+                                }))
+                              }
+                            >
+                              <SelectTrigger id={`faixa-solicitacao-${solicitacao.id}`}>
+                                <SelectValue placeholder="Selecione uma faixa" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Sem faixa</SelectItem>
+                                {faixas.map((faixa) => (
+                                  <SelectItem key={faixa.id} value={faixa.id}>
+                                    {faixa.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </div>
+                      {solicitacao.observacoes && (
+                        <p className="rounded-lg bg-white p-2 text-xs text-muted-foreground">{solicitacao.observacoes}</p>
+                      )}
+                      <div className="mt-auto grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => setSelectedSolicitacao(solicitacao)}
+                        >
+                          <Eye className="mr-2 h-4 w-4" />
+                          Detalhes
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => handleOpenSolicitacaoEditor(solicitacao)}
+                        >
+                          <Edit className="mr-2 h-4 w-4" />
+                          Editar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="w-full bg-[#00A86B] hover:bg-[#00A86B]/90"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => {
+                            approveSolicitacaoMutation.mutate(solicitacao, {
+                              onSuccess: () => {
+                                toast({
+                                  title: "Solicitação aprovada",
+                                  description: "A empresa associada foi criada a partir do cadastro público.",
+                                });
+                              },
+                              onError: (err) => {
+                                toast({
+                                  title: "Falha ao aprovar solicitação",
+                                  description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+                                  variant: "destructive",
+                                });
+                              },
+                            });
+                          }}
+                        >
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          Aprovar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          disabled={approveSolicitacaoMutation.isPending || rejectSolicitacaoMutation.isPending}
+                          onClick={() => {
+                            rejectSolicitacaoMutation.mutate(solicitacao.id, {
+                              onSuccess: () => {
+                                toast({
+                                  title: "Solicitação recusada",
+                                  description: "O pedido saiu da fila de aprovação.",
+                                });
+                              },
+                              onError: (err) => {
+                                toast({
+                                  title: "Falha ao recusar solicitação",
+                                  description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+                                  variant: "destructive",
+                                });
+                              },
+                            });
+                          }}
+                        >
+                          Recusar
+                        </Button>
+                      </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
             )}
 
             <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
@@ -1226,9 +2537,17 @@ const Empresas = () => {
             >
               <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>{editingEmpresa ? (isViewMode ? "Visualizar Empresa" : "Editar Empresa") : "Cadastrar Empresa"}</DialogTitle>
+                  <DialogTitle>
+                    {editingSolicitacao
+                      ? "Editar solicitação de associação"
+                      : editingEmpresa
+                        ? (isViewMode ? "Visualizar Empresa" : "Editar Empresa")
+                        : "Cadastrar Empresa"}
+                  </DialogTitle>
                   <DialogDescription>
-                    Preencha os campos obrigatórios para manter os dados atualizados.
+                    {editingSolicitacao
+                      ? "Revise e altere os dados enviados antes de aprovar ou recusar a solicitação."
+                      : "Preencha os campos obrigatórios para manter os dados atualizados."}
                   </DialogDescription>
                 </DialogHeader>
 
@@ -1316,17 +2635,39 @@ const Empresas = () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="cnpj">CNPJ*</Label>
-                      <Input
-                        id="cnpj"
-                        placeholder="00.000.000/0000-00"
-                        value={formData.cnpj || ""}
-                        onChange={(e) => {
-                          clearValidationError("cnpj");
-                          setFormData((prev) => ({ ...prev, cnpj: formatCnpj(e.target.value) }));
-                        }}
-                        className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
-                        disabled={isViewMode}
-                      />
+                      <div className="flex gap-2">
+                        <Input
+                          id="cnpj"
+                          placeholder="00.000.000/0000-00"
+                          value={formData.cnpj || ""}
+                          onChange={(e) => handleCnpjChange(e.target.value)}
+                          onBlur={() => void handleReceitaWsLookup(formData.cnpj || "", { silent: true })}
+                          className={cn(validationErrors.includes("cnpj") && "border-destructive focus-visible:ring-destructive")}
+                          disabled={isViewMode || isLookingUpCnpj}
+                        />
+                        {!isViewMode && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void handleReceitaWsLookup()}
+                            disabled={isLookingUpCnpj || (formData.cnpj || "").replace(/\D/g, "").length !== 14}
+                            aria-label="Buscar dados da empresa na ReceitaWS"
+                          >
+                            <Search className="mr-2 h-4 w-4" />
+                            {isLookingUpCnpj ? "Buscando..." : "Buscar"}
+                          </Button>
+                        )}
+                      </div>
+                      {hasReceitaWsSuggestions ? (
+                        <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-800">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span>Dados sugeridos pela ReceitaWS. Revise e altere qualquer campo antes de salvar.</span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Ao informar um CNPJ válido, os dados públicos serão usados como sugestões editáveis para o cadastro.
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="email">E-mail</Label>
@@ -1349,15 +2690,109 @@ const Empresas = () => {
                         disabled={isViewMode}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="endereco">Endereço</Label>
-                      <Input
-                        id="endereco"
-                        placeholder="Rua, número, bairro, cidade"
-                        value={formData.endereco || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, endereco: e.target.value }))}
-                        disabled={isViewMode}
-                      />
+                  </div>
+
+                  <div className="rounded-xl border border-[#DCE7CB] bg-white p-4">
+                    <div className="mb-4">
+                      <h3 className="font-semibold text-[#1C1C1C]">Endereço da empresa</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Informe o CEP para preencher automaticamente com a ViaCEP. No salvamento, os campos são consolidados no endereço único da empresa.
+                      </p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-6">
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaCep">CEP</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="empresaCep"
+                            placeholder="00000-000"
+                            value={formData.cep || ""}
+                            onChange={(e) => handleCepChange(e.target.value)}
+                            onBlur={() => void handleCepLookup(formData.cep || "", { silent: true })}
+                            disabled={isViewMode || isLookingUpCep}
+                          />
+                          {!isViewMode && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void handleCepLookup()}
+                              disabled={isLookingUpCep || (formData.cep || "").replace(/\D/g, "").length !== 8}
+                              className="shrink-0"
+                            >
+                              {isLookingUpCep ? "Buscando..." : "Buscar"}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-2 md:col-span-3">
+                        <Label htmlFor="empresaLogradouro">Rua / Logradouro</Label>
+                        <Input
+                          id="empresaLogradouro"
+                          placeholder="Rua, avenida, travessa..."
+                          value={formData.logradouro || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, logradouro: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaNumero">Número</Label>
+                        <Input
+                          id="empresaNumero"
+                          placeholder="123"
+                          value={formData.numero || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, numero: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaComplemento">Complemento</Label>
+                        <Input
+                          id="empresaComplemento"
+                          placeholder="Sala, bloco, loja..."
+                          value={formData.complemento || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, complemento: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="empresaBairro">Bairro</Label>
+                        <Input
+                          id="empresaBairro"
+                          placeholder="Bairro"
+                          value={formData.bairro || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, bairro: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaUf">Estado</Label>
+                        <Select
+                          value={formData.uf || undefined}
+                          onValueChange={(value) => setFormData((prev) => ({ ...prev, uf: value }))}
+                          disabled={isViewMode}
+                        >
+                          <SelectTrigger id="empresaUf">
+                            <SelectValue placeholder="UF" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ufOptions.map((uf) => (
+                              <SelectItem key={uf} value={uf}>
+                                {uf}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2 md:col-span-1">
+                        <Label htmlFor="empresaMunicipio">Cidade</Label>
+                        <Input
+                          id="empresaMunicipio"
+                          placeholder="Cidade"
+                          value={formData.municipio || ""}
+                          onChange={(e) => setFormData((prev) => ({ ...prev, municipio: e.target.value }))}
+                          disabled={isViewMode}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1463,7 +2898,7 @@ const Empresas = () => {
 
                   <div className="grid gap-4 md:grid-cols-3">
                     <div className="space-y-2">
-                      <Label htmlFor="fundacao">Fundação*</Label>
+                      <Label htmlFor="fundacao">Fundação</Label>
                       <Input
                         id="fundacao"
                         type="date"
@@ -1505,53 +2940,383 @@ const Empresas = () => {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Faixa</Label>
-                    <Select
-                      value={formData.faixaId || "none"}
-                      onValueChange={handleFaixaChange}
-                      disabled={isViewMode}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione a faixa" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Sem faixa</SelectItem>
-                        {faixas.map((faixa) => (
-                          <SelectItem key={faixa.id} value={faixa.id}>
-                            {faixa.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  {editingSolicitacao && (
+                    <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                      <div className="space-y-2">
+                        <Label htmlFor="qtdFuncionariosSolicitacao">Quantidade de funcionários</Label>
+                        <Input
+                          id="qtdFuncionariosSolicitacao"
+                          type="number"
+                          min="0"
+                          value={formData.qtdFuncionarios ?? ""}
+                          onChange={(event) => setFormData((prev) => ({
+                            ...prev,
+                            qtdFuncionarios: event.target.value ? Number(event.target.value) : undefined,
+                          }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="observacoesSolicitacao">Observações da solicitação</Label>
+                        <Textarea
+                          id="observacoesSolicitacao"
+                          value={formData.observacoesSolicitacao || ""}
+                          onChange={(event) => setFormData((prev) => ({ ...prev, observacoesSolicitacao: event.target.value }))}
+                          placeholder="Observações enviadas pela empresa ou registradas durante a revisão"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="space-y-2">
+                      <Label>Faixa</Label>
+                      <Select
+                        value={formData.faixaId || "none"}
+                        onValueChange={handleFaixaChange}
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione a faixa" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Sem faixa</SelectItem>
+                          {faixas.map((faixa) => (
+                            <SelectItem key={faixa.id} value={faixa.id}>
+                              {faixa.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="descontoMensalidade">Desconto mensalidade (%)</Label>
+                      <Input
+                        id="descontoMensalidade"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        placeholder="0,00"
+                        value={formData.descontoMensalidadePercentual ?? 0}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          setFormData((prev) => ({
+                            ...prev,
+                            descontoMensalidadePercentual: Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0,
+                          }));
+                        }}
+                        disabled={isViewMode}
+                      />
+                      <p className="text-xs text-muted-foreground">Aplicado automaticamente nos boletos de mensalidade por faixa.</p>
+                    </div>
                   </div>
 
                   <div className="space-y-4 rounded-lg border p-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsável (opcional)</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Usado como contato principal se houver WhatsApp informado.
-                      </p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Quadro societário</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Sócios sugeridos pela ReceitaWS. Revise, complemente ou remova os registros antes de salvar.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addSocio}>+ Sócio</Button>
+                      )}
                     </div>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>Nome</Label>
-                        <Input
-                          placeholder="Nome do responsável"
-                          value={formData.responsavel?.nome || ""}
-                          onChange={(e) => handleResponsavelChange("nome", e.target.value)}
-                          disabled={isViewMode}
-                        />
+                    {(formData.socios || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhum sócio informado.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {(formData.socios || []).map((socio, index) => (
+                          <div key={`${socio.id || "novo"}-${index}`} className="space-y-3 rounded-md border bg-muted/10 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium">Sócio {index + 1}</p>
+                              {!isViewMode && <Button type="button" variant="ghost" size="sm" onClick={() => removeSocio(index)}>Remover</Button>}
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label>Nome</Label>
+                                <Input value={socio.nome} onChange={(event) => updateSocio(index, "nome", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Qualificação</Label>
+                                <Input value={socio.qualificacao || ""} onChange={(event) => updateSocio(index, "qualificacao", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>País de origem</Label>
+                                <Input value={socio.paisOrigem || ""} onChange={(event) => updateSocio(index, "paisOrigem", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Representante legal</Label>
+                                <Input value={socio.nomeRepresentanteLegal || ""} onChange={(event) => updateSocio(index, "nomeRepresentanteLegal", event.target.value)} disabled={isViewMode} />
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Qualificação do representante legal</Label>
+                              <Input value={socio.qualificacaoRepresentanteLegal || ""} onChange={(event) => updateSocio(index, "qualificacaoRepresentanteLegal", event.target.value)} disabled={isViewMode} />
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div className="space-y-2">
-                        <Label>WhatsApp</Label>
-                        <Input
-                          placeholder="(00) 00000-0000"
-                          value={formData.responsavel?.whatsapp || ""}
-                          onChange={(e) => handleResponsavelChange("whatsapp", e.target.value)}
-                          disabled={isViewMode}
-                        />
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Atividades econômicas (CNAEs)</h3>
+                        <p className="text-sm text-muted-foreground">
+                          A atividade principal e as secundárias são importadas da ReceitaWS e permanecem editáveis.
+                        </p>
                       </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addAtividadeEconomica}>+ CNAE</Button>
+                      )}
+                    </div>
+                    {(formData.atividadesEconomicas || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhuma atividade econômica informada.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {(formData.atividadesEconomicas || []).map((atividade, index) => (
+                          <div key={`${atividade.id || "novo"}-${index}`} className="space-y-3 rounded-md border bg-muted/10 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <label className="flex items-center gap-2 text-sm font-medium">
+                                <input
+                                  type="radio"
+                                  name="atividade-principal"
+                                  checked={atividade.principal}
+                                  onChange={() => updateAtividadeEconomica(index, "principal", true)}
+                                  disabled={isViewMode}
+                                />
+                                CNAE principal
+                              </label>
+                              {!isViewMode && <Button type="button" variant="ghost" size="sm" onClick={() => removeAtividadeEconomica(index)}>Remover</Button>}
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                              <div className="space-y-2">
+                                <Label>Código</Label>
+                                <Input value={atividade.codigo} onChange={(event) => updateAtividadeEconomica(index, "codigo", event.target.value)} disabled={isViewMode} />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Descrição</Label>
+                                <Input value={atividade.descricao} onChange={(event) => updateAtividadeEconomica(index, "descricao", event.target.value)} disabled={isViewMode} />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Vínculos institucionais/comerciais</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Use para indicar quando a empresa também é parceira, mantenedora ou fornecedora. Isso não altera o campo Associado.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addRelacionamento}>
+                          + Vínculo
+                        </Button>
+                      )}
+                    </div>
+                    {(formData.relacionamentos || []).length === 0 ? (
+                      <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                        Nenhum vínculo cadastrado para esta empresa.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {(formData.relacionamentos || []).map((relacionamento, index) => (
+                          <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-medium">Vínculo {index + 1}</p>
+                              {!isViewMode && (
+                                <Button type="button" variant="ghost" size="sm" onClick={() => removeRelacionamento(index)}>
+                                  Remover
+                                </Button>
+                              )}
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label>Tipo</Label>
+                                <Select
+                                  value={relacionamento.tipo}
+                                  onValueChange={(value) => updateRelacionamento(index, "tipo", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o tipo" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoTipoOptions.map((tipo) => (
+                                      <SelectItem key={tipo} value={tipo}>{tipo}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Status</Label>
+                                <Select
+                                  value={relacionamento.status || relacionamentoStatusOptions[relacionamento.tipo][0]}
+                                  onValueChange={(value) => updateRelacionamento(index, "status", value)}
+                                  disabled={isViewMode}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Selecione o status" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {relacionamentoStatusOptions[relacionamento.tipo].map((status) => (
+                                      <SelectItem key={status} value={status}>{status}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              {(relacionamento.tipo === "Parceiro" || relacionamento.tipo === "Fornecedor") && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Categoria</Label>
+                                  <Select
+                                    value={relacionamento.categoria || "none"}
+                                    onValueChange={(value) => updateRelacionamento(index, "categoria", value === "none" ? "" : value)}
+                                    disabled={isViewMode}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Selecione a categoria" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Sem categoria</SelectItem>
+                                      {(relacionamento.tipo === "Parceiro" ? categoriasParceiro : categoriasFornecedor).map((categoria) => (
+                                        <SelectItem key={categoria} value={categoria}>{categoria}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Parceiro" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Descrição</Label>
+                                  <Input
+                                    placeholder="Descreva a parceria"
+                                    value={relacionamento.descricao || ""}
+                                    onChange={(e) => updateRelacionamento(index, "descricao", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Mantenedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Contrapartidas</Label>
+                                  <Input
+                                    placeholder="Ex: Logo em eventos, menção em materiais"
+                                    value={relacionamento.contrapartidas || ""}
+                                    onChange={(e) => updateRelacionamento(index, "contrapartidas", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                              {relacionamento.tipo === "Fornecedor" && (
+                                <div className="space-y-2 md:col-span-2">
+                                  <Label>Observações</Label>
+                                  <Input
+                                    placeholder="Observações adicionais"
+                                    value={relacionamento.observacoes || ""}
+                                    onChange={(e) => updateRelacionamento(index, "observacoes", e.target.value)}
+                                    disabled={isViewMode}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-[#1C1C1C]">Responsáveis (opcional)</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Marque contato principal para priorizar um responsável. Sem marcação, o contato principal segue o primeiro colaborador da lista.
+                        </p>
+                      </div>
+                      {!isViewMode && (
+                        <Button type="button" variant="outline" size="sm" onClick={addResponsavel}>
+                          + Responsável
+                        </Button>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      {(formData.responsaveis?.length ? formData.responsaveis : [{ nome: "", cpf: "", dataAniversario: "", whatsapp: "", email: "", contatoPrincipal: false }]).map((responsavel, index) => (
+                        <div key={index} className="rounded-md border p-3 space-y-3 bg-muted/10">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium">Responsável {index + 1}</p>
+                            {!isViewMode && (formData.responsaveis?.length || 0) > 1 && (
+                              <Button type="button" variant="ghost" size="sm" onClick={() => removeResponsavel(index)}>
+                                Remover
+                              </Button>
+                            )}
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label>Nome</Label>
+                              <Input
+                                placeholder="Nome do responsável"
+                                value={responsavel.nome || ""}
+                                onChange={(e) => updateResponsavel(index, "nome", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>CPF</Label>
+                              <Input
+                                placeholder="000.000.000-00"
+                                value={responsavel.cpf || ""}
+                                onChange={(e) => updateResponsavel(index, "cpf", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Data de nascimento</Label>
+                              <Input
+                                type="date"
+                                value={responsavel.dataAniversario || ""}
+                                onChange={(e) => updateResponsavel(index, "dataAniversario", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>E-mail</Label>
+                              <Input
+                                type="email"
+                                placeholder="email@exemplo.com"
+                                value={responsavel.email || ""}
+                                onChange={(e) => updateResponsavel(index, "email", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>WhatsApp</Label>
+                              <Input
+                                placeholder="(00) 00000-0000"
+                                value={responsavel.whatsapp || ""}
+                                onChange={(e) => updateResponsavel(index, "whatsapp", e.target.value)}
+                                disabled={isViewMode}
+                              />
+                            </div>
+                            <label className="flex items-center gap-2 rounded-md border p-3 text-sm md:self-end">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(responsavel.contatoPrincipal)}
+                                onChange={(e) => updateResponsavel(index, "contatoPrincipal", e.target.checked)}
+                                disabled={isViewMode}
+                              />
+                              Contato principal
+                            </label>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -1647,16 +3412,215 @@ const Empresas = () => {
                   </div>
 
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending}>
+                    <Button variant="outline" onClick={handleCloseDialog} disabled={saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending}>
                       Cancelar
                     </Button>
                     {!isViewMode && (
-                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending}>
-                        {saveEmpresaMutation.isPending ? "Salvando..." : "Salvar"}
+                      <Button onClick={handleSave} className="bg-[#1C1C1C] hover:bg-[#1C1C1C]/90" disabled={saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending}>
+                        {saveEmpresaMutation.isPending || saveSolicitacaoMutation.isPending ? "Salvando..." : "Salvar"}
                       </Button>
                     )}
                   </div>
                 </div>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog
+              open={!!selectedSolicitacao}
+              onOpenChange={(open) => {
+                if (!open) setSelectedSolicitacao(null);
+              }}
+            >
+              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Detalhes da solicitação</DialogTitle>
+                  <DialogDescription>
+                    Confira todos os dados enviados pela empresa antes de aprovar ou recusar o cadastro.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {selectedSolicitacao && (
+                  <div className="space-y-5">
+                    <div className="flex justify-end">
+                      <Button type="button" variant="outline" onClick={() => handleOpenSolicitacaoEditor(selectedSolicitacao)}>
+                        <Edit className="mr-2 h-4 w-4" />
+                        Editar todos os dados
+                      </Button>
+                    </div>
+                    <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <h3 className="text-lg font-semibold text-[#1C1C1C]">
+                            {selectedSolicitacao.nome_fantasia || selectedSolicitacao.razao_social}
+                          </h3>
+                          <p className="text-sm text-muted-foreground">{selectedSolicitacao.razao_social}</p>
+                        </div>
+                        <Badge variant="outline" className="w-fit capitalize">
+                          {selectedSolicitacao.status.replace("_", " ")}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Dados da empresa</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 text-sm">
+                          {[
+                            ["CNPJ", selectedSolicitacao.cnpj],
+                            ["Razão Social", selectedSolicitacao.razao_social],
+                            ["Nome Fantasia", selectedSolicitacao.nome_fantasia],
+                            ["E-mail", selectedSolicitacao.email],
+                            ["WhatsApp", selectedSolicitacao.whatsapp],
+                            ["Endereço", selectedSolicitacao.endereco],
+                            ["Porte", selectedSolicitacao.porte],
+                            ["Capital Social", selectedSolicitacao.capital_social !== undefined && selectedSolicitacao.capital_social !== null ? formatCurrency(Number(selectedSolicitacao.capital_social)) : undefined],
+                            ["Data de fundação", formatDate(selectedSolicitacao.data_fundacao)],
+                            ["Qtd. funcionários", selectedSolicitacao.qtd_funcionarios?.toString()],
+                            ["Enviada em", formatDate(selectedSolicitacao.created_at)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg bg-muted/40 p-3">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+                              <p className="mt-1 break-words text-[#1C1C1C]">{value || "—"}</p>
+                            </div>
+                          ))}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base">Responsável principal</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 text-sm">
+                          {[
+                            ["Nome", selectedSolicitacao.responsavel_nome],
+                            ["CPF", selectedSolicitacao.responsavel_cpf],
+                            ["E-mail", selectedSolicitacao.responsavel_email],
+                            ["WhatsApp", selectedSolicitacao.responsavel_whatsapp],
+                            ["Data de nascimento", formatDate(selectedSolicitacao.responsavel_data_nascimento)],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg bg-muted/40 p-3">
+                              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+                              <p className="mt-1 break-words text-[#1C1C1C]">{value || "—"}</p>
+                            </div>
+                          ))}
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Dados adicionais enviados</CardTitle>
+                        <DialogDescription>
+                          Informações flexíveis armazenadas no payload da solicitação.
+                        </DialogDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div>
+                          <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Responsáveis no payload</h4>
+                          {(selectedSolicitacao.payload?.responsaveis?.length ?? 0) > 0 ? (
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {selectedSolicitacao.payload?.responsaveis?.map((responsavel, index) => (
+                                <div key={`${responsavel.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                  <p className="font-medium">{responsavel.nome || `Responsável ${index + 1}`}</p>
+                                  <p className="text-muted-foreground">CPF: {responsavel.cpf || "—"}</p>
+                                  <p className="text-muted-foreground">E-mail: {responsavel.email || "—"}</p>
+                                  <p className="text-muted-foreground">WhatsApp: {responsavel.whatsapp || "—"}</p>
+                                  <p className="text-muted-foreground">Nascimento: {formatDate(responsavel.dataAniversario)}</p>
+                                  {responsavel.contatoPrincipal && <Badge className="mt-2 bg-[#7E8C5E] text-white">Contato principal</Badge>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum responsável adicional enviado.</p>
+                          )}
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Colaboradores</h4>
+                            {(selectedSolicitacao.payload?.colaboradores?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.colaboradores?.map((colaborador, index) => (
+                                  <div key={`${colaborador.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{colaborador.nome || `Colaborador ${index + 1}`}</p>
+                                    <p className="text-muted-foreground">Cargo: {colaborador.cargo || "—"}</p>
+                                    <p className="text-muted-foreground">E-mail: {colaborador.email || "—"}</p>
+                                    <p className="text-muted-foreground">WhatsApp: {colaborador.whatsapp || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum colaborador enviado.</p>
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Vínculos</h4>
+                            {(selectedSolicitacao.payload?.relacionamentos?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.relacionamentos?.map((relacionamento, index) => (
+                                  <div key={`${relacionamento.tipo}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{relacionamento.tipo || `Vínculo ${index + 1}`}</p>
+                                    <p className="text-muted-foreground">Status: {relacionamento.status || "—"}</p>
+                                    <p className="text-muted-foreground">Categoria: {relacionamento.categoria || "—"}</p>
+                                    <p className="text-muted-foreground">Descrição: {relacionamento.descricao || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum vínculo enviado.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Quadro societário</h4>
+                            {(selectedSolicitacao.payload?.socios?.length ?? 0) > 0 ? (
+                              <div className="space-y-2">
+                                {selectedSolicitacao.payload?.socios?.map((socio, index) => (
+                                  <div key={`${socio.nome}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <p className="font-medium">{socio.nome}</p>
+                                    <p className="text-muted-foreground">Qualificação: {socio.qualificacao || "—"}</p>
+                                    <p className="text-muted-foreground">País de origem: {socio.paisOrigem || "—"}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum sócio retornado pela ReceitaWS.</p>
+                            )}
+                          </div>
+                          <div>
+                            <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Atividades econômicas</h4>
+                            {(selectedSolicitacao.payload?.atividadesEconomicas?.length ?? 0) > 0 ? (
+                              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                                {selectedSolicitacao.payload?.atividadesEconomicas?.map((atividade, index) => (
+                                  <div key={`${atividade.codigo}-${index}`} className="rounded-lg border p-3 text-sm">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="font-medium">{atividade.codigo}</p>
+                                      {atividade.principal && <Badge variant="outline">Principal</Badge>}
+                                    </div>
+                                    <p className="text-muted-foreground">{atividade.descricao}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Nenhum CNAE retornado pela ReceitaWS.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h4 className="mb-2 text-sm font-semibold text-[#1C1C1C]">Observações</h4>
+                          <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+                            {selectedSolicitacao.observacoes || "Nenhuma observação enviada."}
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
               </DialogContent>
             </Dialog>
 

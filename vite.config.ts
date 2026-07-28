@@ -8,6 +8,14 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    proxy: {
+      "/api/receitaws": {
+        target: "https://receitaws.com.br",
+        changeOrigin: true,
+        secure: true,
+        rewrite: (route) => route.replace(/^\/api\/receitaws/, ""),
+      },
+    },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {
