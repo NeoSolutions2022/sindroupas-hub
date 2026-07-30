@@ -1,59 +1,24 @@
-# Welcome to your Lovable project
+# SindRoupas Hub
 
-## Project info
+Plataforma de gestão do SindRoupas para empresas associadas, atividades, comunicação e financeiro.
 
-**URL**: https://lovable.dev/projects/a018d76d-3d57-438e-855a-49b284fb574e
+## Desenvolvimento local
 
-## How can I edit this code?
+Requisitos:
 
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/a018d76d-3d57-438e-855a-49b284fb574e) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+- Node.js
+- npm
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+git clone <URL_DO_REPOSITORIO>
+cd sindroupas-hub
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+## Variáveis de ambiente
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-
-## Variáveis de ambiente (integração Auth + Hasura)
-
-Crie um arquivo `.env` na raiz do projeto com:
+Crie um arquivo `.env` na raiz do projeto:
 
 ```bash
 VITE_AUTH_URL=http://localhost:3001
@@ -62,27 +27,23 @@ VITE_HASURA_ADMIN_SECRET=seu_admin_secret
 VITE_BOLETOS_API_URL=http://localhost:3333
 ```
 
-> Após alterar `.env`, reinicie o `npm run dev` para o Vite recarregar as variáveis.
-> Em produção (Docker + nginx deste projeto), as variáveis também são lidas em **runtime** via `/env.js` gerado no startup do container.
+Após alterar o `.env`, reinicie `npm run dev` para o Vite recarregar as variáveis.
 
-## What technologies are used for this project?
+Em produção com Docker e nginx, as variáveis também são lidas em tempo de execução por meio do arquivo `/env.js`, gerado na inicialização do container.
 
-This project is built with:
+## Tecnologias
 
 - Vite
 - TypeScript
 - React
-- shadcn-ui
+- shadcn/ui
 - Tailwind CSS
 
-## How can I deploy this project?
+## Scripts
 
-Simply open [Lovable](https://lovable.dev/projects/a018d76d-3d57-438e-855a-49b284fb574e) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+```sh
+npm run dev
+npm run build
+npm run lint
+npm run preview
+```

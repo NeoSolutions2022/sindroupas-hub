@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { MockAuthProvider } from "@/contexts/MockAuthContext";
 import { ActivitiesProvider } from "@/contexts/ActivitiesContext";
@@ -11,15 +11,16 @@ import Index from "./pages/Index";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Atividades from "./pages/Atividades";
+import CadastroAssociadoPublico from "./pages/CadastroAssociadoPublico";
 import Empresas from "./pages/Empresas";
 import Comunicacao from "./pages/Comunicacao";
 import CRMDetalhe from "./pages/CRMDetalhe";
 import Financeiro from "./pages/Financeiro";
 import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
-import Relacionamentos from "./pages/Relacionamentos";
 import NotFound from "./pages/NotFound";
 import AdminAppUsers from "./pages/AdminAppUsers";
+import { PublicRegistrationNotifier } from "@/components/PublicRegistrationNotifier";
 
 const queryClient = new QueryClient();
 
@@ -32,9 +33,11 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <PublicRegistrationNotifier />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/cadastro-associado" element={<CadastroAssociadoPublico />} />
             <Route
               path="/dashboard"
               element={
@@ -61,11 +64,7 @@ const App = () => (
             />
             <Route
               path="/dashboard/relacionamentos"
-              element={
-                <ProtectedRoute>
-                  <Relacionamentos />
-                </ProtectedRoute>
-              }
+              element={<Navigate to="/dashboard/empresas" replace />}
             />
             <Route
               path="/dashboard/financeiro"

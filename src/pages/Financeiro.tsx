@@ -42,7 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail } from "lucide-react";
+import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail, AlertTriangle } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -52,7 +52,7 @@ import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoMod
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
 import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
-import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, updateBoletoDueDateRequest } from "@/lib/api/boletos";
+import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, resendBoletoEmailRequest, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -61,16 +61,21 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
+import { Progress } from "@/components/ui/progress";
+import { normalizeBrazilianWhatsappNumber, sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
+  nome_fantasia?: string | null;
+  faixa_id?: string | null;
+  desconto_mensalidade_percentual?: number | string | null;
   observacoes?: string | null;
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
   whatsapp?: string | null;
-  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
+  responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null; contato_principal?: boolean | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
 };
 
@@ -92,7 +97,13 @@ type BoletoRow = {
   base?: number | string | null;
   percentual?: number | string | null;
   descontos?: number | string | null;
-  empresa?: { id: string; razao_social: string } | null;
+  enviado_email_em?: string | null;
+  enviado_whatsapp_em?: string | null;
+  enviado_email_para?: string | null;
+  enviado_whatsapp_para?: string | null;
+  ultimo_envio_boleto_em?: string | null;
+  ultimo_envio_boleto_canal?: string | null;
+  empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
 type ContribuicaoRow = {
@@ -106,7 +117,7 @@ type ContribuicaoRow = {
   valor?: number | string | null;
   vencimento?: string | null;
   situacao?: string | null;
-  empresa?: { id: string; razao_social: string } | null;
+  empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
 type FaixaRow = {
@@ -137,9 +148,16 @@ const FINANCEIRO_QUERY = `
       base
       percentual
       descontos
+      enviado_email_em
+      enviado_whatsapp_em
+      enviado_email_para
+      enviado_whatsapp_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
       empresa {
         id
         razao_social
+        nome_fantasia
       }
     }
     contribuicoes_assistenciais(order_by: { vencimento: desc }) {
@@ -161,6 +179,9 @@ const FINANCEIRO_QUERY = `
     empresas(order_by: { razao_social: asc }) {
       id
       razao_social
+      nome_fantasia
+      faixa_id
+      desconto_mensalidade_percentual
       observacoes
       qtd_funcionarios
       cnpj
@@ -171,6 +192,7 @@ const FINANCEIRO_QUERY = `
         nome
         whatsapp
         email
+        contato_principal
       }
       colaboradores {
         id
@@ -194,6 +216,9 @@ const EMPRESAS_POR_FAIXA_QUERY = `
     empresas(where: { faixa_id: { _eq: $faixaId } }, order_by: { razao_social: asc }) {
       id
       razao_social
+      nome_fantasia
+      faixa_id
+      desconto_mensalidade_percentual
       observacoes
       cnpj
       qtd_funcionarios
@@ -204,6 +229,7 @@ const EMPRESAS_POR_FAIXA_QUERY = `
         nome
         whatsapp
         email
+        contato_principal
       }
       colaboradores {
         id
@@ -242,6 +268,46 @@ const UPDATE_BOLETO_DESCRICAO_HASURA = `
   }
 `;
 
+const UPDATE_BOLETO_ENVIO_EMAIL_HASURA = `
+  mutation UpdateBoletoEnvioEmail($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
+    update_financeiro_boletos_by_pk(
+      pk_columns: { id: $id }
+      _set: {
+        enviado_email_em: $enviadoEm
+        enviado_email_para: $destinatario
+        ultimo_envio_boleto_em: $enviadoEm
+        ultimo_envio_boleto_canal: "email"
+      }
+    ) {
+      id
+      enviado_email_em
+      enviado_email_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
+    }
+  }
+`;
+
+const UPDATE_BOLETO_ENVIO_WHATSAPP_HASURA = `
+  mutation UpdateBoletoEnvioWhatsapp($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
+    update_financeiro_boletos_by_pk(
+      pk_columns: { id: $id }
+      _set: {
+        enviado_whatsapp_em: $enviadoEm
+        enviado_whatsapp_para: $destinatario
+        ultimo_envio_boleto_em: $enviadoEm
+        ultimo_envio_boleto_canal: "whatsapp"
+      }
+    ) {
+      id
+      enviado_whatsapp_em
+      enviado_whatsapp_para
+      ultimo_envio_boleto_em
+      ultimo_envio_boleto_canal
+    }
+  }
+`;
+
 // Tipos
 interface Faixa {
   id: string;
@@ -250,6 +316,8 @@ interface Faixa {
   valor: number;
   descricao?: string;
 }
+
+const SINDICATO_EMAIL = "sindroupas@sindicato.sfiec.org.br";
 
 interface BoletoForm {
   tipo: "mensalidade" | "contribuicao" | "avulso" | "";
@@ -272,6 +340,8 @@ interface BoletoForm {
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
+  descontoValorOverride?: number;
+  emailOverride?: string;
 }
 
 type ContactCandidate = {
@@ -303,6 +373,67 @@ const periodicidadeToNumero = (periodicidade?: string) => {
   const numeric = Number(periodicidade);
   return Number.isFinite(numeric) ? numeric : undefined;
 };
+
+
+const formatDateBR = (value?: string) => {
+  if (!value) return "";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "dd/MM/yyyy") : value;
+};
+
+const formatDueDateBR = (value?: string) => {
+  if (!value) return "—";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "dd-MM-yyyy") : value.replace(/\//g, "-");
+};
+
+const formatCompetenciaBR = (value?: string) => {
+  if (!value) return "";
+  const parsed = parseISO(value);
+  return isValid(parsed) ? format(parsed, "MM/yyyy") : value;
+};
+
+const getCompetenciaRangeLabel = (inicio?: string, fim?: string) => {
+  const start = formatCompetenciaBR(inicio);
+  const end = formatCompetenciaBR(fim);
+  if (!start && !end) return "";
+  return start === end || !end ? start : `${start} a ${end}`;
+};
+
+const rangesOverlap = (startA?: string, endA?: string, startB?: string, endB?: string) => {
+  if (!startA || !endA || !startB || !endB) return false;
+  const aStart = startOfMonth(parseISO(startA));
+  const aEnd = startOfMonth(parseISO(endA));
+  const bStart = startOfMonth(parseISO(startB));
+  const bEnd = startOfMonth(parseISO(endB));
+  if (![aStart, aEnd, bStart, bEnd].every(isValid)) return false;
+  return !isAfter(aStart, bEnd) && !isAfter(bStart, aEnd);
+};
+
+const getCurrentQuarterRange = () => {
+  const now = new Date();
+  const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
+  const start = startOfMonth(new Date(now.getFullYear(), quarterStartMonth, 1));
+  const end = startOfMonth(addMonths(start, 2));
+  return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
+};
+
+const MonthPickerField = ({
+  value,
+  onChange,
+  placeholder = "Selecione a competência",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) => (
+  <Input
+    type="month"
+    aria-label={placeholder}
+    value={value ? format(parseISO(value), "yyyy-MM") : ""}
+    onChange={(event) => onChange(event.target.value ? `${event.target.value}-01` : "")}
+  />
+);
 
 const DatePickerField = ({
   value,
@@ -393,9 +524,12 @@ const DatePickerField = ({
 const chooseBoletoContact = (
   empresa: Pick<EmpresaLookupRow, "razao_social" | "email" | "whatsapp" | "responsaveis" | "colaboradores">,
 ) => {
+  const responsaveis = empresa.responsaveis ?? [];
+  const responsavelPrincipal = responsaveis.find((responsavel) => responsavel.contato_principal);
   const candidates: ContactCandidate[] = [
-    ...(empresa.responsaveis ?? []),
+    ...(responsavelPrincipal ? [responsavelPrincipal] : []),
     ...(empresa.colaboradores ?? []),
+    ...(!responsavelPrincipal ? responsaveis : responsaveis.filter((responsavel) => responsavel.id !== responsavelPrincipal.id)),
     {
       nome: empresa.razao_social,
       email: empresa.email,
@@ -455,8 +589,14 @@ const Financeiro = () => {
   const [selectedBoletoForCancel, setSelectedBoletoForCancel] = useState<BoletoView | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelAndRegenerate, setCancelAndRegenerate] = useState(false);
+  const [replicateDialogOpen, setReplicateDialogOpen] = useState(false);
+  const [selectedBoletoForReplication, setSelectedBoletoForReplication] = useState<BoletoView | null>(null);
+  const [replicateCancelAfter, setReplicateCancelAfter] = useState(false);
+  const [replicateCancelReason, setReplicateCancelReason] = useState("Boleto replicado e cancelado após nova emissão.");
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
+  const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
+  const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -486,7 +626,9 @@ const Financeiro = () => {
           efiChargeId: boleto.efi_charge_id ?? null,
           pdfUrl: boleto.pdf_url ?? null,
           tipo: tipoNormalizado,
+          empresaId: boleto.empresa?.id,
           empresa: boleto.empresa?.razao_social ?? "Empresa não informada",
+          empresaFantasia: boleto.empresa?.nome_fantasia?.trim() || undefined,
           valor: boleto.valor !== undefined && boleto.valor !== null ? Number(boleto.valor) : 0,
           vencimento: boleto.vencimento ?? "",
           status: normalizeBoletoStatus(boleto.efi_status),
@@ -500,6 +642,12 @@ const Financeiro = () => {
           base: boleto.base !== undefined && boleto.base !== null ? Number(boleto.base) : undefined,
           percentual: boleto.percentual !== undefined && boleto.percentual !== null ? Number(boleto.percentual) : undefined,
           descontos: boleto.descontos !== undefined && boleto.descontos !== null ? Number(boleto.descontos) : undefined,
+          enviadoEmailEm: boleto.enviado_email_em ?? null,
+          enviadoWhatsappEm: boleto.enviado_whatsapp_em ?? null,
+          enviadoEmailPara: boleto.enviado_email_para ?? null,
+          enviadoWhatsappPara: boleto.enviado_whatsapp_para ?? null,
+          ultimoEnvioBoletoEm: boleto.ultimo_envio_boleto_em ?? null,
+          ultimoEnvioBoletoCanal: boleto.ultimo_envio_boleto_canal ?? null,
         };
       }) ?? []
     );
@@ -529,7 +677,11 @@ const Financeiro = () => {
         const contato = chooseBoletoContact(empresa);
         return {
           id: empresa.id,
-          nome: empresa.razao_social,
+          nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
+          razaoSocial: empresa.razao_social,
+          nomeFantasia: empresa.nome_fantasia ?? "",
+          faixaId: empresa.faixa_id ?? "",
+          descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
           cnpj: empresa.cnpj ?? "",
           qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
           contatoPrincipal: {
@@ -550,8 +702,9 @@ const Financeiro = () => {
       }
 
       const contato = empresa.contatoPrincipal;
+      const emailBoleto = payload.emailOverride || contato.email;
       const phoneNumber = (contato.whatsapp || "").replace(/\D/g, "");
-      if (!contato.email || !phoneNumber) {
+      if (!emailBoleto || !phoneNumber) {
         throw new Error("A empresa selecionada precisa ter e-mail e WhatsApp para emissão do boleto.");
       }
       if (!empresa.cnpj) {
@@ -578,7 +731,7 @@ const Financeiro = () => {
           ? "Boleto avulso"
           : "Mensalidade";
 
-      const descontoValor = parseCurrencyInput(payload.descontos);
+      const descontoValor = payload.descontoValorOverride ?? parseCurrencyInput(payload.descontos);
       const baseValor = parseCurrencyInput(payload.baseCalculo);
       const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
       const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
@@ -603,7 +756,7 @@ const Financeiro = () => {
         custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
         message: payload.mensagemPersonalizada || undefined,
         customer: {
-          email: contato.email,
+          email: emailBoleto,
           phone_number: phoneNumber,
           juridical_person: {
             corporate_name: empresa.nome,
@@ -660,6 +813,22 @@ const Financeiro = () => {
     if (!faixaId) return 0;
     return faixas.find((f) => f.id === faixaId)?.valor ?? 0;
   };
+  const normalizeDiscountPercent = (value?: number | string | null) => {
+    const numericValue = typeof value === "string" ? Number(value) : value;
+    if (!Number.isFinite(numericValue ?? NaN)) return 0;
+    return Math.min(Math.max(Number(numericValue), 0), 100);
+  };
+  const calcularMensalidadeComDesconto = (valorBase: number, descontoPercentual?: number | string | null) => {
+    const percentual = normalizeDiscountPercent(descontoPercentual);
+    const descontoValor = valorBase * (percentual / 100);
+    return {
+      valorBase,
+      descontoPercentual: percentual,
+      descontoValor,
+      valorFinal: Math.max(valorBase - descontoValor, 0),
+    };
+  };
+  const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
     const start = startOfMonth(parseISO(inicio));
@@ -677,10 +846,15 @@ const Financeiro = () => {
   const getMensalidadePreview = () => {
     const valorFaixa = getValorFaixa(boletoForm.faixaId);
     const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
+    const empresaSelecionada = !isBatchMode ? getEmpresaMensalidade(boletoForm.empresaId) : undefined;
+    const desconto = calcularMensalidadeComDesconto(valorFaixa, empresaSelecionada?.descontoMensalidadePercentual);
     return {
       meses,
       valorMensal: valorFaixa,
-      valorTotal: valorFaixa * Math.max(meses, 1),
+      descontoPercentual: desconto.descontoPercentual,
+      descontoValorMensal: desconto.descontoValor,
+      valorMensalComDesconto: desconto.valorFinal,
+      valorTotal: desconto.valorFinal * Math.max(meses, 1),
     };
   };
 
@@ -759,8 +933,10 @@ const Financeiro = () => {
   const [selectedEmpresaComunicacao, setSelectedEmpresaComunicacao] = useState("");
   const [novaNotaComunicacao, setNovaNotaComunicacao] = useState("");
   const [isSavingNotaComunicacao, setIsSavingNotaComunicacao] = useState(false);
-  const [editEmpresaDialogOpen, setEditEmpresaDialogOpen] = useState(false);
-  const [empresaEditDraft, setEmpresaEditDraft] = useState<{ id: string; razao_social: string; email?: string; whatsapp?: string } | null>(null);
+  const [emailFallbackDialogOpen, setEmailFallbackDialogOpen] = useState(false);
+  const [emailFallbackEmpresaIds, setEmailFallbackEmpresaIds] = useState<string[]>([]);
+  const [emailFallbackDraft, setEmailFallbackDraft] = useState("");
+  const [isResolvingEmailFallback, setIsResolvingEmailFallback] = useState(false);
 
   // Estado para Wizard de Boletos
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -848,6 +1024,158 @@ const Financeiro = () => {
       return "Inadimplente";
     }
     return normalizeBoletoStatus(boleto.status);
+  };
+
+  const handleDownloadBoleto = (boleto: BoletoView) => {
+    const pdfUrl = boleto.pdfUrl?.trim();
+
+    if (!pdfUrl) {
+      toast({
+        title: "PDF indisponível",
+        description: "Este boleto não possui pdf_url para download.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const openedWindow = window.open(pdfUrl, "_blank", "noopener,noreferrer");
+
+    if (!openedWindow) {
+      toast({
+        title: "Não foi possível abrir o PDF",
+        description: "Autorize pop-ups no navegador e tente baixar o boleto novamente.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const buildBoletoMessage = (boleto: BoletoView) => {
+    const competencia = getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal);
+    const competenciaTexto = competencia ? ` referente à competência ${competencia}` : "";
+    const vencimento = formatDateBR(boleto.vencimento) || boleto.vencimento;
+    const pdfUrl = boleto.pdfUrl?.trim();
+
+    return [
+      `Olá! Segue o boleto ${boleto.tipo}${competenciaTexto} da empresa ${boleto.empresa}.`,
+      `Valor: ${formatCurrencyBRL(boleto.valor)}.`,
+      vencimento ? `Vencimento: ${vencimento}.` : "",
+      pdfUrl ? `Acesse o boleto em: ${pdfUrl}` : "",
+      "Em caso de dúvidas, estamos à disposição.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
+
+  const markBoletoEmailSent = async (boletoId: string, destinatario: string) => {
+    await hasuraRequest({
+      query: UPDATE_BOLETO_ENVIO_EMAIL_HASURA,
+      variables: { id: boletoId, enviadoEm: new Date().toISOString(), destinatario },
+      token,
+    });
+  };
+
+  const markBoletoWhatsappSent = async (boletoId: string, destinatario: string) => {
+    await hasuraRequest({
+      query: UPDATE_BOLETO_ENVIO_WHATSAPP_HASURA,
+      variables: { id: boletoId, enviadoEm: new Date().toISOString(), destinatario },
+      token,
+    });
+  };
+
+  const handleSendBoletoEmail = async (boleto: BoletoView, email?: string) => {
+    const destinatario = email?.trim();
+    const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
+
+    if (!chargeId) {
+      toast({ title: "Boleto sem charge_id", description: "Não foi possível reenviar por e-mail sem charge_id da EFI.", variant: "destructive" });
+      return;
+    }
+
+    if (!destinatario) {
+      toast({ title: "E-mail ausente", description: "Cadastre um e-mail na empresa antes de enviar o boleto.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      setSendingBoletoCommunication(`${boleto.id}:email`);
+      await resendBoletoEmailRequest(chargeId, destinatario);
+      await markBoletoEmailSent(boleto.id, destinatario);
+      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por e-mail para ${destinatario}.`);
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      toast({ title: "Boleto enviado por e-mail", description: `Envio registrado para ${destinatario}.` });
+    } catch (err) {
+      toast({
+        title: "Falha ao enviar por e-mail",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingBoletoCommunication(null);
+    }
+  };
+
+  const handleSendBoletoWhatsapp = async (boleto: BoletoView, whatsapp?: string) => {
+    const digits = whatsapp?.replace(/\D/g, "") ?? "";
+
+    if (!digits) {
+      toast({ title: "WhatsApp ausente", description: "Cadastre um WhatsApp na empresa antes de enviar o boleto.", variant: "destructive" });
+      return;
+    }
+
+    if (!boleto.pdfUrl?.trim()) {
+      toast({ title: "PDF indisponível", description: "Este boleto não possui pdf_url para envio por WhatsApp.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      const destinatario = normalizeBrazilianWhatsappNumber(digits);
+      setSendingBoletoCommunication(`${boleto.id}:whatsapp`);
+      await sendEvolutionTextRequest({ number: destinatario, text: buildBoletoMessage(boleto) });
+      await markBoletoWhatsappSent(boleto.id, destinatario);
+      await appendObservacaoEmpresa(boleto.empresa, `Boleto (${boleto.id}) enviado por WhatsApp para ${destinatario}.`);
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      toast({ title: "Boleto enviado por WhatsApp", description: `Envio registrado para ${destinatario}.` });
+    } catch (err) {
+      toast({
+        title: "Falha ao enviar por WhatsApp",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingBoletoCommunication(null);
+    }
+  };
+
+  const startBoletoReplication = (boleto: BoletoView) => {
+    setSelectedBoletoForReplication(boleto);
+    setReplicateCancelAfter(false);
+    setReplicateCancelReason("Boleto replicado e cancelado após nova emissão.");
+    setReplicateDialogOpen(true);
+  };
+
+  const continueBoletoReplication = () => {
+    if (!selectedBoletoForReplication) return;
+    setSelectedBoletoForNew({
+      id: selectedBoletoForReplication.id,
+      empresa: selectedBoletoForReplication.empresa,
+      vencimento: selectedBoletoForReplication.vencimento,
+      valor: selectedBoletoForReplication.valor,
+    });
+    setReplicateDialogOpen(false);
+    setGerarNovoOpen(true);
+  };
+
+  const cancelReplicatedOriginalBoleto = async (boleto: BoletoView) => {
+    const reason = replicateCancelReason.trim() || "Boleto replicado e cancelado após nova emissão.";
+    const chargeId = boleto.efiChargeId ? Number(boleto.efiChargeId) : extractChargeId(boleto.id);
+
+    if (chargeId) {
+      await cancelBoletoRequest(chargeId);
+    }
+
+    await syncStatusInHasura(boleto.id, "cancelado");
+    await syncDescricaoInHasura(boleto.id, `Cancelado: ${reason}`);
+    await appendObservacaoEmpresa(boleto.empresa, `Cancelamento de boleto (${boleto.id}) após replicação: ${reason}`);
   };
 
   const filteredBoletos = useMemo(() => {
@@ -1242,29 +1570,51 @@ const Financeiro = () => {
     setIsBatchMode(false);
     setPreviaBoleto(null);
     setContribuicaoPreview("");
+    setBatchEmissionProgress({ done: 0, total: 0 });
+    setEmailFallbackDialogOpen(false);
+    setEmailFallbackEmpresaIds([]);
+    setEmailFallbackDraft("");
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
-    setBoletoForm({
-      ...boletoForm,
+    setBoletoForm((prev) => ({
+      ...prev,
       empresaId: empresa.id,
       empresaNome: empresa.nome,
-    });
+      faixaId: empresa.faixaId || "",
+    }));
     setEmpresaSearch(`${empresa.nome} - ${empresa.cnpj}`);
     setShowEmpresaSuggestions(false);
+
+    if (!empresa.faixaId) {
+      toast({
+        title: "Empresa sem faixa cadastrada",
+        description: "Selecione uma faixa na próxima etapa ou edite o cadastro completo da empresa antes de emitir.",
+        variant: "destructive",
+      });
+    }
   };
 
-  const empresasFiltradas = mockEmpresas.filter(
-    (emp) =>
-      emp.nome.toLowerCase().includes(empresaSearch.toLowerCase()) ||
-      emp.cnpj.includes(empresaSearch)
-  );
+  const empresasFiltradas = mockEmpresas.filter((emp) => {
+    const term = empresaSearch.toLowerCase();
+    const matchesSearch =
+      emp.nome.toLowerCase().includes(term) ||
+      emp.razaoSocial.toLowerCase().includes(term) ||
+      emp.nomeFantasia.toLowerCase().includes(term) ||
+      emp.cnpj.includes(empresaSearch);
+    const matchesBatchFaixa = !isBatchMode || !batchFaixaId || emp.faixaId === batchFaixaId;
+    return matchesSearch && matchesBatchFaixa;
+  });
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
     return (
       empresasPorFaixaData?.empresas.map((empresa) => ({
         id: empresa.id,
-        nome: empresa.razao_social,
+        nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
+        razaoSocial: empresa.razao_social,
+        nomeFantasia: empresa.nome_fantasia ?? "",
+        faixaId: empresa.faixa_id ?? "",
+        descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
         cnpj: empresa.cnpj ?? "",
         qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
         contatoPrincipal: chooseBoletoContact(empresa),
@@ -1447,10 +1797,75 @@ const Financeiro = () => {
     setContribuicaoPreview("");
   };
 
-  const handleEmitirBoleto = async () => {
-    const targetEmpresas = isBatchMode
-      ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
-      : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+  const hasBoletoOverlap = (empresaId: string, competenciaInicial: string, competenciaFinal: string) => {
+    return boletos.some((boleto) => {
+      if (boleto.empresaId !== empresaId) return false;
+      if (boleto.tipo !== "Mensalidade (por Faixa)") return false;
+      if (boleto.status === "Cancelado") return false;
+      return rangesOverlap(competenciaInicial, competenciaFinal, boleto.competenciaInicial, boleto.competenciaFinal);
+    });
+  };
+
+  const getEmpresasSemEmail = (empresas: typeof mockEmpresas, emailOverrides: Record<string, string>) => {
+    return empresas.filter((empresa) => !(emailOverrides[empresa.id] || empresa.contatoPrincipal.email));
+  };
+
+  const updateEmpresaEmails = async (empresaIds: string[], email: string) => {
+    await Promise.all(
+      empresaIds.map((empresaId) =>
+        hasuraRequest({
+          query: `
+            mutation UpdateEmpresaEmail($id: uuid!, $email: String!) {
+              update_empresas_by_pk(pk_columns: { id: $id }, _set: { email: $email }) { id }
+            }
+          `,
+          variables: { id: empresaId, email },
+          token,
+        }),
+      ),
+    );
+    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const handleResolveMissingEmail = async (email: string, shouldPersist: boolean) => {
+    if (!emailFallbackEmpresaIds.length) return;
+    if (!email.trim()) {
+      toast({ title: "E-mail obrigatório", description: "Informe um e-mail ou use o e-mail do sindicato.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      setIsResolvingEmailFallback(true);
+      if (shouldPersist) {
+        await updateEmpresaEmails(emailFallbackEmpresaIds, email.trim());
+      }
+      const emailOverrides = Object.fromEntries(emailFallbackEmpresaIds.map((empresaId) => [empresaId, email.trim()]));
+      setEmailFallbackDialogOpen(false);
+      setEmailFallbackEmpresaIds([]);
+      setEmailFallbackDraft("");
+      await handleEmitirBoleto({ emailOverrides });
+    } catch (err) {
+      toast({
+        title: "Falha ao resolver e-mail",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResolvingEmailFallback(false);
+    }
+  };
+
+  const handleEmitirBoleto = async (options?: { emailOverrides?: Record<string, string> }) => {
+    const selectedIds = isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
+    const targetEmpresas = mockEmpresas.filter((empresa) => selectedIds.has(empresa.id));
+    const emailOverrides = options?.emailOverrides ?? {};
+    const empresasSemEmail = getEmpresasSemEmail(targetEmpresas, emailOverrides);
+    if (empresasSemEmail.length > 0) {
+      setEmailFallbackEmpresaIds(empresasSemEmail.map((empresa) => empresa.id));
+      setEmailFallbackDraft("");
+      setEmailFallbackDialogOpen(true);
+      return;
+    }
     const buildCompetencias = (inicio: string, fim: string) => {
       const start = startOfMonth(parseISO(inicio));
       const end = startOfMonth(parseISO(fim));
@@ -1466,46 +1881,79 @@ const Financeiro = () => {
 
     try {
       setIsEmittingBoletos(true);
+      setBatchEmissionProgress({ done: 0, total: 0 });
       if (boletoForm.tipo === "mensalidade") {
         const competencias = buildCompetencias(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
         if (competencias.length === 0) {
           throw new Error("Competências inválidas. Verifique as datas inicial e final.");
         }
 
+        const foraDaFaixa = targetEmpresas.filter((empresa) => empresa.faixaId !== boletoForm.faixaId);
+        if (foraDaFaixa.length > 0) {
+          throw new Error(`Há empresa(s) fora da faixa selecionada: ${foraDaFaixa.map((empresa) => empresa.nome).join(", ")}.`);
+        }
+
+        const duplicadas = targetEmpresas.filter((empresa) =>
+          hasBoletoOverlap(empresa.id, boletoForm.competenciaInicial, boletoForm.competenciaFinal),
+        );
+        if (duplicadas.length > 0) {
+          throw new Error(`Já existe boleto de mensalidade para a competência selecionada: ${duplicadas.map((empresa) => empresa.nome).join(", ")}.`);
+        }
+
+        if (isBatchMode) {
+          const trimestreAtual = getCurrentQuarterRange();
+          const emitidasNoTrimestre = targetEmpresas.filter((empresa) =>
+            hasBoletoOverlap(empresa.id, trimestreAtual.start, trimestreAtual.end),
+          );
+          if (emitidasNoTrimestre.length > 0) {
+            throw new Error(`Emissão em lote bloqueada para empresa(s) com boleto emitido no trimestre corrente: ${emitidasNoTrimestre.map((empresa) => empresa.nome).join(", ")}.`);
+          }
+        }
+
+        const totalOperacoes = boletoForm.unificarCompetencias === "Sim" ? targetEmpresas.length : targetEmpresas.length * competencias.length;
+        setBatchEmissionProgress({ done: 0, total: totalOperacoes });
+        const emitir = async (payload: BoletoForm) => {
+          await createBoletoMutation.mutateAsync(payload);
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        };
+
         if (boletoForm.unificarCompetencias === "Sim") {
-          const valorUnificado = (previaBoleto ?? getValorFaixa(boletoForm.faixaId)) * competencias.length;
-          await Promise.all(
-            targetEmpresas.map((empresa) =>
-              createBoletoMutation.mutateAsync({
+          for (const empresa of targetEmpresas) {
+            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
+            await emitir({
+              ...boletoForm,
+              empresaId: empresa.id,
+              empresaNome: empresa.nome,
+              valorOverride: mensalidade.valorFinal * competencias.length,
+              descontoValorOverride: mensalidade.descontoValor * competencias.length,
+              emailOverride: emailOverrides[empresa.id],
+              mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}`,
+            });
+          }
+        } else {
+          for (const empresa of targetEmpresas) {
+            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
+            for (const competencia of competencias) {
+              await emitir({
                 ...boletoForm,
                 empresaId: empresa.id,
                 empresaNome: empresa.nome,
-                valorOverride: valorUnificado,
-              }),
-            ),
-          );
-        } else {
-          await Promise.all(
-            targetEmpresas.flatMap((empresa) =>
-              competencias.map((competencia) =>
-                createBoletoMutation.mutateAsync({
-                  ...boletoForm,
-                  empresaId: empresa.id,
-                  empresaNome: empresa.nome,
-                  competenciaInicial: competencia,
-                  competenciaFinal: competencia,
-                  valorOverride: previaBoleto ?? getValorFaixa(boletoForm.faixaId),
-                }),
-              ),
-            ),
-          );
+                competenciaInicial: competencia,
+                competenciaFinal: competencia,
+                valorOverride: mensalidade.valorFinal,
+                descontoValorOverride: mensalidade.descontoValor,
+                emailOverride: emailOverrides[empresa.id],
+                mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(competencia, competencia)}`,
+              });
+            }
+          }
         }
       } else {
-        await Promise.all(
-          targetEmpresas.map((empresa) =>
-            createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome }),
-          ),
-        );
+        setBatchEmissionProgress({ done: 0, total: targetEmpresas.length });
+        for (const empresa of targetEmpresas) {
+          await createBoletoMutation.mutateAsync({ ...boletoForm, empresaId: empresa.id, empresaNome: empresa.nome, emailOverride: emailOverrides[empresa.id] });
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        }
       }
       toast({
         title: isBatchMode
@@ -1513,7 +1961,7 @@ const Financeiro = () => {
           : boletoForm.tipo === "contribuicao"
             ? "Boleto de Contribuição Assistencial emitido com sucesso"
             : "Boleto emitido com sucesso",
-        description: isBatchMode ? `${targetEmpresas.length} boleto(s) criado(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
+        description: isBatchMode ? `${targetEmpresas.length} empresa(s) processada(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
       });
       resetWizard();
     } catch (err) {
@@ -1712,7 +2160,7 @@ const Financeiro = () => {
                             </TableRow>
                           ) : (
                             paginatedBoletos.map((boleto) => {
-                              const empresa = mockEmpresas.find(e => e.nome === boleto.empresa);
+                              const empresa = mockEmpresas.find((e) => e.id === boleto.empresaId) ?? mockEmpresas.find((e) => e.razaoSocial === boleto.empresa);
                               const contato = empresa?.contatoPrincipal;
                               const formatWhatsappLink = (whatsapp?: string) => {
                                 if (!whatsapp) return null;
@@ -1721,17 +2169,25 @@ const Financeiro = () => {
                               };
                               const whatsappLink = formatWhatsappLink(contato?.whatsapp);
                               const effectiveStatus = getBoletoEffectiveStatus(boleto);
+                              const isSendingCurrentBoletoCommunication = sendingBoletoCommunication?.startsWith(`${boleto.id}:`);
 
                               return (
                                 <TableRow key={boleto.id}>
-                                  <TableCell className="font-medium">{boleto.empresa}</TableCell>
+                                  <TableCell className="font-medium">
+                                    <div className="space-y-0.5">
+                                      <p>{boleto.empresa}</p>
+                                      {boleto.empresaFantasia && boleto.empresaFantasia !== boleto.empresa && (
+                                        <p className="text-xs font-normal text-muted-foreground">{boleto.empresaFantasia}</p>
+                                      )}
+                                    </div>
+                                  </TableCell>
                                   <TableCell>
                                     <span className="text-sm">{boleto.tipo}</span>
                                   </TableCell>
                                   <TableCell>
                                     R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                                   </TableCell>
-                                  <TableCell>{boleto.vencimento}</TableCell>
+                                  <TableCell>{formatDueDateBR(boleto.vencimento)}</TableCell>
                                   <TableCell>{getStatusBadge(effectiveStatus)}</TableCell>
                                   <TableCell>
                                     <span className="text-sm text-muted-foreground line-clamp-2">
@@ -1739,53 +2195,72 @@ const Financeiro = () => {
                                     </span>
                                   </TableCell>
                                   <TableCell>
-                                    <div className="flex items-center gap-1">
-                                      {whatsappLink ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label={`Abrir WhatsApp de ${contato?.nome || boleto.empresa}`}>
-                                            <MessageCircle className="h-4 w-4 text-green-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
-                                          <MessageCircle className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
-                                      {contato?.email ? (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                                          <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(contato.email)}`} target="_blank" rel="noopener noreferrer" aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
-                                            <Mail className="h-4 w-4 text-blue-600" />
-                                          </a>
-                                        </Button>
-                                      ) : (
-                                        <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
-                                          <Mail className="h-4 w-4 text-muted-foreground" />
-                                        </Button>
-                                      )}
+                                    <div className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-1">
+                                        {whatsappLink ? (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                            <a href={whatsappLink} target="_blank" rel="noopener noreferrer" aria-label={`Abrir WhatsApp de ${contato?.nome || boleto.empresa}`}>
+                                              <MessageCircle className="h-4 w-4 text-green-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                            <MessageCircle className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
+                                        {contato?.email ? (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                                            <a href={`mailto:${contato.email}`} aria-label={`Enviar e-mail para ${contato?.nome || boleto.empresa}`}>
+                                              <Mail className="h-4 w-4 text-blue-600" />
+                                            </a>
+                                          </Button>
+                                        ) : (
+                                          <Button variant="ghost" size="icon" className="h-7 w-7" disabled>
+                                            <Mail className="h-4 w-4 text-muted-foreground" />
+                                          </Button>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-wrap gap-1">
+                                        {boleto.enviadoWhatsappEm && (
+                                          <Badge variant="outline" className="border-green-200 bg-green-50 text-[11px] text-green-700">
+                                            WhatsApp enviado
+                                          </Badge>
+                                        )}
+                                        {boleto.enviadoEmailEm && (
+                                          <Badge variant="outline" className="border-blue-200 bg-blue-50 text-[11px] text-blue-700">
+                                            E-mail enviado
+                                          </Badge>
+                                        )}
+                                        {isSendingCurrentBoletoCommunication && (
+                                          <span className="text-xs text-muted-foreground">Enviando...</span>
+                                        )}
+                                        {!isSendingCurrentBoletoCommunication && !boleto.enviadoWhatsappEm && !boleto.enviadoEmailEm && (
+                                          <span className="text-xs text-muted-foreground">Não enviado</span>
+                                        )}
+                                      </div>
                                     </div>
                                   </TableCell>
                                   <TableCell>
                                     <BoletoActionsCell
                                       status={effectiveStatus}
                                       whatsappLink={whatsappLink}
-                                      onDetails={() => {
-                                        if (boleto.pdfUrl) {
-                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
-                                          return;
-                                        }
-                                        navigate(`/dashboard/financeiro/${boleto.id}`);
-                                      }}
-                                      onDownload={() => {
-                                        if (boleto.pdfUrl) {
-                                          window.open(boleto.pdfUrl, "_blank", "noopener,noreferrer");
-                                          return;
-                                        }
-                                        toast({
-                                          title: "PDF indisponível",
-                                          description: "Este boleto não possui pdf_url para download.",
-                                          variant: "destructive",
-                                        });
-                                      }}
+                                      onDetails={() => navigate(`/dashboard/financeiro/${boleto.id}`)}
+                                      onDownload={() => handleDownloadBoleto(boleto)}
+                                      onWhatsApp={
+                                        !isSendingCurrentBoletoCommunication
+                                          ? () => handleSendBoletoWhatsapp(boleto, contato?.whatsapp)
+                                          : undefined
+                                      }
+                                      onEmail={
+                                        !isSendingCurrentBoletoCommunication
+                                          ? () => handleSendBoletoEmail(boleto, contato?.email)
+                                          : undefined
+                                      }
+                                      onReplicate={
+                                        effectiveStatus === "Inadimplente"
+                                          ? () => startBoletoReplication(boleto)
+                                          : undefined
+                                      }
                                       onGenerateNew={() => {
                                         if (regeneratedFromCancel.includes(boleto.id)) {
                                           toast({ title: "Boleto já regenerado", description: "Este boleto cancelado já foi utilizado para gerar um novo boleto." });
@@ -1815,10 +2290,9 @@ const Financeiro = () => {
                                         setComunicacaoDialogOpen(true);
                                       }}
                                       onEditCompany={() => {
-                                        const empresaRow = data?.empresas.find((e) => e.razao_social === boleto.empresa);
+                                        const empresaRow = data?.empresas.find((e) => e.id === boleto.empresaId) ?? data?.empresas.find((e) => e.razao_social === boleto.empresa);
                                         if (!empresaRow) return;
-                                        setEmpresaEditDraft({ id: empresaRow.id, razao_social: empresaRow.razao_social, email: empresaRow.email ?? "", whatsapp: empresaRow.whatsapp ?? "" });
-                                        setEditEmpresaDialogOpen(true);
+                                        navigate(`/dashboard/empresas?editar=${empresaRow.id}`);
                                       }}
                                       onCancel={() => {
                                         setSelectedBoletoForCancel(boleto as BoletoView);
@@ -1853,11 +2327,11 @@ const Financeiro = () => {
                   open={gerarNovoOpen}
                   onOpenChange={setGerarNovoOpen}
                   boleto={selectedBoletoForNew}
-                  onGenerate={(boletoId, novaData, novoValor) => {
+                  onGenerate={async (boletoId, novaData, novoValor) => {
                     const original = boletos.find((b) => b.id === boletoId);
                     if (original) {
                       const empresaMatch = data?.empresas.find(
-                        (empresa) => empresa.razao_social === original.empresa,
+                        (empresa) => empresa.id === original.empresaId || empresa.razao_social === original.empresa,
                       );
                       const tipoOriginal = original.tipo === "Contribuição Assistencial"
                         ? "contribuicao"
@@ -1866,14 +2340,14 @@ const Financeiro = () => {
                           : "mensalidade";
                       const payload: BoletoForm = {
                         tipo: tipoOriginal,
-                        empresaId: empresaMatch?.id ?? "",
+                        empresaId: empresaMatch?.id ?? original.empresaId ?? "",
                         empresaNome: original.empresa,
                         competenciaInicial: original.competenciaInicial ?? "",
                         competenciaFinal: original.competenciaFinal ?? "",
                         dataVencimento: format(novaData, "yyyy-MM-dd"),
                         faixaId: original.faixaId ?? "",
                         unificarCompetencias: "Não",
-                        mensagemPersonalizada: "",
+                        mensagemPersonalizada: original.descricao ?? "",
                         anoContribuicao: original.ano ?? "",
                         periodicidade: original.periodicidade ?? "",
                         parcelas: original.parcelas ? String(original.parcelas) : "",
@@ -1886,25 +2360,81 @@ const Financeiro = () => {
                         valorAvulso: novoValor ? String(novoValor) : String(original.valor),
                         motivoCobranca: original.descricao ?? "",
                       };
-                      createBoletoMutation.mutate(payload, {
-                        onSuccess: () => {
-                          toast({
-                            title: "Novo boleto gerado",
-                            description: `Boleto para ${original.empresa} atualizado.`,
-                          });
-                        },
-                        onError: (err) => {
-                          toast({
-                            title: "Falha ao gerar novo boleto",
-                            description: err instanceof Error ? err.message : "Tente novamente.",
-                            variant: "destructive",
-                          });
-                        },
-                      });
+
+                      try {
+                        const isReplication = selectedBoletoForReplication?.id === original.id;
+                        await createBoletoMutation.mutateAsync(payload);
+                        if (isReplication && replicateCancelAfter) {
+                          await cancelReplicatedOriginalBoleto(original);
+                        }
+                        toast({
+                          title: isReplication ? "Boleto replicado" : "Novo boleto gerado",
+                          description: isReplication && replicateCancelAfter
+                            ? `Novo boleto para ${original.empresa} gerado e original cancelado.`
+                            : `Novo boleto para ${original.empresa} gerado.`,
+                        });
+                      } catch (err) {
+                        toast({
+                          title: "Falha ao replicar boleto",
+                          description: err instanceof Error ? err.message : "Tente novamente.",
+                          variant: "destructive",
+                        });
+                      }
                     }
                     setSelectedBoletoForNew(null);
+                    setSelectedBoletoForReplication(null);
+                    setReplicateCancelAfter(false);
                   }}
                 />
+
+                <AlertDialog open={replicateDialogOpen} onOpenChange={setReplicateDialogOpen}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Replicar boleto inadimplente</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        O novo boleto será criado copiando empresa, tipo, competência, descrição e valor do boleto original.
+                        Depois você poderá ajustar vencimento e valor antes de confirmar.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-3 py-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={replicateCancelAfter}
+                          onChange={(event) => setReplicateCancelAfter(event.target.checked)}
+                        />
+                        Cancelar o boleto original após replicar
+                      </label>
+                      {replicateCancelAfter && (
+                        <div className="space-y-2">
+                          <Label htmlFor="replicate-cancel-reason">Motivo do cancelamento</Label>
+                          <Input
+                            id="replicate-cancel-reason"
+                            value={replicateCancelReason}
+                            onChange={(event) => setReplicateCancelReason(event.target.value)}
+                            placeholder="Informe o motivo que ficará registrado no boleto cancelado"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Voltar</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(event) => {
+                          if (replicateCancelAfter && !replicateCancelReason.trim()) {
+                            event.preventDefault();
+                            toast({ title: "Motivo obrigatório", description: "Informe o motivo para cancelar o boleto original.", variant: "destructive" });
+                            return;
+                          }
+                          continueBoletoReplication();
+                        }}
+                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                      >
+                        Continuar replicação
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
 
                 <Dialog open={dueDateDialogOpen} onOpenChange={setDueDateDialogOpen}>
                   <DialogContent className="max-w-md">
@@ -2323,7 +2853,7 @@ const Financeiro = () => {
                       {isBatchMode && (
                         <div className="space-y-2 rounded-md border p-3">
                           <Label>Selecionar faixa para lote</Label>
-                          <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); }}>
+                          <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); setBoletoForm((prev) => ({ ...prev, faixaId: value })); }}>
                             <SelectTrigger>
                               <SelectValue placeholder="Escolha uma faixa" />
                             </SelectTrigger>
@@ -2338,14 +2868,24 @@ const Financeiro = () => {
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
                               {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
-                                >
-                                  Selecionar todas
-                                </Button>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setBatchEmpresaIds(empresasDaFaixaSelecionada.map((empresa) => empresa.id))}
+                                  >
+                                    Selecionar todas
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setBatchEmpresaIds([])}
+                                  >
+                                    Deselecionar tudo
+                                  </Button>
+                                </div>
                               )}
                               {isLoadingEmpresasPorFaixa && (
                                 <p className="text-sm text-muted-foreground">Carregando empresas da faixa...</p>
@@ -2358,7 +2898,7 @@ const Financeiro = () => {
                                   <input
                                     type="checkbox"
                                     checked={batchEmpresaIds.includes(empresa.id)}
-                                    onChange={(e) => setBatchEmpresaIds((prev) => e.target.checked ? [...prev, empresa.id] : prev.filter((id) => id !== empresa.id))}
+                                    onChange={(e) => setBatchEmpresaIds((prev) => e.target.checked ? Array.from(new Set([...prev, empresa.id])) : prev.filter((id) => id !== empresa.id))}
                                   />
                                   {empresa.nome} ({empresa.qtdFuncionarios} func.)
                                 </label>
@@ -2389,6 +2929,10 @@ const Financeiro = () => {
                                 className="p-3 hover:bg-accent cursor-pointer border-b last:border-b-0"
                                 onClick={() => {
                                   if (isBatchMode) {
+                                    if (batchFaixaId && empresa.faixaId !== batchFaixaId) {
+                                      toast({ title: "Empresa fora da faixa", description: "Selecione apenas empresas da faixa escolhida para o lote.", variant: "destructive" });
+                                      return;
+                                    }
                                     setBatchEmpresaIds((prev) => (prev.includes(empresa.id) ? prev : [...prev, empresa.id]));
                                     setEmpresaSearch("");
                                     return;
@@ -2411,7 +2955,7 @@ const Financeiro = () => {
                       {isBatchMode && (
                         <div className="text-sm text-muted-foreground space-y-2">
                           <div>{batchEmpresaIds.length} empresa(s) selecionada(s).</div>
-                          <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Limpar seleção</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Deselecionar tudo</Button>
                         </div>
                       )}
                     </div>
@@ -2421,6 +2965,15 @@ const Financeiro = () => {
                 {/* Etapa 2: Detalhes por tipo */}
                 {wizardStep === 2 && boletoForm.tipo === "mensalidade" && (
                   <div className="space-y-6">
+                    {!isBatchMode && boletoForm.empresaId && !boletoForm.faixaId && (
+                      <div role="alert" className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <div>
+                          <p className="font-semibold">Empresa sem faixa cadastrada</p>
+                          <p className="text-sm">Selecione uma faixa abaixo para esta emissão ou atualize o cadastro completo da empresa.</p>
+                        </div>
+                      </div>
+                    )}
                     <Card>
                       <CardHeader>
                         <CardTitle className="text-lg">Detalhes do Boleto - Mensalidade por Faixa</CardTitle>
@@ -2429,18 +2982,27 @@ const Financeiro = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
                             <Label>Competência Inicial*</Label>
-                            <DatePickerField
+                            <MonthPickerField
                               value={boletoForm.competenciaInicial}
                               placeholder="Selecione a competência inicial"
-                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaInicial: value })}
+                              onChange={(value) => setBoletoForm((prev) => ({
+                                ...prev,
+                                competenciaInicial: value,
+                                competenciaFinal: prev.competenciaFinal || value,
+                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(value, prev.competenciaFinal || value)}`,
+                              }))}
                             />
                           </div>
                           <div className="space-y-2">
                             <Label>Competência Final*</Label>
-                            <DatePickerField
+                            <MonthPickerField
                               value={boletoForm.competenciaFinal}
                               placeholder="Selecione a competência final"
-                              onChange={(value) => setBoletoForm({ ...boletoForm, competenciaFinal: value })}
+                              onChange={(value) => setBoletoForm((prev) => ({
+                                ...prev,
+                                competenciaFinal: value,
+                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(prev.competenciaInicial, value)}`,
+                              }))}
                             />
                           </div>
                         </div>
@@ -2459,6 +3021,7 @@ const Financeiro = () => {
                             <Select
                               value={boletoForm.faixaId}
                               onValueChange={(value) => setBoletoForm({ ...boletoForm, faixaId: value })}
+                              disabled={isBatchMode && !!batchFaixaId}
                             >
                               <SelectTrigger id="faixa">
                                 <SelectValue placeholder="Selecione uma faixa" />
@@ -2494,7 +3057,7 @@ const Financeiro = () => {
                           <Label htmlFor="mensagem">Mensagem Personalizada</Label>
                           <Input
                             id="mensagem"
-                            placeholder="Adicione uma mensagem opcional"
+                            placeholder="Boleto referente à competência X a Y"
                             value={boletoForm.mensagemPersonalizada}
                             onChange={(e) => setBoletoForm({ ...boletoForm, mensagemPersonalizada: e.target.value })}
                           />
@@ -2510,9 +3073,20 @@ const Financeiro = () => {
                               </p>
                               <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
                                 <span>{preview.meses || 0} competência(s)</span>
-                                <span>R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
+                                <span>R$ {preview.valorMensalComDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
                                 <span>{boletoForm.unificarCompetencias === "Sim" ? "1 boleto unificado" : `${preview.meses || 0} boleto(s)`}</span>
                               </div>
+                              {!isBatchMode && preview.descontoPercentual > 0 && (
+                                <p className="mt-2 text-xs text-[#7E8C5E]">
+                                  Desconto de {preview.descontoPercentual.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% aplicado:
+                                  {" "}R$ {preview.descontoValorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês sobre R$ {preview.valorMensal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}.
+                                </p>
+                              )}
+                              {isBatchMode && (
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  Em lote, descontos individuais cadastrados em cada empresa serão aplicados no momento da emissão.
+                                </p>
+                              )}
                             </div>
                           );
                         })()}
@@ -2593,7 +3167,7 @@ const Financeiro = () => {
                         <div className="grid grid-cols-2 gap-3 text-sm">
                           <div>
                             <p className="font-semibold text-muted-foreground">Empresa:</p>
-                            <p className="font-medium">{boletoForm.empresaNome}</p>
+                            <p className="font-medium">{isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
                           </div>
                           <div>
                             <p className="font-semibold text-muted-foreground">Tipo:</p>
@@ -2618,7 +3192,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Competências:</p>
-                                <p className="font-medium">{boletoForm.competenciaInicial} a {boletoForm.competenciaFinal}</p>
+                                <p className="font-medium">{getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Unificar Competências:</p>
@@ -2626,7 +3200,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               {boletoForm.mensagemPersonalizada && (
                                 <div className="col-span-2">
@@ -2639,7 +3213,7 @@ const Financeiro = () => {
                             <>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Valor personalizado:</p>
@@ -2668,7 +3242,7 @@ const Financeiro = () => {
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{boletoForm.dataVencimento}</p>
+                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Base de Cálculo (R$):</p>
@@ -2718,8 +3292,17 @@ const Financeiro = () => {
                       </Button>
                     )}
                   </div>
+                  {isEmittingBoletos && batchEmissionProgress.total > 0 && (
+                    <div className="w-full space-y-2 text-sm text-muted-foreground">
+                      <div className="flex justify-between">
+                        <span>Emitindo boletos...</span>
+                        <span>{batchEmissionProgress.done}/{batchEmissionProgress.total}</span>
+                      </div>
+                      <Progress value={(batchEmissionProgress.done / batchEmissionProgress.total) * 100} />
+                    </div>
+                  )}
                   <div className="flex gap-2">
-                    <Button variant="outline" onClick={resetWizard}>
+                    <Button variant="outline" onClick={resetWizard} disabled={isEmittingBoletos}>
                       Cancelar
                     </Button>
                     {wizardStep < 3 ? (
@@ -2727,10 +3310,65 @@ const Financeiro = () => {
                         Próximo
                       </Button>
                     ) : (
-                      <Button onClick={handleEmitirBoleto} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
+                      <Button onClick={() => void handleEmitirBoleto()} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
                         {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
                       </Button>
                     )}
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={emailFallbackDialogOpen} onOpenChange={(open) => {
+              if (isResolvingEmailFallback) return;
+              setEmailFallbackDialogOpen(open);
+            }}>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>E-mail necessário para emissão</DialogTitle>
+                  <DialogDescription>
+                    A EFI exige um e-mail para gerar o boleto. Informe um e-mail para cadastrar na empresa ou use o e-mail do sindicato.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm text-muted-foreground">
+                    {emailFallbackEmpresaIds.length === 1
+                      ? `Empresa sem e-mail: ${mockEmpresas.find((empresa) => empresa.id === emailFallbackEmpresaIds[0])?.nome || "empresa selecionada"}.`
+                      : `${emailFallbackEmpresaIds.length} empresa(s) selecionada(s) não possuem e-mail cadastrado.`}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="email-fallback">E-mail da empresa</Label>
+                    <Input
+                      id="email-fallback"
+                      type="email"
+                      placeholder="email@empresa.com"
+                      value={emailFallbackDraft}
+                      onChange={(event) => setEmailFallbackDraft(event.target.value)}
+                      disabled={isResolvingEmailFallback}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Ao salvar, este e-mail será cadastrado na empresa antes da emissão.
+                    </p>
+                  </div>
+                </div>
+                <DialogFooter className="gap-2 sm:justify-between">
+                  <Button variant="outline" onClick={() => setEmailFallbackDialogOpen(false)} disabled={isResolvingEmailFallback}>
+                    Cancelar emissão
+                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleResolveMissingEmail(SINDICATO_EMAIL, false)}
+                      disabled={isResolvingEmailFallback}
+                    >
+                      Usar e-mail do sindicato
+                    </Button>
+                    <Button
+                      onClick={() => void handleResolveMissingEmail(emailFallbackDraft, true)}
+                      disabled={isResolvingEmailFallback || !emailFallbackDraft.trim()}
+                    >
+                      {isResolvingEmailFallback ? "Continuando..." : "Salvar e continuar"}
+                    </Button>
                   </div>
                 </DialogFooter>
               </DialogContent>
@@ -2778,25 +3416,6 @@ const Financeiro = () => {
               </DialogContent>
             </Dialog>
 
-            <Dialog open={editEmpresaDialogOpen} onOpenChange={setEditEmpresaDialogOpen}>
-              <DialogContent className="max-w-md">
-                <DialogHeader><DialogTitle>Editar dados da empresa</DialogTitle></DialogHeader>
-                <div className="space-y-3">
-                  <Input value={empresaEditDraft?.razao_social || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, razao_social: e.target.value } : p)} placeholder="Razão social" />
-                  <Input value={empresaEditDraft?.email || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, email: e.target.value } : p)} placeholder="E-mail" />
-                  <Input value={empresaEditDraft?.whatsapp || ""} onChange={(e) => setEmpresaEditDraft((p) => p ? { ...p, whatsapp: e.target.value } : p)} placeholder="WhatsApp" />
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setEditEmpresaDialogOpen(false)}>Cancelar</Button>
-                  <Button onClick={async () => {
-                    if (!empresaEditDraft) return;
-                    await hasuraRequest({ query: `mutation UpdateEmpresaRapido($id: uuid!, $razao: String!, $email: String, $whatsapp: String) { update_empresas_by_pk(pk_columns: {id: $id}, _set: { razao_social: $razao, email: $email, whatsapp: $whatsapp }) { id } }`, variables: { id: empresaEditDraft.id, razao: empresaEditDraft.razao_social, email: empresaEditDraft.email || null, whatsapp: empresaEditDraft.whatsapp || null }, token });
-                    await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
-                    setEditEmpresaDialogOpen(false);
-                  }}>Salvar</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
             </div>
           </main>
         </div>
@@ -2807,7 +3426,15 @@ const Financeiro = () => {
 
 export default Financeiro;
   type BoletoView = BoletoRegistro & {
+    empresaId?: string;
+    empresaFantasia?: string;
     efiChargeId?: string | null;
     pdfUrl?: string | null;
     descricao?: string;
+    enviadoEmailEm?: string | null;
+    enviadoWhatsappEm?: string | null;
+    enviadoEmailPara?: string | null;
+    enviadoWhatsappPara?: string | null;
+    ultimoEnvioBoletoEm?: string | null;
+    ultimoEnvioBoletoCanal?: string | null;
   };
