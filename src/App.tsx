@@ -20,6 +20,7 @@ import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
 import NotFound from "./pages/NotFound";
 import AdminAppUsers from "./pages/AdminAppUsers";
+import { PublicRegistrationNotifier } from "@/components/PublicRegistrationNotifier";
 
 const queryClient = new QueryClient();
 
@@ -32,6 +33,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <PublicRegistrationNotifier />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
