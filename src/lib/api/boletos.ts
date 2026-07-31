@@ -126,4 +126,19 @@ export const updateBoletoDueDateRequest = async (chargeId: number, vencimento: s
   return response.json();
 };
 
+export const resendBoletoEmailRequest = async (chargeId: number, email: string) => {
+  const response = await fetch(`${getBoletosApiUrl()}/boletos/${chargeId}/enviar-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || "Falha ao enviar boleto por e-mail.");
+  }
+
+  return response.json();
+};
+
 export type { CreateBoletoPayload };
