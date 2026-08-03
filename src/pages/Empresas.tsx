@@ -631,6 +631,7 @@ const Empresas = () => {
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(50);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [associationRecentsExpanded, setAssociationRecentsExpanded] = useState(false);
   const [associationHistoryOpen, setAssociationHistoryOpen] = useState(false);
   const [isViewMode, setIsViewMode] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<Empresa | null>(null);
@@ -1979,7 +1980,7 @@ const Empresas = () => {
 
             {!isLoading && !error && (
               <Card className="overflow-hidden border-[#DCE7CB] bg-white shadow-sm">
-                <CardHeader className="border-b bg-[#F7F8F4] pb-4">
+                <CardHeader className={cn("bg-[#F7F8F4] py-4", associationRecentsExpanded && "border-b")}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-3">
                       <div className="rounded-full bg-[#DCE7CB] p-2 text-[#1C1C1C]">
@@ -1997,55 +1998,71 @@ const Empresas = () => {
                       variant="outline"
                       size="sm"
                       className="w-full shrink-0 sm:w-auto"
-                      onClick={() => setAssociationHistoryOpen(true)}
-                      disabled={empresasPorDataAssociacao.length === 0}
+                      onClick={() => setAssociationRecentsExpanded((current) => !current)}
+                      aria-expanded={associationRecentsExpanded}
+                      aria-controls="ultimas-empresas-associadas"
                     >
-                      <History className="mr-2 h-4 w-4" />
-                      Ver ordem completa
+                      {associationRecentsExpanded ? "Ocultar" : "Mostrar últimas associadas"}
+                      <ChevronDown className={cn("ml-2 h-4 w-4 transition-transform", associationRecentsExpanded && "rotate-180")} />
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="p-4">
-                  {empresasAssociadasRecentemente.length === 0 ? (
-                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                      Nenhuma empresa associada foi encontrada.
-                    </p>
-                  ) : (
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {empresasAssociadasRecentemente.map((empresa, index) => (
-                        <button
-                          key={empresa.id}
-                          type="button"
-                          className="group rounded-xl border border-[#E3E8D9] bg-white p-4 text-left transition hover:border-[#AAB98C] hover:bg-[#FBFCF8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7E8C5E]"
-                          onClick={() => handleOpenDialog(empresa, true)}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate font-semibold text-[#1C1C1C]">{empresa.nomeFantasia || empresa.razaoSocial}</p>
-                              <p className="truncate text-xs text-muted-foreground">{empresa.razaoSocial}</p>
-                            </div>
-                            <Badge variant="outline" className="shrink-0 bg-[#F7F8F4] text-[11px]">
-                              #{index + 1}
-                            </Badge>
-                          </div>
-                          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                            <div>
-                              <p className="text-xs text-muted-foreground">Associada em</p>
-                              <p className="font-medium text-[#1C1C1C]">{formatAssociationDate(empresa.dataAssociacao)}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground">Tempo associada</p>
-                              <p className="flex items-center gap-1 font-medium text-[#1C1C1C]">
-                                <Clock3 className="h-3.5 w-3.5 text-[#7E8C5E]" />
-                                {getAssociationDuration(empresa.dataAssociacao)}
-                              </p>
-                            </div>
-                          </div>
-                        </button>
-                      ))}
+                {associationRecentsExpanded && (
+                  <CardContent id="ultimas-empresas-associadas" className="space-y-4 p-4">
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full sm:w-auto"
+                        onClick={() => setAssociationHistoryOpen(true)}
+                        disabled={empresasPorDataAssociacao.length === 0}
+                      >
+                        <History className="mr-2 h-4 w-4" />
+                        Ver ordem completa
+                      </Button>
                     </div>
-                  )}
-                </CardContent>
+                    {empresasAssociadasRecentemente.length === 0 ? (
+                      <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                        Nenhuma empresa associada foi encontrada.
+                      </p>
+                    ) : (
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {empresasAssociadasRecentemente.map((empresa, index) => (
+                          <button
+                            key={empresa.id}
+                            type="button"
+                            className="group rounded-xl border border-[#E3E8D9] bg-white p-4 text-left transition hover:border-[#AAB98C] hover:bg-[#FBFCF8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7E8C5E]"
+                            onClick={() => handleOpenDialog(empresa, true)}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-[#1C1C1C]">{empresa.nomeFantasia || empresa.razaoSocial}</p>
+                                <p className="truncate text-xs text-muted-foreground">{empresa.razaoSocial}</p>
+                              </div>
+                              <Badge variant="outline" className="shrink-0 bg-[#F7F8F4] text-[11px]">
+                                #{index + 1}
+                              </Badge>
+                            </div>
+                            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Associada em</p>
+                                <p className="font-medium text-[#1C1C1C]">{formatAssociationDate(empresa.dataAssociacao)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Tempo associada</p>
+                                <p className="flex items-center gap-1 font-medium text-[#1C1C1C]">
+                                  <Clock3 className="h-3.5 w-3.5 text-[#7E8C5E]" />
+                                  {getAssociationDuration(empresa.dataAssociacao)}
+                                </p>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                )}
               </Card>
             )}
 
