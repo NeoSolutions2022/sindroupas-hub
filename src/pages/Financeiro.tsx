@@ -50,7 +50,7 @@ import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
 import { AdvancedFilters, FilterState, defaultFilters } from "@/components/financeiro/AdvancedFilters";
 import { GerarNovoBoletoModal } from "@/components/financeiro/GerarNovoBoletoModal";
 import { BoletoActionsCell } from "@/components/financeiro/BoletoActionsCell";
-import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths } from "date-fns";
+import { format, parse, parseISO, isValid, isBefore, isAfter, differenceInDays, startOfMonth, addMonths, startOfDay, endOfDay } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { cancelBoletoRequest, createBoletoRequest, CreateBoletoPayload, resendBoletoEmailRequest, updateBoletoDueDateRequest } from "@/lib/api/boletos";
 import { useAuth } from "@/contexts/AuthContext";
@@ -1007,13 +1007,21 @@ const Financeiro = () => {
     }
   }, [searchParams, setSearchParams]);
 
-  // Helper to parse date from dd/mm/yyyy
+  // Helper to parse due dates coming from Hasura (yyyy-MM-dd) or already formatted UI values.
   const parseVencimento = (dateStr: string): Date | null => {
-    try {
-      return parse(dateStr, "dd/MM/yyyy", new Date());
-    } catch {
-      return null;
+    if (!dateStr) return null;
+
+    const trimmedDate = dateStr.trim();
+    const isoDate = parseISO(trimmedDate);
+    if (isValid(isoDate)) return isoDate;
+
+    const supportedFormats = ["dd/MM/yyyy", "dd-MM-yyyy"];
+    for (const dateFormat of supportedFormats) {
+      const parsedDate = parse(trimmedDate, dateFormat, new Date());
+      if (isValid(parsedDate)) return parsedDate;
     }
+
+    return null;
   };
 
   // Determine boleto effective status for UI
@@ -1203,11 +1211,15 @@ const Financeiro = () => {
 
         // Date range filter
         const dueDate = parseVencimento(boleto.vencimento);
+        if ((f.dataInicio || f.dataFim) && !dueDate) {
+          return false;
+        }
         if (dueDate) {
-          if (f.dataInicio && isBefore(dueDate, f.dataInicio)) {
+          const dueDateDay = startOfDay(dueDate);
+          if (f.dataInicio && isBefore(dueDateDay, startOfDay(f.dataInicio))) {
             return false;
           }
-          if (f.dataFim && isAfter(dueDate, f.dataFim)) {
+          if (f.dataFim && isAfter(dueDateDay, endOfDay(f.dataFim))) {
             return false;
           }
         }
