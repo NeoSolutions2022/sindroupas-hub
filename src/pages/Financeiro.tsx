@@ -69,6 +69,10 @@ type EmpresaLookupRow = {
   razao_social: string;
   nome_fantasia?: string | null;
   faixa_id?: string | null;
+  associada?: boolean | null;
+  tipo_vinculo?: "Associado" | "Mantenedor" | "Parceiro" | "Fornecedor" | null;
+  categoria_mantenedor?: "Ouro" | "Prata" | "Bronze" | null;
+  valor_mensalidade_vinculo?: number | string | null;
   desconto_mensalidade_percentual?: number | string | null;
   observacoes?: string | null;
   qtd_funcionarios?: number | null;
@@ -181,6 +185,10 @@ const FINANCEIRO_QUERY = `
       razao_social
       nome_fantasia
       faixa_id
+      associada
+      tipo_vinculo
+      categoria_mantenedor
+      valor_mensalidade_vinculo
       desconto_mensalidade_percentual
       observacoes
       qtd_funcionarios
@@ -218,6 +226,9 @@ const EMPRESAS_POR_FAIXA_QUERY = `
       razao_social
       nome_fantasia
       faixa_id
+      tipo_vinculo
+      categoria_mantenedor
+      valor_mensalidade_vinculo
       desconto_mensalidade_percentual
       observacoes
       cnpj
@@ -681,6 +692,9 @@ const Financeiro = () => {
           razaoSocial: empresa.razao_social,
           nomeFantasia: empresa.nome_fantasia ?? "",
           faixaId: empresa.faixa_id ?? "",
+          tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : "Fornecedor"),
+          categoriaMantenedor: empresa.categoria_mantenedor ?? "",
+          valorMensalidadeVinculo: Number(empresa.valor_mensalidade_vinculo ?? 0),
           descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
           cnpj: empresa.cnpj ?? "",
           qtdFuncionarios: empresa.qtd_funcionarios ?? empresa.colaboradores?.length ?? 0,
@@ -715,7 +729,11 @@ const Financeiro = () => {
         ? payload.valorCalculado
         : payload.tipo === "avulso"
           ? parseCurrencyInput(payload.valorAvulso)
-          : payload.valorOverride ?? previaBoleto ?? getValorFaixa(payload.faixaId);
+          : payload.valorOverride ?? previaBoleto ?? (
+              empresa.tipoVinculo === "Mantenedor" || empresa.tipoVinculo === "Parceiro"
+                ? empresa.valorMensalidadeVinculo
+                : getValorFaixa(payload.faixaId)
+            );
       if (valorBoleto <= 0) {
         throw new Error("Valor do boleto inválido. Informe um valor maior que zero.");
       }
@@ -724,7 +742,9 @@ const Financeiro = () => {
         ? `Contribuição Assistencial ${payload.anoContribuicao}`
         : payload.tipo === "avulso"
           ? payload.motivoCobranca.trim()
-          : "Mensalidade por faixa";
+          : empresa.tipoVinculo === "Associado"
+            ? "Mensalidade de associado por faixa"
+            : `Mensalidade de ${empresa.tipoVinculo.toLowerCase()}`;
       const itemName = payload.tipo === "contribuicao"
         ? `Contribuição Assistencial ${payload.anoContribuicao}`
         : payload.tipo === "avulso"
@@ -844,13 +864,15 @@ const Financeiro = () => {
   };
 
   const getMensalidadePreview = () => {
-    const valorFaixa = getValorFaixa(boletoForm.faixaId);
     const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
     const empresaSelecionada = !isBatchMode ? getEmpresaMensalidade(boletoForm.empresaId) : undefined;
-    const desconto = calcularMensalidadeComDesconto(valorFaixa, empresaSelecionada?.descontoMensalidadePercentual);
+    const valorBase = empresaSelecionada && empresaSelecionada.tipoVinculo !== "Associado"
+      ? empresaSelecionada.valorMensalidadeVinculo
+      : getValorFaixa(boletoForm.faixaId);
+    const desconto = calcularMensalidadeComDesconto(valorBase, empresaSelecionada?.descontoMensalidadePercentual);
     return {
       meses,
-      valorMensal: valorFaixa,
+      valorMensal: valorBase,
       descontoPercentual: desconto.descontoPercentual,
       descontoValorMensal: desconto.descontoValor,
       valorMensalComDesconto: desconto.valorFinal,
@@ -966,6 +988,7 @@ const Financeiro = () => {
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [batchEmpresaIds, setBatchEmpresaIds] = useState<string[]>([]);
   const [batchFaixaId, setBatchFaixaId] = useState("");
+  const [batchTipoVinculo, setBatchTipoVinculo] = useState<"Associado" | "Mantenedor" | "Parceiro" | "Fornecedor">("Associado");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
@@ -1272,7 +1295,14 @@ const Financeiro = () => {
 
     if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        return !!(boletoForm.competenciaInicial && boletoForm.competenciaFinal && boletoForm.dataVencimento && boletoForm.faixaId);
+        const selectedCompanies = isBatchMode
+          ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
+          : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+        const requiresFaixa = selectedCompanies.some((empresa) => empresa.tipoVinculo === "Associado");
+        const validValues = selectedCompanies.every((empresa) =>
+          empresa.tipoVinculo === "Associado" || empresa.valorMensalidadeVinculo > 0,
+        );
+        return !!(boletoForm.competenciaInicial && boletoForm.competenciaFinal && boletoForm.dataVencimento && (!requiresFaixa || boletoForm.faixaId) && validValues);
       }
       if (boletoForm.tipo === "avulso") {
         return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
@@ -1282,7 +1312,7 @@ const Financeiro = () => {
     }
 
     return true;
-  }, [batchEmpresaIds.length, boletoForm, isBatchMode, wizardStep]);
+  }, [batchEmpresaIds, boletoForm, isBatchMode, mockEmpresas, wizardStep]);
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -1580,6 +1610,7 @@ const Financeiro = () => {
     });
     setEmpresaSearch("");
     setIsBatchMode(false);
+    setBatchTipoVinculo("Associado");
     setPreviaBoleto(null);
     setContribuicaoPreview("");
     setBatchEmissionProgress({ done: 0, total: 0 });
@@ -1614,9 +1645,16 @@ const Financeiro = () => {
       emp.razaoSocial.toLowerCase().includes(term) ||
       emp.nomeFantasia.toLowerCase().includes(term) ||
       emp.cnpj.includes(empresaSearch);
-    const matchesBatchFaixa = !isBatchMode || !batchFaixaId || emp.faixaId === batchFaixaId;
-    return matchesSearch && matchesBatchFaixa;
+    const matchesBatchTipo = !isBatchMode || emp.tipoVinculo === batchTipoVinculo;
+    const matchesBatchFaixa = !isBatchMode || batchTipoVinculo !== "Associado" || !batchFaixaId || emp.faixaId === batchFaixaId;
+    return matchesSearch && matchesBatchTipo && matchesBatchFaixa;
   });
+  const empresasDoVinculoSelecionado = useMemo(
+    () => mockEmpresas.filter((empresa) =>
+      empresa.tipoVinculo === batchTipoVinculo &&
+      (batchTipoVinculo !== "Associado" || !batchFaixaId || empresa.faixaId === batchFaixaId)),
+    [batchFaixaId, batchTipoVinculo, mockEmpresas],
+  );
   const empresasDaFaixaSelecionada = useMemo(() => {
     if (!batchFaixaId) return [];
     return (
@@ -1667,10 +1705,17 @@ const Financeiro = () => {
       }
     } else if (wizardStep === 2) {
       if (boletoForm.tipo === "mensalidade") {
-        if (!boletoForm.competenciaInicial || !boletoForm.competenciaFinal || !boletoForm.dataVencimento || !boletoForm.faixaId) {
+        const selectedCompanies = isBatchMode
+          ? mockEmpresas.filter((empresa) => batchEmpresaIds.includes(empresa.id))
+          : mockEmpresas.filter((empresa) => empresa.id === boletoForm.empresaId);
+        const requiresFaixa = selectedCompanies.some((empresa) => empresa.tipoVinculo === "Associado");
+        const withoutValue = selectedCompanies.filter((empresa) => empresa.tipoVinculo !== "Associado" && empresa.valorMensalidadeVinculo <= 0);
+        if (!boletoForm.competenciaInicial || !boletoForm.competenciaFinal || !boletoForm.dataVencimento || (requiresFaixa && !boletoForm.faixaId) || withoutValue.length > 0) {
           toast({
             title: "Campos obrigatórios",
-            description: "Preencha competências, vencimento e faixa para avançar.",
+            description: withoutValue.length > 0
+              ? `Cadastre o valor mensal de: ${withoutValue.map((empresa) => empresa.nome).join(", ")}.`
+              : "Preencha competências, vencimento e a faixa dos associados para avançar.",
             variant: "destructive",
           });
           return;
@@ -1900,7 +1945,9 @@ const Financeiro = () => {
           throw new Error("Competências inválidas. Verifique as datas inicial e final.");
         }
 
-        const foraDaFaixa = targetEmpresas.filter((empresa) => empresa.faixaId !== boletoForm.faixaId);
+        const foraDaFaixa = targetEmpresas.filter((empresa) =>
+          empresa.tipoVinculo === "Associado" && empresa.faixaId !== boletoForm.faixaId,
+        );
         if (foraDaFaixa.length > 0) {
           throw new Error(`Há empresa(s) fora da faixa selecionada: ${foraDaFaixa.map((empresa) => empresa.nome).join(", ")}.`);
         }
@@ -1912,7 +1959,7 @@ const Financeiro = () => {
           throw new Error(`Já existe boleto de mensalidade para a competência selecionada: ${duplicadas.map((empresa) => empresa.nome).join(", ")}.`);
         }
 
-        if (isBatchMode) {
+        if (isBatchMode && targetEmpresas.some((empresa) => empresa.tipoVinculo === "Associado")) {
           const trimestreAtual = getCurrentQuarterRange();
           const emitidasNoTrimestre = targetEmpresas.filter((empresa) =>
             hasBoletoOverlap(empresa.id, trimestreAtual.start, trimestreAtual.end),
@@ -1931,7 +1978,10 @@ const Financeiro = () => {
 
         if (boletoForm.unificarCompetencias === "Sim") {
           for (const empresa of targetEmpresas) {
-            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
+            const valorBase = empresa.tipoVinculo === "Associado"
+              ? getValorFaixa(boletoForm.faixaId)
+              : empresa.valorMensalidadeVinculo;
+            const mensalidade = calcularMensalidadeComDesconto(valorBase, empresa.descontoMensalidadePercentual);
             await emitir({
               ...boletoForm,
               empresaId: empresa.id,
@@ -1944,7 +1994,10 @@ const Financeiro = () => {
           }
         } else {
           for (const empresa of targetEmpresas) {
-            const mensalidade = calcularMensalidadeComDesconto(getValorFaixa(boletoForm.faixaId), empresa.descontoMensalidadePercentual);
+            const valorBase = empresa.tipoVinculo === "Associado"
+              ? getValorFaixa(boletoForm.faixaId)
+              : empresa.valorMensalidadeVinculo;
+            const mensalidade = calcularMensalidadeComDesconto(valorBase, empresa.descontoMensalidadePercentual);
             for (const competencia of competencias) {
               await emitir({
                 ...boletoForm,
@@ -2835,7 +2888,10 @@ const Financeiro = () => {
                         <div className="flex items-center space-x-2 border p-3 rounded-lg">
                           <RadioGroupItem value="mensalidade" id="mensalidade" />
                           <Label htmlFor="mensalidade" className="cursor-pointer flex-1">
-                            Mensalidade (por Faixa)
+                            Mensalidade de vínculo
+                            <span className="block text-xs text-muted-foreground mt-1">
+                              Associados por faixa; mantenedores e parceiros pelo valor mensal cadastrado.
+                            </span>
                           </Label>
                         </div>
                         <div className="flex items-center space-x-2 border p-3 rounded-lg">
@@ -2864,6 +2920,28 @@ const Financeiro = () => {
                       {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
                       {isBatchMode && (
                         <div className="space-y-2 rounded-md border p-3">
+                          <Label>Tipo de vínculo para o lote</Label>
+                          <Select
+                            value={batchTipoVinculo}
+                            onValueChange={(value: "Associado" | "Mantenedor" | "Parceiro" | "Fornecedor") => {
+                              setBatchTipoVinculo(value);
+                              setBatchFaixaId("");
+                              setBatchEmpresaIds([]);
+                              setBoletoForm((prev) => ({ ...prev, faixaId: "" }));
+                            }}
+                          >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Associado">Associados — trimestral por faixa</SelectItem>
+                              <SelectItem value="Mantenedor">Mantenedores — mensal por valor cadastrado</SelectItem>
+                              <SelectItem value="Parceiro">Parceiros — mensal por valor cadastrado</SelectItem>
+                              <SelectItem value="Fornecedor">Fornecedores — sem mensalidade automática</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {batchTipoVinculo === "Fornecedor" && (
+                            <p className="text-sm text-amber-700">Fornecedores não possuem mensalidade automática. Use boleto avulso quando necessário.</p>
+                          )}
+                          {batchTipoVinculo === "Associado" && <>
                           <Label>Selecionar faixa para lote</Label>
                           <Select value={batchFaixaId} onValueChange={(value) => { setBatchFaixaId(value); setBatchEmpresaIds([]); setBoletoForm((prev) => ({ ...prev, faixaId: value })); }}>
                             <SelectTrigger>
@@ -2877,6 +2955,32 @@ const Financeiro = () => {
                               ))}
                             </SelectContent>
                           </Select>
+                          </>}
+                          {batchTipoVinculo !== "Associado" && batchTipoVinculo !== "Fornecedor" && (
+                            <div className="space-y-2 max-h-48 overflow-auto">
+                              <div className="flex flex-wrap gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds(empresasDoVinculoSelecionado.filter((empresa) => empresa.valorMensalidadeVinculo > 0).map((empresa) => empresa.id))}>Selecionar todas com valor</Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Deselecionar tudo</Button>
+                              </div>
+                              {empresasDoVinculoSelecionado.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma empresa encontrada para este vínculo.</p>}
+                              {empresasDoVinculoSelecionado.map((empresa) => (
+                                <label key={empresa.id} className="flex items-center justify-between gap-3 text-sm">
+                                  <span className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      disabled={empresa.valorMensalidadeVinculo <= 0}
+                                      checked={batchEmpresaIds.includes(empresa.id)}
+                                      onChange={(event) => setBatchEmpresaIds((prev) => event.target.checked ? Array.from(new Set([...prev, empresa.id])) : prev.filter((id) => id !== empresa.id))}
+                                    />
+                                    {empresa.nome}{empresa.categoriaMantenedor ? ` • ${empresa.categoriaMantenedor}` : ""}
+                                  </span>
+                                  <span className={empresa.valorMensalidadeVinculo > 0 ? "font-medium" : "text-destructive"}>
+                                    {empresa.valorMensalidadeVinculo > 0 ? `R$ ${empresa.valorMensalidadeVinculo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` : "Valor não cadastrado"}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
                           {batchFaixaId && (
                             <div className="space-y-2 max-h-48 overflow-auto">
                               {!isLoadingEmpresasPorFaixa && empresasDaFaixaSelecionada.length > 0 && (
@@ -2941,7 +3045,7 @@ const Financeiro = () => {
                                 className="p-3 hover:bg-accent cursor-pointer border-b last:border-b-0"
                                 onClick={() => {
                                   if (isBatchMode) {
-                                    if (batchFaixaId && empresa.faixaId !== batchFaixaId) {
+                                    if (empresa.tipoVinculo !== batchTipoVinculo || (batchTipoVinculo === "Associado" && batchFaixaId && empresa.faixaId !== batchFaixaId)) {
                                       toast({ title: "Empresa fora da faixa", description: "Selecione apenas empresas da faixa escolhida para o lote.", variant: "destructive" });
                                       return;
                                     }
@@ -2977,7 +3081,7 @@ const Financeiro = () => {
                 {/* Etapa 2: Detalhes por tipo */}
                 {wizardStep === 2 && boletoForm.tipo === "mensalidade" && (
                   <div className="space-y-6">
-                    {!isBatchMode && boletoForm.empresaId && !boletoForm.faixaId && (
+                    {!isBatchMode && boletoForm.empresaId && mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.tipoVinculo === "Associado" && !boletoForm.faixaId && (
                       <div role="alert" className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
                         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
                         <div>
@@ -2988,7 +3092,7 @@ const Financeiro = () => {
                     )}
                     <Card>
                       <CardHeader>
-                        <CardTitle className="text-lg">Detalhes do Boleto - Mensalidade por Faixa</CardTitle>
+                        <CardTitle className="text-lg">Detalhes da mensalidade</CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3019,6 +3123,17 @@ const Financeiro = () => {
                           </div>
                         </div>
 
+                        {((!isBatchMode && mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.tipoVinculo !== "Associado") || (isBatchMode && batchTipoVinculo !== "Associado")) && (
+                          <div className="space-y-2">
+                            <Label>Valor mensal</Label>
+                            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                              {isBatchMode
+                                ? "Cada empresa usará o valor mensal negociado em seu cadastro."
+                                : `R$ ${(mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.valorMensalidadeVinculo ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
                             <Label>Data Vencimento*</Label>
@@ -3028,7 +3143,7 @@ const Financeiro = () => {
                               onChange={(value) => setBoletoForm({ ...boletoForm, dataVencimento: value })}
                             />
                           </div>
-                          <div className="space-y-2">
+                          {((!isBatchMode && mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.tipoVinculo === "Associado") || (isBatchMode && batchTipoVinculo === "Associado")) && <div className="space-y-2">
                             <Label htmlFor="faixa">Faixa*</Label>
                             <Select
                               value={boletoForm.faixaId}
@@ -3046,7 +3161,7 @@ const Financeiro = () => {
                                 ))}
                               </SelectContent>
                             </Select>
-                          </div>
+                          </div>}
                         </div>
 
                         <div className="space-y-2">

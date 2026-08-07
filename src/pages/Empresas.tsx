@@ -89,6 +89,8 @@ type Colaborador = {
 };
 
 type TipoRelacionamento = "Parceiro" | "Mantenedor" | "Fornecedor";
+type TipoVinculo = "Associado" | "Mantenedor" | "Parceiro" | "Fornecedor";
+type CategoriaMantenedor = "Ouro" | "Prata" | "Bronze";
 type RelacionamentoEmpresa = {
   id?: string;
   tipo: TipoRelacionamento;
@@ -141,6 +143,9 @@ type Empresa = {
   municipio?: string;
   uf?: string;
   associado: boolean;
+  tipoVinculo?: TipoVinculo;
+  categoriaMantenedor?: CategoriaMantenedor;
+  valorMensalidadeVinculo?: number;
   situacaoFinanceira: "Regular" | "Inadimplente";
   porte: typeof portes[number];
   capitalSocial?: number;
@@ -300,6 +305,9 @@ type EmpresaRow = {
   whatsapp?: string | null;
   endereco?: string | null;
   associada?: boolean | null;
+  tipo_vinculo?: TipoVinculo | null;
+  categoria_mantenedor?: CategoriaMantenedor | null;
+  valor_mensalidade_vinculo?: number | null;
   situacao_financeira?: "Regular" | "Inadimplente" | null;
   porte?: string | null;
   capital_social?: number | null;
@@ -527,6 +535,9 @@ const EMPRESAS_QUERY = `
       whatsapp
       endereco
       associada
+      tipo_vinculo
+      categoria_mantenedor
+      valor_mensalidade_vinculo
       situacao_financeira
       porte
       capital_social
@@ -742,6 +753,9 @@ const Empresas = () => {
         endereco: empresa.endereco ?? undefined,
         ...enderecoParts,
         associado: Boolean(empresa.associada),
+        tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : undefined),
+        categoriaMantenedor: empresa.categoria_mantenedor ?? undefined,
+        valorMensalidadeVinculo: empresa.valor_mensalidade_vinculo ?? undefined,
         situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
         porte: (empresa.porte as Empresa["porte"]) ?? "ME",
         capitalSocial: empresa.capital_social ?? undefined,
@@ -808,6 +822,12 @@ const Empresas = () => {
         nome_fantasia: payload.values.nomeFantasia ?? "",
         cnpj: payload.values.cnpj ?? "",
         associada: payload.values.dataDesassociacao ? false : (payload.values.associado ?? false),
+        tipo_vinculo: payload.values.tipoVinculo ?? (payload.values.associado ? "Associado" : null),
+        categoria_mantenedor: payload.values.tipoVinculo === "Mantenedor" ? payload.values.categoriaMantenedor ?? null : null,
+        valor_mensalidade_vinculo:
+          payload.values.tipoVinculo === "Mantenedor" || payload.values.tipoVinculo === "Parceiro"
+            ? payload.values.valorMensalidadeVinculo ?? null
+            : null,
         situacao_financeira: payload.values.situacaoFinanceira ?? "Regular",
         porte: payload.values.porte ?? "ME",
         capital_social: payload.values.capitalSocial ?? null,
@@ -1028,6 +1048,7 @@ const Empresas = () => {
         razao_social: solicitacao.razao_social,
         nome_fantasia: solicitacao.nome_fantasia || solicitacao.razao_social,
         cnpj: solicitacao.cnpj,
+        tipo_vinculo: "Associado",
         associada: true,
         situacao_financeira: "Regular",
         porte: solicitacao.porte || "ME",
@@ -1312,6 +1333,7 @@ const Empresas = () => {
       setEditingEmpresa(null);
       setFormData({
         associado: true,
+        tipoVinculo: "Associado",
         situacaoFinanceira: "Regular",
         porte: "ME",
         descontoMensalidadePercentual: 0,
@@ -1366,6 +1388,7 @@ const Empresas = () => {
       endereco: solicitacao.endereco ?? undefined,
       ...enderecoParts,
       associado: true,
+      tipoVinculo: "Associado",
       situacaoFinanceira: "Regular",
       porte: (solicitacao.porte as Empresa["porte"]) || "ME",
       capitalSocial: solicitacao.capital_social ?? undefined,
@@ -1814,7 +1837,13 @@ const Empresas = () => {
     const requiredChecks = [
       { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
       { key: "cnpj", label: "CNPJ", value: formData.cnpj },
-      { key: "associado", label: "Associado", value: typeof formData.associado === "boolean" ? "ok" : "" },
+      { key: "tipoVinculo", label: "Tipo de vínculo", value: formData.tipoVinculo },
+      ...(formData.tipoVinculo === "Mantenedor"
+        ? [{ key: "categoriaMantenedor", label: "Categoria do mantenedor", value: formData.categoriaMantenedor }]
+        : []),
+      ...(formData.tipoVinculo === "Mantenedor" || formData.tipoVinculo === "Parceiro"
+        ? [{ key: "valorMensalidadeVinculo", label: "Valor mensal negociado", value: (formData.valorMensalidadeVinculo ?? 0) > 0 ? "ok" : "" }]
+        : []),
       { key: "situacaoFinanceira", label: "Situação Financeira", value: formData.situacaoFinanceira },
       { key: "porte", label: "Porte", value: formData.porte },
     ];
@@ -2690,7 +2719,9 @@ const Empresas = () => {
                           ({
                             razaoSocial: "Razão Social",
                             cnpj: "CNPJ",
-                            associado: "Associado",
+                            tipoVinculo: "Tipo de vínculo",
+                            categoriaMantenedor: "Categoria do mantenedor",
+                            valorMensalidadeVinculo: "Valor mensal negociado",
                             situacaoFinanceira: "Situação Financeira",
                             porte: "Porte",
                             dataFundacao: "Fundação",
@@ -2740,6 +2771,31 @@ const Empresas = () => {
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
+                      <Label>Tipo de vínculo*</Label>
+                      <Select
+                        value={formData.tipoVinculo || (formData.associado ? "Associado" : undefined)}
+                        onValueChange={(value: TipoVinculo) => setFormData((prev) => ({
+                          ...prev,
+                          tipoVinculo: value,
+                          associado: value === "Associado",
+                          faixaId: value === "Associado" ? prev.faixaId : undefined,
+                          categoriaMantenedor: value === "Mantenedor" ? prev.categoriaMantenedor : undefined,
+                          valorMensalidadeVinculo:
+                            value === "Mantenedor" || value === "Parceiro" ? prev.valorMensalidadeVinculo : undefined,
+                        }))}
+                        disabled={isViewMode}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Selecione o vínculo" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Associado">Associado</SelectItem>
+                          <SelectItem value="Mantenedor">Mantenedor</SelectItem>
+                          <SelectItem value="Parceiro">Parceiro</SelectItem>
+                          <SelectItem value="Fornecedor">Fornecedor</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">Cada empresa possui somente um tipo de vínculo.</p>
+                    </div>
+                    <div className="space-y-2">
                       <Label htmlFor="razaoSocial">Razão Social*</Label>
                       <Input
                         id="razaoSocial"
@@ -2753,6 +2809,42 @@ const Empresas = () => {
                         disabled={isViewMode}
                       />
                     </div>
+                    {formData.tipoVinculo === "Mantenedor" && (
+                      <div className="space-y-2">
+                        <Label>Categoria do mantenedor*</Label>
+                        <Select
+                          value={formData.categoriaMantenedor}
+                          onValueChange={(value: CategoriaMantenedor) => setFormData((prev) => ({ ...prev, categoriaMantenedor: value }))}
+                          disabled={isViewMode}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Ouro, prata ou bronze" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Ouro">Ouro</SelectItem>
+                            <SelectItem value="Prata">Prata</SelectItem>
+                            <SelectItem value="Bronze">Bronze</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {(formData.tipoVinculo === "Mantenedor" || formData.tipoVinculo === "Parceiro") && (
+                      <div className="space-y-2">
+                        <Label htmlFor="valorMensalidadeVinculo">Valor mensal negociado*</Label>
+                        <Input
+                          id="valorMensalidadeVinculo"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={formData.valorMensalidadeVinculo ?? ""}
+                          onChange={(event) => setFormData((prev) => ({
+                            ...prev,
+                            valorMensalidadeVinculo: event.target.value ? Number(event.target.value) : undefined,
+                          }))}
+                          disabled={isViewMode}
+                          placeholder="0,00"
+                        />
+                        <p className="text-xs text-muted-foreground">Usado na emissão mensal em lote; pode variar por empresa.</p>
+                      </div>
+                    )}
                     <div className="space-y-2">
                       <Label htmlFor="nomeFantasia">Nome Fantasia</Label>
                       <Input
@@ -2927,35 +3019,6 @@ const Empresas = () => {
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Associado*</Label>
-                      <Select
-                        value={
-                          formData.associado === undefined
-                            ? "unset"
-                            : formData.associado
-                              ? "sim"
-                              : "nao"
-                        }
-                        onValueChange={(value) => {
-                          clearValidationError("associado");
-                          setFormData((prev) => ({
-                            ...prev,
-                            associado: value === "unset" ? undefined : value === "sim",
-                          }));
-                        }}
-                        disabled={isViewMode}
-                      >
-                        <SelectTrigger className={cn(validationErrors.includes("associado") && "border-destructive focus:ring-destructive")}>
-                          <SelectValue placeholder="Selecione" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="unset">Selecione</SelectItem>
-                          <SelectItem value="sim">Sim</SelectItem>
-                          <SelectItem value="nao">Não</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
                     <div className="space-y-2">
                       <Label>Situação Financeira*</Label>
                       <Select
