@@ -348,6 +348,12 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  modoCalculoContribuicao: "folhas_separadas" | "total_dividido";
+  baseCalculoAgosto: string;
+  baseCalculoSetembro: string;
+  vencimentoParcela1: string;
+  vencimentoParcela2: string;
+  contribuicaoParcelaNumero?: 1 | 2;
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
@@ -726,7 +732,7 @@ const Financeiro = () => {
       }
 
       const valorBoleto = payload.tipo === "contribuicao"
-        ? payload.valorCalculado
+        ? payload.valorOverride ?? payload.valorCalculado
         : payload.tipo === "avulso"
           ? parseCurrencyInput(payload.valorAvulso)
           : payload.valorOverride ?? previaBoleto ?? (
@@ -739,14 +745,14 @@ const Financeiro = () => {
       }
 
       const descricaoBoleto = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        ? `Contribuição Assistencial ${payload.anoContribuicao}${payload.contribuicaoParcelaNumero ? ` — Parcela ${payload.contribuicaoParcelaNumero}/2` : ""}`
         : payload.tipo === "avulso"
           ? payload.motivoCobranca.trim()
           : empresa.tipoVinculo === "Associado"
             ? "Mensalidade de associado por faixa"
             : `Mensalidade de ${empresa.tipoVinculo.toLowerCase()}`;
       const itemName = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        ? `Contribuição Assistencial ${payload.anoContribuicao}${payload.contribuicaoParcelaNumero ? ` - Parcela ${payload.contribuicaoParcelaNumero}/2` : ""}`
         : payload.tipo === "avulso"
           ? "Boleto avulso"
           : "Mensalidade";
@@ -773,7 +779,7 @@ const Financeiro = () => {
         base: baseValor || undefined,
         item_name: itemName,
         item_amount: 1,
-        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
+        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.anoContribuicao || payload.dataVencimento}${payload.contribuicaoParcelaNumero ? `-parcela-${payload.contribuicaoParcelaNumero}` : ""}`,
         message: payload.mensagemPersonalizada || undefined,
         customer: {
           email: emailBoleto,
@@ -800,10 +806,10 @@ const Financeiro = () => {
               ano: payload.anoContribuicao || null,
               periodicidade: payload.periodicidade || null,
               parcelas: payload.parcelas ? Number(payload.parcelas) : null,
-              base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
-              percentual: payload.percentual ? Number(payload.percentual) : null,
-              descontos: payload.descontos ? Number(payload.descontos) : null,
-              valor: payload.valorCalculado || null,
+              base: baseValor || null,
+              percentual: percentualValor || null,
+              descontos: descontoValor || null,
+              valor: valorBoleto || null,
               vencimento: payload.dataVencimento || null,
               situacao: "Emitida",
             },
@@ -981,6 +987,11 @@ const Financeiro = () => {
     descontos: "",
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
+    modoCalculoContribuicao: "folhas_separadas",
+    baseCalculoAgosto: "",
+    baseCalculoSetembro: "",
+    vencimentoParcela1: "",
+    vencimentoParcela2: "",
     valorAvulso: "",
     motivoCobranca: "",
   });
@@ -1288,7 +1299,7 @@ const Financeiro = () => {
     return filteredBoletos.slice(start, start + boletosPageSize);
   }, [filteredBoletos, boletosPage, boletosPageSize]);
 
-  const canProceed = useMemo(() => {
+  const canProceed = (() => {
     if (wizardStep === 1) {
       return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
     }
@@ -1307,12 +1318,15 @@ const Financeiro = () => {
       if (boletoForm.tipo === "avulso") {
         return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
       }
+      if (boletoForm.tipo === "contribuicao") {
+        return getContribuicaoParcelas(boletoForm).length === 2;
+      }
 
       return false;
     }
 
     return true;
-  }, [batchEmpresaIds, boletoForm, isBatchMode, mockEmpresas, wizardStep]);
+  })();
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -1605,6 +1619,11 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      modoCalculoContribuicao: "folhas_separadas",
+      baseCalculoAgosto: "",
+      baseCalculoSetembro: "",
+      vencimentoParcela1: "",
+      vencimentoParcela2: "",
       valorAvulso: "",
       motivoCobranca: "",
     });
@@ -1677,6 +1696,76 @@ const Financeiro = () => {
     return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
   }
 
+  function getContribuicaoParcelas(form: BoletoForm) {
+    const percentual = Number(form.percentual.replace(",", "."));
+    const anoValido = /^\d{4}$/.test(form.anoContribuicao);
+    const primeiroVencimento = parseISO(form.vencimentoParcela1);
+    const segundoVencimento = parseISO(form.vencimentoParcela2);
+    if (
+      !anoValido ||
+      !Number.isFinite(percentual) ||
+      percentual <= 0 ||
+      !isValid(primeiroVencimento) ||
+      !isValid(segundoVencimento) ||
+      !isAfter(segundoVencimento, primeiroVencimento)
+    ) {
+      return [];
+    }
+
+    if (form.modoCalculoContribuicao === "folhas_separadas") {
+      const baseAgosto = parseCurrencyInput(form.baseCalculoAgosto);
+      const baseSetembro = parseCurrencyInput(form.baseCalculoSetembro);
+      if (baseAgosto <= 0 || baseSetembro <= 0) return [];
+      return [
+        {
+          numero: 1 as const,
+          competencia: `${form.anoContribuicao}-08-01`,
+          base: baseAgosto,
+          desconto: 0,
+          valor: Number(((baseAgosto * percentual) / 100).toFixed(2)),
+          vencimento: form.vencimentoParcela1,
+        },
+        {
+          numero: 2 as const,
+          competencia: `${form.anoContribuicao}-09-01`,
+          base: baseSetembro,
+          desconto: 0,
+          valor: Number(((baseSetembro * percentual) / 100).toFixed(2)),
+          vencimento: form.vencimentoParcela2,
+        },
+      ];
+    }
+
+    const baseTotal = parseCurrencyInput(form.baseCalculo);
+    const descontos = parseCurrencyInput(form.descontos);
+    const valorTotal = Math.max((baseTotal * percentual) / 100 - descontos, 0);
+    if (baseTotal <= 0 || valorTotal <= 0) return [];
+    const primeiraParcela = Math.floor((valorTotal * 100) / 2) / 100;
+    const segundaParcela = Number((valorTotal - primeiraParcela).toFixed(2));
+    const primeiraBase = Math.floor((baseTotal * 100) / 2) / 100;
+    const segundaBase = Number((baseTotal - primeiraBase).toFixed(2));
+    const primeiroDesconto = Math.floor((descontos * 100) / 2) / 100;
+    const segundoDesconto = Number((descontos - primeiroDesconto).toFixed(2));
+    return [
+      {
+        numero: 1 as const,
+        competencia: `${form.anoContribuicao}-08-01`,
+        base: primeiraBase,
+        desconto: primeiroDesconto,
+        valor: primeiraParcela,
+        vencimento: form.vencimentoParcela1,
+      },
+      {
+        numero: 2 as const,
+        competencia: `${form.anoContribuicao}-09-01`,
+        base: segundaBase,
+        desconto: segundoDesconto,
+        valor: segundaParcela,
+        vencimento: form.vencimentoParcela2,
+      },
+    ];
+  }
+
   const calcularValorContribuicao = () => {
     const base = parseCurrencyInput(boletoForm.baseCalculo);
     const perc = parseFloat(boletoForm.percentual.replace(",", ".") || "0");
@@ -1688,10 +1777,11 @@ const Financeiro = () => {
 
   useEffect(() => {
     if (boletoForm.tipo === "contribuicao") {
-      calcularValorContribuicao();
+      const total = getContribuicaoParcelas(boletoForm).reduce((sum, parcela) => sum + parcela.valor, 0);
+      setBoletoForm((prev) => prev.valorCalculado === total ? prev : { ...prev, valorCalculado: total });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boletoForm.baseCalculo, boletoForm.percentual, boletoForm.descontos, boletoForm.tipo]);
+  }, [boletoForm.anoContribuicao, boletoForm.baseCalculo, boletoForm.baseCalculoAgosto, boletoForm.baseCalculoSetembro, boletoForm.descontos, boletoForm.modoCalculoContribuicao, boletoForm.percentual, boletoForm.tipo, boletoForm.vencimentoParcela1, boletoForm.vencimentoParcela2]);
 
   const handleNextStep = () => {
     if (wizardStep === 1) {
@@ -1730,29 +1820,11 @@ const Financeiro = () => {
           return;
         }
       } else {
-        const parcelasNumber = parseInt(boletoForm.parcelas, 10);
-        const camposObrigatorios =
-          boletoForm.anoContribuicao.length === 4 &&
-          boletoForm.periodicidade &&
-          boletoForm.parcelas &&
-          !Number.isNaN(parcelasNumber) &&
-          boletoForm.dataVencimento &&
-          boletoForm.percentual &&
-          boletoForm.baseCalculo;
-
-        if (!camposObrigatorios || !boletoForm.pesquisaContribuicaoFeita) {
+        const parcelas = getContribuicaoParcelas(boletoForm);
+        if (parcelas.length !== 2) {
           toast({
             title: "Campos obrigatórios",
-            description: "Pesquise e valide os dados antes de avançar.",
-            variant: "destructive",
-          });
-          return;
-        }
-
-        if (boletoForm.valorCalculado <= 0) {
-          toast({
-            title: "Valor obrigatório",
-            description: "O valor calculado deve ser maior que zero.",
+            description: "Informe ano, percentual, vencimentos e as bases de cálculo das duas parcelas.",
             variant: "destructive",
           });
           return;
@@ -1850,6 +1922,11 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      modoCalculoContribuicao: "folhas_separadas",
+      baseCalculoAgosto: "",
+      baseCalculoSetembro: "",
+      vencimentoParcela1: "",
+      vencimentoParcela2: "",
     }));
     setContribuicaoPreview("");
   };
@@ -1861,6 +1938,16 @@ const Financeiro = () => {
       if (boleto.status === "Cancelado") return false;
       return rangesOverlap(competenciaInicial, competenciaFinal, boleto.competenciaInicial, boleto.competenciaFinal);
     });
+  };
+
+  const hasContribuicaoParcela = (empresaId: string, ano: string, parcela: 1 | 2) => {
+    return boletos.some((boleto) =>
+      boleto.empresaId === empresaId &&
+      boleto.tipo === "Contribuição Assistencial" &&
+      boleto.status !== "Cancelado" &&
+      boleto.ano === ano &&
+      boleto.descricao.includes(`Parcela ${parcela}/2`),
+    );
   };
 
   const getEmpresasSemEmail = (empresas: typeof mockEmpresas, emailOverrides: Record<string, string>) => {
@@ -1935,6 +2022,7 @@ const Financeiro = () => {
       }
       return competencias;
     };
+    let parcelasContribuicaoEmitidas = 0;
 
     try {
       setIsEmittingBoletos(true);
@@ -2013,6 +2101,37 @@ const Financeiro = () => {
             }
           }
         }
+      } else if (boletoForm.tipo === "contribuicao") {
+        const empresa = targetEmpresas[0];
+        if (!empresa) throw new Error("Selecione uma empresa para emitir a contribuição assistencial.");
+        const parcelas = getContribuicaoParcelas(boletoForm);
+        if (parcelas.length !== 2) throw new Error("Dados da contribuição assistencial inválidos.");
+        const parcelasPendentes = parcelas.filter((parcela) => !hasContribuicaoParcela(empresa.id, boletoForm.anoContribuicao, parcela.numero));
+        if (parcelasPendentes.length === 0) {
+          throw new Error(`As duas parcelas da contribuição de ${boletoForm.anoContribuicao} já foram emitidas.`);
+        }
+
+        setBatchEmissionProgress({ done: 0, total: parcelasPendentes.length });
+        for (const parcela of parcelasPendentes) {
+          await createBoletoMutation.mutateAsync({
+            ...boletoForm,
+            empresaId: empresa.id,
+            empresaNome: empresa.nome,
+            dataVencimento: parcela.vencimento,
+            competenciaInicial: parcela.competencia,
+            competenciaFinal: parcela.competencia,
+            periodicidade: "Mensal",
+            parcelas: "2",
+            baseCalculo: parcela.base.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
+            descontos: parcela.desconto.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
+            valorOverride: parcela.valor,
+            contribuicaoParcelaNumero: parcela.numero,
+            emailOverride: emailOverrides[empresa.id],
+            mensagemPersonalizada: `Contribuição Assistencial ${boletoForm.anoContribuicao} — Parcela ${parcela.numero}/2 — competência ${formatCompetenciaBR(parcela.competencia)}.`,
+          });
+          parcelasContribuicaoEmitidas += 1;
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        }
       } else {
         setBatchEmissionProgress({ done: 0, total: targetEmpresas.length });
         for (const empresa of targetEmpresas) {
@@ -2024,9 +2143,13 @@ const Financeiro = () => {
         title: isBatchMode
           ? "Boletos em lote emitidos com sucesso"
           : boletoForm.tipo === "contribuicao"
-            ? "Boleto de Contribuição Assistencial emitido com sucesso"
+            ? "Boletos de Contribuição Assistencial emitidos com sucesso"
             : "Boleto emitido com sucesso",
-        description: isBatchMode ? `${targetEmpresas.length} empresa(s) processada(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
+        description: isBatchMode
+          ? `${targetEmpresas.length} empresa(s) processada(s).`
+          : boletoForm.tipo === "contribuicao"
+            ? `${parcelasContribuicaoEmitidas} parcela(s) pendente(s) para ${boletoForm.empresaNome} foram criadas.`
+            : `Boleto para ${boletoForm.empresaNome} criado.`,
       });
       resetWizard();
     } catch (err) {
@@ -2875,9 +2998,16 @@ const Financeiro = () => {
                         value={boletoForm.tipo}
                         onValueChange={(value) => {
                           const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
+                          if (tipoSelecionado === "contribuicao") {
+                            setIsBatchMode(false);
+                            setBatchEmpresaIds([]);
+                          }
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
+                            periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : boletoForm.periodicidade,
+                            parcelas: tipoSelecionado === "contribuicao" ? "2" : boletoForm.parcelas,
+                            percentual: tipoSelecionado === "contribuicao" ? boletoForm.percentual || "2" : boletoForm.percentual,
                             pesquisaContribuicaoFeita: false,
                             valorCalculado: 0,
                           });
@@ -2903,12 +3033,12 @@ const Financeiro = () => {
                             </span>
                           </Label>
                         </div>
-                        <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-60 bg-muted/30">
-                          <RadioGroupItem value="contribuicao" id="contribuicao" disabled />
-                          <Label htmlFor="contribuicao" className="flex-1 cursor-not-allowed">
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg">
+                          <RadioGroupItem value="contribuicao" id="contribuicao" />
+                          <Label htmlFor="contribuicao" className="flex-1 cursor-pointer">
                             Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Em breve será implementado.
+                              Calcule duas folhas separadamente ou divida um valor total em duas parcelas.
                             </span>
                           </Label>
                         </div>
@@ -3223,11 +3353,127 @@ const Financeiro = () => {
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "contribuicao" && (
-                  <Card className="border-dashed">
-                    <CardContent className="p-6 text-sm text-muted-foreground">
-                      Contribuição Assistencial estará disponível em breve.
-                    </CardContent>
-                  </Card>
+                  <div className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg">Detalhes da Contribuição Assistencial</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="anoContribuicao">Ano da contribuição*</Label>
+                            <Input
+                              id="anoContribuicao"
+                              inputMode="numeric"
+                              maxLength={4}
+                              placeholder="2026"
+                              value={boletoForm.anoContribuicao}
+                              onChange={(event) => setBoletoForm({ ...boletoForm, anoContribuicao: event.target.value.replace(/[^0-9]/g, "").slice(0, 4) })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="percentualContribuicao">Percentual sobre a folha (%)*</Label>
+                            <Input
+                              id="percentualContribuicao"
+                              inputMode="decimal"
+                              placeholder="2"
+                              value={boletoForm.percentual}
+                              onChange={(event) => setBoletoForm({ ...boletoForm, percentual: event.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <Label className="text-base font-semibold">Forma de cálculo*</Label>
+                          <RadioGroup
+                            value={boletoForm.modoCalculoContribuicao}
+                            onValueChange={(value: "folhas_separadas" | "total_dividido") => setBoletoForm({
+                              ...boletoForm,
+                              modoCalculoContribuicao: value,
+                              pesquisaContribuicaoFeita: false,
+                            })}
+                            className="grid gap-3 md:grid-cols-2"
+                          >
+                            <label htmlFor="folhas-separadas" className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
+                              <RadioGroupItem id="folhas-separadas" value="folhas_separadas" className="mt-1" />
+                              <span>
+                                <span className="block font-medium">Folhas separadas</span>
+                                <span className="block text-xs text-muted-foreground">Calcula o percentual individualmente sobre as folhas de agosto e setembro.</span>
+                              </span>
+                            </label>
+                            <label htmlFor="total-dividido" className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
+                              <RadioGroupItem id="total-dividido" value="total_dividido" className="mt-1" />
+                              <span>
+                                <span className="block font-medium">Total dividido</span>
+                                <span className="block text-xs text-muted-foreground">Calcula o percentual sobre uma base total e divide o resultado em duas parcelas.</span>
+                              </span>
+                            </label>
+                          </RadioGroup>
+                        </div>
+
+                        {boletoForm.modoCalculoContribuicao === "folhas_separadas" ? (
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor="baseAgosto">Folha de agosto (R$)*</Label>
+                              <Input id="baseAgosto" inputMode="decimal" placeholder="100.000,00" value={boletoForm.baseCalculoAgosto} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculoAgosto: event.target.value })} />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="baseSetembro">Folha de setembro (R$)*</Label>
+                              <Input id="baseSetembro" inputMode="decimal" placeholder="100.000,00" value={boletoForm.baseCalculoSetembro} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculoSetembro: event.target.value })} />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor="baseTotalContribuicao">Base total (R$)*</Label>
+                              <Input id="baseTotalContribuicao" inputMode="decimal" placeholder="200.000,00" value={boletoForm.baseCalculo} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculo: event.target.value })} />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="descontoTotalContribuicao">Desconto total (R$, opcional)</Label>
+                              <Input id="descontoTotalContribuicao" inputMode="decimal" placeholder="0,00" value={boletoForm.descontos} onChange={(event) => setBoletoForm({ ...boletoForm, descontos: event.target.value })} />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label>Vencimento da parcela 1*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela1} placeholder="Vencimento em setembro" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela1: value })} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Vencimento da parcela 2*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela2} placeholder="Vencimento em outubro" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela2: value })} />
+                          </div>
+                        </div>
+
+                        {(() => {
+                          const parcelas = getContribuicaoParcelas(boletoForm);
+                          const total = parcelas.reduce((sum, parcela) => sum + parcela.valor, 0);
+                          return (
+                            <div className="rounded-lg border border-accent/30 bg-accent/20 p-4">
+                              <p className="text-sm font-medium">Prévia da emissão</p>
+                              {parcelas.length === 2 ? (
+                                <div className="mt-3 space-y-2 text-sm">
+                                  {parcelas.map((parcela) => (
+                                    <div key={parcela.numero} className="flex flex-wrap items-center justify-between gap-2">
+                                      <span>Parcela {parcela.numero}/2 — competência {formatCompetenciaBR(parcela.competencia)} — vence {formatDateBR(parcela.vencimento)}</span>
+                                      <strong>{formatCurrencyBRL(parcela.valor)}</strong>
+                                    </div>
+                                  ))}
+                                  <div className="flex items-center justify-between border-t pt-2 text-base">
+                                    <span>Total</span>
+                                    <strong className="text-primary">{formatCurrencyBRL(total)}</strong>
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-sm text-muted-foreground">Preencha todos os campos obrigatórios para visualizar as duas parcelas.</p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </CardContent>
+                    </Card>
+                  </div>
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "avulso" && (
@@ -3360,38 +3606,20 @@ const Financeiro = () => {
                                 <p className="font-medium">{boletoForm.anoContribuicao}</p>
                               </div>
                               <div>
-                                <p className="font-semibold text-muted-foreground">Periodicidade:</p>
-                                <p className="font-medium">{boletoForm.periodicidade}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Qtde. Parcelas:</p>
-                                <p className="font-medium">{boletoForm.parcelas}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Base de Cálculo (R$):</p>
-                                <p className="font-medium">
-                                  R$ {parseCurrencyInput(boletoForm.baseCalculo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
+                                <p className="font-semibold text-muted-foreground">Forma de cálculo:</p>
+                                <p className="font-medium">{boletoForm.modoCalculoContribuicao === "folhas_separadas" ? "Folhas de agosto e setembro separadas" : "Base total dividida em duas parcelas"}</p>
                               </div>
                               <div>
                                 <p className="font-semibold text-muted-foreground">Percentual (%):</p>
                                 <p className="font-medium">{boletoForm.percentual}</p>
                               </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Descontos/Isenções (R$):</p>
-                                <p className="font-medium">
-                                  R$ {parseCurrencyInput(boletoForm.descontos).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Valor Calculado (R$):</p>
-                                <p className="font-medium text-primary">
-                                  R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
+                              <div className="col-span-2 space-y-2 rounded-md border p-3">
+                                {getContribuicaoParcelas(boletoForm).map((parcela) => (
+                                  <div key={parcela.numero} className="flex flex-wrap items-center justify-between gap-2">
+                                    <span>Parcela {parcela.numero}/2 — {formatCompetenciaBR(parcela.competencia)} — vence {formatDateBR(parcela.vencimento)}</span>
+                                    <strong>{formatCurrencyBRL(parcela.valor)}</strong>
+                                  </div>
+                                ))}
                               </div>
                             </>
                           )}
