@@ -121,6 +121,7 @@ type ContribuicaoRow = {
   valor?: number | string | null;
   vencimento?: string | null;
   situacao?: string | null;
+  folha_repetida_ano_anterior?: boolean | null;
   empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
@@ -175,6 +176,7 @@ const FINANCEIRO_QUERY = `
       valor
       vencimento
       situacao
+      folha_repetida_ano_anterior
       empresa {
         id
         razao_social
@@ -348,18 +350,27 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
-  modoCalculoContribuicao: "folhas_separadas" | "total_dividido";
   baseCalculoAgosto: string;
-  baseCalculoSetembro: string;
+  quantidadeParcelasContribuicao: 1 | 2;
   vencimentoParcela1: string;
   vencimentoParcela2: string;
   contribuicaoParcelaNumero?: 1 | 2;
+  folhaRepetidaAnoAnterior?: boolean;
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
   descontoValorOverride?: number;
   emailOverride?: string;
 }
+
+type ContribuicaoLoteRow = {
+  empresaId: string;
+  empresaNome: string;
+  folhaAnoAnterior: number;
+  folhaAtual: string;
+  repetiuFolhaAnterior: boolean;
+  quantidadeParcelas: 1 | 2;
+};
 
 type ContactCandidate = {
   nome?: string | null;
@@ -379,6 +390,9 @@ const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | 
 
 const formatCurrencyBRL = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+
+const getDescricaoContribuicao = (ano: string, numero: number, total: 1 | 2) =>
+  `Referente a contribuição assistencial de ${ano} (${total === 1 ? "boleto único" : `${numero}ª parcela de 2`})`;
 
 const periodicidadeToNumero = (periodicidade?: string) => {
   const normalized = periodicidade?.trim().toLowerCase();
@@ -745,14 +759,14 @@ const Financeiro = () => {
       }
 
       const descricaoBoleto = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}${payload.contribuicaoParcelaNumero ? ` — Parcela ${payload.contribuicaoParcelaNumero}/2` : ""}`
+        ? getDescricaoContribuicao(payload.anoContribuicao, payload.contribuicaoParcelaNumero ?? 1, payload.quantidadeParcelasContribuicao)
         : payload.tipo === "avulso"
           ? payload.motivoCobranca.trim()
           : empresa.tipoVinculo === "Associado"
             ? "Mensalidade de associado por faixa"
             : `Mensalidade de ${empresa.tipoVinculo.toLowerCase()}`;
       const itemName = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}${payload.contribuicaoParcelaNumero ? ` - Parcela ${payload.contribuicaoParcelaNumero}/2` : ""}`
+        ? `Contribuição Assistencial ${payload.anoContribuicao} - ${payload.quantidadeParcelasContribuicao === 1 ? "boleto único" : `${payload.contribuicaoParcelaNumero}ª parcela de 2`}`
         : payload.tipo === "avulso"
           ? "Boleto avulso"
           : "Mensalidade";
@@ -812,6 +826,7 @@ const Financeiro = () => {
               valor: valorBoleto || null,
               vencimento: payload.dataVencimento || null,
               situacao: "Emitida",
+              folha_repetida_ano_anterior: payload.folhaRepetidaAnoAnterior ?? false,
             },
           },
           token,
@@ -987,9 +1002,8 @@ const Financeiro = () => {
     descontos: "",
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
-    modoCalculoContribuicao: "folhas_separadas",
     baseCalculoAgosto: "",
-    baseCalculoSetembro: "",
+    quantidadeParcelasContribuicao: 2,
     vencimentoParcela1: "",
     vencimentoParcela2: "",
     valorAvulso: "",
@@ -1000,6 +1014,8 @@ const Financeiro = () => {
   const [batchEmpresaIds, setBatchEmpresaIds] = useState<string[]>([]);
   const [batchFaixaId, setBatchFaixaId] = useState("");
   const [batchTipoVinculo, setBatchTipoVinculo] = useState<"Associado" | "Mantenedor" | "Parceiro" | "Fornecedor">("Associado");
+  const [contribuicaoLoteRows, setContribuicaoLoteRows] = useState<ContribuicaoLoteRow[]>([]);
+  const [empresaContribuicaoParaAdicionar, setEmpresaContribuicaoParaAdicionar] = useState("");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
@@ -1301,6 +1317,7 @@ const Financeiro = () => {
 
   const canProceed = (() => {
     if (wizardStep === 1) {
+      if (boletoForm.tipo === "contribuicao") return true;
       return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
     }
 
@@ -1319,7 +1336,7 @@ const Financeiro = () => {
         return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
       }
       if (boletoForm.tipo === "contribuicao") {
-        return getContribuicaoParcelas(boletoForm).length === 2;
+        return isContribuicaoLoteValido();
       }
 
       return false;
@@ -1619,9 +1636,8 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
-      modoCalculoContribuicao: "folhas_separadas",
       baseCalculoAgosto: "",
-      baseCalculoSetembro: "",
+      quantidadeParcelasContribuicao: 2,
       vencimentoParcela1: "",
       vencimentoParcela2: "",
       valorAvulso: "",
@@ -1630,6 +1646,8 @@ const Financeiro = () => {
     setEmpresaSearch("");
     setIsBatchMode(false);
     setBatchTipoVinculo("Associado");
+    setContribuicaoLoteRows([]);
+    setEmpresaContribuicaoParaAdicionar("");
     setPreviaBoleto(null);
     setContribuicaoPreview("");
     setBatchEmissionProgress({ done: 0, total: 0 });
@@ -1696,74 +1714,84 @@ const Financeiro = () => {
     return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
   }
 
+  function buildContribuicaoRowsFromPreviousYear(ano: string): ContribuicaoLoteRow[] {
+    const anoAnterior = String(Number(ano) - 1);
+    if (!/^\d{4}$/.test(ano) || !data?.contribuicoes_assistenciais) return [];
+    const basesPorEmpresa = new Map<string, number>();
+    for (const contribuicao of data.contribuicoes_assistenciais) {
+      const empresaId = contribuicao.empresa?.id;
+      if (!empresaId || contribuicao.ano !== anoAnterior || contribuicao.situacao?.toLowerCase() === "cancelada") continue;
+      basesPorEmpresa.set(empresaId, (basesPorEmpresa.get(empresaId) ?? 0) + Number(contribuicao.base ?? 0));
+    }
+    return Array.from(basesPorEmpresa.entries())
+      .map(([empresaId, folhaAnoAnterior]) => {
+        const empresa = mockEmpresas.find((item) => item.id === empresaId);
+        return empresa ? {
+          empresaId,
+          empresaNome: empresa.nome,
+          folhaAnoAnterior,
+          folhaAtual: "",
+          repetiuFolhaAnterior: false,
+          quantidadeParcelas: 2 as const,
+        } : null;
+      })
+      .filter((row): row is ContribuicaoLoteRow => Boolean(row))
+      .sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR"));
+  }
+
   function getContribuicaoParcelas(form: BoletoForm) {
     const percentual = Number(form.percentual.replace(",", "."));
-    const anoValido = /^\d{4}$/.test(form.anoContribuicao);
+    const baseAgosto = parseCurrencyInput(form.baseCalculoAgosto);
+    const descontos = parseCurrencyInput(form.descontos);
     const primeiroVencimento = parseISO(form.vencimentoParcela1);
     const segundoVencimento = parseISO(form.vencimentoParcela2);
+    const quantidade = form.quantidadeParcelasContribuicao;
     if (
-      !anoValido ||
+      !/^\d{4}$/.test(form.anoContribuicao) ||
       !Number.isFinite(percentual) ||
       percentual <= 0 ||
+      baseAgosto <= 0 ||
       !isValid(primeiroVencimento) ||
-      !isValid(segundoVencimento) ||
-      !isAfter(segundoVencimento, primeiroVencimento)
-    ) {
-      return [];
+      (quantidade === 2 && (!isValid(segundoVencimento) || !isAfter(segundoVencimento, primeiroVencimento)))
+    ) return [];
+
+    const valorTotal = Math.max((baseAgosto * percentual) / 100 - descontos, 0);
+    if (valorTotal <= 0) return [];
+    if (quantidade === 1) {
+      return [{
+        numero: 1 as const,
+        totalParcelas: 1 as const,
+        competencia: `${form.anoContribuicao}-08-01`,
+        base: baseAgosto,
+        desconto: descontos,
+        valor: Number(valorTotal.toFixed(2)),
+        vencimento: form.vencimentoParcela1,
+      }];
     }
 
-    if (form.modoCalculoContribuicao === "folhas_separadas") {
-      const baseAgosto = parseCurrencyInput(form.baseCalculoAgosto);
-      const baseSetembro = parseCurrencyInput(form.baseCalculoSetembro);
-      if (baseAgosto <= 0 || baseSetembro <= 0) return [];
-      return [
-        {
-          numero: 1 as const,
-          competencia: `${form.anoContribuicao}-08-01`,
-          base: baseAgosto,
-          desconto: 0,
-          valor: Number(((baseAgosto * percentual) / 100).toFixed(2)),
-          vencimento: form.vencimentoParcela1,
-        },
-        {
-          numero: 2 as const,
-          competencia: `${form.anoContribuicao}-09-01`,
-          base: baseSetembro,
-          desconto: 0,
-          valor: Number(((baseSetembro * percentual) / 100).toFixed(2)),
-          vencimento: form.vencimentoParcela2,
-        },
-      ];
-    }
-
-    const baseTotal = parseCurrencyInput(form.baseCalculo);
-    const descontos = parseCurrencyInput(form.descontos);
-    const valorTotal = Math.max((baseTotal * percentual) / 100 - descontos, 0);
-    if (baseTotal <= 0 || valorTotal <= 0) return [];
     const primeiraParcela = Math.floor((valorTotal * 100) / 2) / 100;
     const segundaParcela = Number((valorTotal - primeiraParcela).toFixed(2));
-    const primeiraBase = Math.floor((baseTotal * 100) / 2) / 100;
-    const segundaBase = Number((baseTotal - primeiraBase).toFixed(2));
+    const primeiraBase = Math.floor((baseAgosto * 100) / 2) / 100;
+    const segundaBase = Number((baseAgosto - primeiraBase).toFixed(2));
     const primeiroDesconto = Math.floor((descontos * 100) / 2) / 100;
     const segundoDesconto = Number((descontos - primeiroDesconto).toFixed(2));
     return [
-      {
-        numero: 1 as const,
-        competencia: `${form.anoContribuicao}-08-01`,
-        base: primeiraBase,
-        desconto: primeiroDesconto,
-        valor: primeiraParcela,
-        vencimento: form.vencimentoParcela1,
-      },
-      {
-        numero: 2 as const,
-        competencia: `${form.anoContribuicao}-09-01`,
-        base: segundaBase,
-        desconto: segundoDesconto,
-        valor: segundaParcela,
-        vencimento: form.vencimentoParcela2,
-      },
+      { numero: 1 as const, totalParcelas: 2 as const, competencia: `${form.anoContribuicao}-08-01`, base: primeiraBase, desconto: primeiroDesconto, valor: primeiraParcela, vencimento: form.vencimentoParcela1 },
+      { numero: 2 as const, totalParcelas: 2 as const, competencia: `${form.anoContribuicao}-08-01`, base: segundaBase, desconto: segundoDesconto, valor: segundaParcela, vencimento: form.vencimentoParcela2 },
     ];
+  }
+
+  function isContribuicaoLoteValido() {
+    const percentual = Number(boletoForm.percentual.replace(",", "."));
+    const primeiroVencimento = parseISO(boletoForm.vencimentoParcela1);
+    const segundoVencimento = parseISO(boletoForm.vencimentoParcela2);
+    const exigeSegundaParcela = contribuicaoLoteRows.some((row) => row.quantidadeParcelas === 2);
+    return /^\d{4}$/.test(boletoForm.anoContribuicao) &&
+      Number.isFinite(percentual) && percentual > 0 &&
+      contribuicaoLoteRows.length > 0 &&
+      contribuicaoLoteRows.every((row) => parseCurrencyInput(row.folhaAtual) > 0) &&
+      isValid(primeiroVencimento) &&
+      (!exigeSegundaParcela || (isValid(segundoVencimento) && isAfter(segundoVencimento, primeiroVencimento)));
   }
 
   const calcularValorContribuicao = () => {
@@ -1781,11 +1809,11 @@ const Financeiro = () => {
       setBoletoForm((prev) => prev.valorCalculado === total ? prev : { ...prev, valorCalculado: total });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boletoForm.anoContribuicao, boletoForm.baseCalculo, boletoForm.baseCalculoAgosto, boletoForm.baseCalculoSetembro, boletoForm.descontos, boletoForm.modoCalculoContribuicao, boletoForm.percentual, boletoForm.tipo, boletoForm.vencimentoParcela1, boletoForm.vencimentoParcela2]);
+  }, [boletoForm.anoContribuicao, boletoForm.baseCalculoAgosto, boletoForm.descontos, boletoForm.percentual, boletoForm.quantidadeParcelasContribuicao, boletoForm.tipo, boletoForm.vencimentoParcela1, boletoForm.vencimentoParcela2]);
 
   const handleNextStep = () => {
     if (wizardStep === 1) {
-      if (!boletoForm.tipo || (!isBatchMode && !boletoForm.empresaId) || (isBatchMode && batchEmpresaIds.length === 0)) {
+      if (!boletoForm.tipo || (boletoForm.tipo !== "contribuicao" && ((!isBatchMode && !boletoForm.empresaId) || (isBatchMode && batchEmpresaIds.length === 0)))) {
         toast({
           title: "Campos obrigatórios",
           description: "Selecione o tipo de boleto e uma empresa.",
@@ -1820,11 +1848,10 @@ const Financeiro = () => {
           return;
         }
       } else {
-        const parcelas = getContribuicaoParcelas(boletoForm);
-        if (parcelas.length !== 2) {
+        if (!isContribuicaoLoteValido()) {
           toast({
             title: "Campos obrigatórios",
-            description: "Informe ano, percentual, vencimentos e as bases de cálculo das duas parcelas.",
+            description: "Preencha as folhas, a quantidade de parcelas e os vencimentos necessários para todas as empresas.",
             variant: "destructive",
           });
           return;
@@ -1922,9 +1949,8 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
-      modoCalculoContribuicao: "folhas_separadas",
       baseCalculoAgosto: "",
-      baseCalculoSetembro: "",
+      quantidadeParcelasContribuicao: 2,
       vencimentoParcela1: "",
       vencimentoParcela2: "",
     }));
@@ -1940,13 +1966,33 @@ const Financeiro = () => {
     });
   };
 
-  const hasContribuicaoParcela = (empresaId: string, ano: string, parcela: 1 | 2) => {
+  const updateContribuicaoLoteRow = (empresaId: string, patch: Partial<ContribuicaoLoteRow>) => {
+    setContribuicaoLoteRows((rows) => rows.map((row) => row.empresaId === empresaId ? { ...row, ...patch } : row));
+  };
+
+  const addEmpresaAoLoteContribuicao = () => {
+    const empresa = mockEmpresas.find((item) => item.id === empresaContribuicaoParaAdicionar);
+    if (!empresa || contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)) return;
+    setContribuicaoLoteRows((rows) => [...rows, {
+      empresaId: empresa.id,
+      empresaNome: empresa.nome,
+      folhaAnoAnterior: 0,
+      folhaAtual: "",
+      repetiuFolhaAnterior: false,
+      quantidadeParcelas: 2,
+    }].sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR")));
+    setEmpresaContribuicaoParaAdicionar("");
+  };
+
+  const hasContribuicaoParcela = (empresaId: string, ano: string, parcela: 1 | 2, total: 1 | 2) => {
+    const marcador = total === 1 ? "(boleto único)" : `(${parcela}ª parcela de 2)`;
+    const marcadorLegado = total === 2 ? `Parcela ${parcela}/2` : "";
     return boletos.some((boleto) =>
       boleto.empresaId === empresaId &&
       boleto.tipo === "Contribuição Assistencial" &&
       boleto.status !== "Cancelado" &&
       boleto.ano === ano &&
-      boleto.descricao.includes(`Parcela ${parcela}/2`),
+      (boleto.descricao.includes(marcador) || Boolean(marcadorLegado && boleto.descricao.includes(marcadorLegado))),
     );
   };
 
@@ -2000,7 +2046,9 @@ const Financeiro = () => {
   };
 
   const handleEmitirBoleto = async (options?: { emailOverrides?: Record<string, string> }) => {
-    const selectedIds = isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
+    const selectedIds = boletoForm.tipo === "contribuicao"
+      ? new Set(contribuicaoLoteRows.map((row) => row.empresaId))
+      : isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
     const targetEmpresas = mockEmpresas.filter((empresa) => selectedIds.has(empresa.id));
     const emailOverrides = options?.emailOverrides ?? {};
     const empresasSemEmail = getEmpresasSemEmail(targetEmpresas, emailOverrides);
@@ -2102,32 +2150,45 @@ const Financeiro = () => {
           }
         }
       } else if (boletoForm.tipo === "contribuicao") {
-        const empresa = targetEmpresas[0];
-        if (!empresa) throw new Error("Selecione uma empresa para emitir a contribuição assistencial.");
-        const parcelas = getContribuicaoParcelas(boletoForm);
-        if (parcelas.length !== 2) throw new Error("Dados da contribuição assistencial inválidos.");
-        const parcelasPendentes = parcelas.filter((parcela) => !hasContribuicaoParcela(empresa.id, boletoForm.anoContribuicao, parcela.numero));
-        if (parcelasPendentes.length === 0) {
-          throw new Error(`As duas parcelas da contribuição de ${boletoForm.anoContribuicao} já foram emitidas.`);
-        }
-
-        setBatchEmissionProgress({ done: 0, total: parcelasPendentes.length });
-        for (const parcela of parcelasPendentes) {
-          await createBoletoMutation.mutateAsync({
+        const tarefas: { empresa: (typeof mockEmpresas)[number]; form: BoletoForm; parcela: ReturnType<typeof getContribuicaoParcelas>[number] }[] = [];
+        for (const row of contribuicaoLoteRows) {
+          const empresa = targetEmpresas.find((item) => item.id === row.empresaId);
+          if (!empresa) continue;
+          const form = {
             ...boletoForm,
+            empresaId: empresa.id,
+            empresaNome: empresa.nome,
+            baseCalculoAgosto: row.folhaAtual,
+            quantidadeParcelasContribuicao: row.quantidadeParcelas,
+            folhaRepetidaAnoAnterior: row.repetiuFolhaAnterior,
+          };
+          const parcelas = getContribuicaoParcelas(form);
+          if (parcelas.length !== row.quantidadeParcelas) throw new Error(`Dados inválidos para ${empresa.nome}.`);
+          for (const parcela of parcelas) {
+            if (!hasContribuicaoParcela(empresa.id, boletoForm.anoContribuicao, parcela.numero, parcela.totalParcelas)) {
+              tarefas.push({ empresa, form, parcela });
+            }
+          }
+        }
+        if (tarefas.length === 0) throw new Error(`Todos os boletos da contribuição de ${boletoForm.anoContribuicao} já foram emitidos.`);
+        setBatchEmissionProgress({ done: 0, total: tarefas.length });
+        for (const { empresa, form, parcela } of tarefas) {
+          const descricao = getDescricaoContribuicao(boletoForm.anoContribuicao, parcela.numero, parcela.totalParcelas);
+          await createBoletoMutation.mutateAsync({
+            ...form,
             empresaId: empresa.id,
             empresaNome: empresa.nome,
             dataVencimento: parcela.vencimento,
             competenciaInicial: parcela.competencia,
             competenciaFinal: parcela.competencia,
-            periodicidade: "Mensal",
-            parcelas: "2",
+            periodicidade: "Anual",
+            parcelas: String(parcela.totalParcelas),
             baseCalculo: parcela.base.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
             descontos: parcela.desconto.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
             valorOverride: parcela.valor,
             contribuicaoParcelaNumero: parcela.numero,
             emailOverride: emailOverrides[empresa.id],
-            mensagemPersonalizada: `Contribuição Assistencial ${boletoForm.anoContribuicao} — Parcela ${parcela.numero}/2 — competência ${formatCompetenciaBR(parcela.competencia)}.`,
+            mensagemPersonalizada: descricao,
           });
           parcelasContribuicaoEmitidas += 1;
           setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
@@ -2140,15 +2201,15 @@ const Financeiro = () => {
         }
       }
       toast({
-        title: isBatchMode
-          ? "Boletos em lote emitidos com sucesso"
-          : boletoForm.tipo === "contribuicao"
-            ? "Boletos de Contribuição Assistencial emitidos com sucesso"
+        title: boletoForm.tipo === "contribuicao"
+          ? "Boletos de Contribuição Assistencial emitidos com sucesso"
+          : isBatchMode
+            ? "Boletos em lote emitidos com sucesso"
             : "Boleto emitido com sucesso",
-        description: isBatchMode
-          ? `${targetEmpresas.length} empresa(s) processada(s).`
-          : boletoForm.tipo === "contribuicao"
-            ? `${parcelasContribuicaoEmitidas} parcela(s) pendente(s) para ${boletoForm.empresaNome} foram criadas.`
+        description: boletoForm.tipo === "contribuicao"
+          ? `${parcelasContribuicaoEmitidas} boleto(s) pendente(s) de ${contribuicaoLoteRows.length} empresa(s) foram criados.`
+          : isBatchMode
+            ? `${targetEmpresas.length} empresa(s) processada(s).`
             : `Boleto para ${boletoForm.empresaNome} criado.`,
       });
       resetWizard();
@@ -2780,7 +2841,13 @@ const Financeiro = () => {
                       <Button variant="outline" onClick={() => navigate("/dashboard/financeiro/contribuicao") }>
                         Ver histórico completo
                       </Button>
-                      <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => setWizardOpen(true)}>
+                      <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => {
+                        const anoAtual = String(new Date().getFullYear());
+                        setBoletoForm((prev) => ({ ...prev, tipo: "contribuicao", anoContribuicao: anoAtual, percentual: prev.percentual || "2", periodicidade: "Anual", parcelas: "2" }));
+                        setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(anoAtual));
+                        setWizardStep(2);
+                        setWizardOpen(true);
+                      }}>
                         <Plus className="h-4 w-4 mr-2" />
                         Criar boleto
                       </Button>
@@ -2830,10 +2897,10 @@ const Financeiro = () => {
 
                 <Card className="bg-[#F7F8F4] border-secondary/40">
                   <CardHeader>
-                    <CardTitle className="text-lg">Calculadora disponível no wizard</CardTitle>
+                    <CardTitle className="text-lg">Emissão em lote disponível no wizard</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      Utilize o fluxo de criação de boletos para calcular automaticamente o valor de Contribuição
-                      Assistencial. A fórmula aplicada é: (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
+                      Carregue os contribuintes do ano anterior, informe ou repita a folha de agosto e revise os valores antes de gerar os boletos.
+                      A fórmula aplicada é: Folha de agosto × Percentual / 100.
                     </p>
                   </CardHeader>
                   <CardContent className="space-y-2">
@@ -2971,7 +3038,7 @@ const Financeiro = () => {
 
             {/* Wizard de Criação de Boletos */}
             <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
-              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+              <DialogContent className={cn("max-h-[90vh] overflow-y-auto", boletoForm.tipo === "contribuicao" ? "max-w-6xl" : "max-w-3xl")}>
                 <DialogHeader>
                   <DialogTitle>Criar Boleto</DialogTitle>
                   <DialogDescription>
@@ -2998,13 +3065,16 @@ const Financeiro = () => {
                         value={boletoForm.tipo}
                         onValueChange={(value) => {
                           const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
+                          const anoAtual = String(new Date().getFullYear());
                           if (tipoSelecionado === "contribuicao") {
                             setIsBatchMode(false);
                             setBatchEmpresaIds([]);
+                            setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(anoAtual));
                           }
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
+                            anoContribuicao: tipoSelecionado === "contribuicao" ? anoAtual : boletoForm.anoContribuicao,
                             periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : boletoForm.periodicidade,
                             parcelas: tipoSelecionado === "contribuicao" ? "2" : boletoForm.parcelas,
                             percentual: tipoSelecionado === "contribuicao" ? boletoForm.percentual || "2" : boletoForm.percentual,
@@ -3038,14 +3108,14 @@ const Financeiro = () => {
                           <Label htmlFor="contribuicao" className="flex-1 cursor-pointer">
                             Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Calcule duas folhas separadamente ou divida um valor total em duas parcelas.
+                              Use a folha de agosto e escolha entre boleto único ou duas parcelas.
                             </span>
                           </Label>
                         </div>
                       </RadioGroup>
                     </div>
 
-                    <div className="space-y-3">
+                    {boletoForm.tipo !== "contribuicao" && <div className="space-y-3">
                       <Label htmlFor="empresaSearch" className="text-base font-semibold">Empresa*</Label>
                       {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
                       {isBatchMode && (
@@ -3204,7 +3274,7 @@ const Financeiro = () => {
                           <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Deselecionar tudo</Button>
                         </div>
                       )}
-                    </div>
+                    </div>}
                   </div>
                 )}
 
@@ -3356,7 +3426,8 @@ const Financeiro = () => {
                   <div className="space-y-6">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="text-lg">Detalhes da Contribuição Assistencial</CardTitle>
+                        <CardTitle className="text-lg">Contribuição Assistencial em lote</CardTitle>
+                        <p className="text-sm text-muted-foreground">Preencha a folha de agosto de cada empresa. O cálculo e a divisão dos boletos são feitos automaticamente.</p>
                       </CardHeader>
                       <CardContent className="space-y-6">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -3368,7 +3439,11 @@ const Financeiro = () => {
                               maxLength={4}
                               placeholder="2026"
                               value={boletoForm.anoContribuicao}
-                              onChange={(event) => setBoletoForm({ ...boletoForm, anoContribuicao: event.target.value.replace(/[^0-9]/g, "").slice(0, 4) })}
+                              onChange={(event) => {
+                                const ano = event.target.value.replace(/[^0-9]/g, "").slice(0, 4);
+                                setBoletoForm({ ...boletoForm, anoContribuicao: ano });
+                                if (ano.length === 4) setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(ano));
+                              }}
                             />
                           </div>
                           <div className="space-y-2">
@@ -3383,94 +3458,61 @@ const Financeiro = () => {
                           </div>
                         </div>
 
-                        <div className="space-y-3">
-                          <Label className="text-base font-semibold">Forma de cálculo*</Label>
-                          <RadioGroup
-                            value={boletoForm.modoCalculoContribuicao}
-                            onValueChange={(value: "folhas_separadas" | "total_dividido") => setBoletoForm({
-                              ...boletoForm,
-                              modoCalculoContribuicao: value,
-                              pesquisaContribuicaoFeita: false,
-                            })}
-                            className="grid gap-3 md:grid-cols-2"
-                          >
-                            <label htmlFor="folhas-separadas" className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
-                              <RadioGroupItem id="folhas-separadas" value="folhas_separadas" className="mt-1" />
-                              <span>
-                                <span className="block font-medium">Folhas separadas</span>
-                                <span className="block text-xs text-muted-foreground">Calcula o percentual individualmente sobre as folhas de agosto e setembro.</span>
-                              </span>
-                            </label>
-                            <label htmlFor="total-dividido" className="flex cursor-pointer items-start gap-3 rounded-lg border p-4">
-                              <RadioGroupItem id="total-dividido" value="total_dividido" className="mt-1" />
-                              <span>
-                                <span className="block font-medium">Total dividido</span>
-                                <span className="block text-xs text-muted-foreground">Calcula o percentual sobre uma base total e divide o resultado em duas parcelas.</span>
-                              </span>
-                            </label>
-                          </RadioGroup>
-                        </div>
-
-                        {boletoForm.modoCalculoContribuicao === "folhas_separadas" ? (
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div className="space-y-2">
-                              <Label htmlFor="baseAgosto">Folha de agosto (R$)*</Label>
-                              <Input id="baseAgosto" inputMode="decimal" placeholder="100.000,00" value={boletoForm.baseCalculoAgosto} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculoAgosto: event.target.value })} />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="baseSetembro">Folha de setembro (R$)*</Label>
-                              <Input id="baseSetembro" inputMode="decimal" placeholder="100.000,00" value={boletoForm.baseCalculoSetembro} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculoSetembro: event.target.value })} />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div className="space-y-2">
-                              <Label htmlFor="baseTotalContribuicao">Base total (R$)*</Label>
-                              <Input id="baseTotalContribuicao" inputMode="decimal" placeholder="200.000,00" value={boletoForm.baseCalculo} onChange={(event) => setBoletoForm({ ...boletoForm, baseCalculo: event.target.value })} />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="descontoTotalContribuicao">Desconto total (R$, opcional)</Label>
-                              <Input id="descontoTotalContribuicao" inputMode="decimal" placeholder="0,00" value={boletoForm.descontos} onChange={(event) => setBoletoForm({ ...boletoForm, descontos: event.target.value })} />
-                            </div>
-                          </div>
-                        )}
-
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div className="space-y-2">
-                            <Label>Vencimento da parcela 1*</Label>
-                            <DatePickerField value={boletoForm.vencimentoParcela1} placeholder="Vencimento em setembro" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela1: value })} />
+                            <Label>Vencimento do boleto / 1ª parcela*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela1} placeholder="Selecione o vencimento" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela1: value })} />
                           </div>
-                          <div className="space-y-2">
-                            <Label>Vencimento da parcela 2*</Label>
-                            <DatePickerField value={boletoForm.vencimentoParcela2} placeholder="Vencimento em outubro" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela2: value })} />
-                          </div>
+                          {contribuicaoLoteRows.some((row) => row.quantidadeParcelas === 2) && <div className="space-y-2">
+                            <Label>Vencimento da 2ª parcela*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela2} placeholder="Selecione o segundo vencimento" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela2: value })} />
+                          </div>}
                         </div>
 
-                        {(() => {
-                          const parcelas = getContribuicaoParcelas(boletoForm);
-                          const total = parcelas.reduce((sum, parcela) => sum + parcela.valor, 0);
-                          return (
-                            <div className="rounded-lg border border-accent/30 bg-accent/20 p-4">
-                              <p className="text-sm font-medium">Prévia da emissão</p>
-                              {parcelas.length === 2 ? (
-                                <div className="mt-3 space-y-2 text-sm">
-                                  {parcelas.map((parcela) => (
-                                    <div key={parcela.numero} className="flex flex-wrap items-center justify-between gap-2">
-                                      <span>Parcela {parcela.numero}/2 — competência {formatCompetenciaBR(parcela.competencia)} — vence {formatDateBR(parcela.vencimento)}</span>
-                                      <strong>{formatCurrencyBRL(parcela.valor)}</strong>
-                                    </div>
-                                  ))}
-                                  <div className="flex items-center justify-between border-t pt-2 text-base">
-                                    <span>Total</span>
-                                    <strong className="text-primary">{formatCurrencyBRL(total)}</strong>
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="mt-2 text-sm text-muted-foreground">Preencha todos os campos obrigatórios para visualizar as duas parcelas.</p>
-                              )}
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="font-semibold">Empresas contribuintes de {Number(boletoForm.anoContribuicao || new Date().getFullYear()) - 1}</p>
+                              <p className="text-xs text-muted-foreground">“Folha anterior” é a base registrada no ano passado. Marque repetir quando a empresa não enviar a folha atual.</p>
                             </div>
-                          );
-                        })()}
+                            <Button type="button" variant="outline" size="sm" onClick={() => setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(boletoForm.anoContribuicao))}>Recarregar ano anterior</Button>
+                          </div>
+                          <div className="overflow-x-auto rounded-lg border">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="min-w-44">Nome</TableHead>
+                                  <TableHead className="min-w-32">Folha anterior</TableHead>
+                                  <TableHead className="min-w-36">Folha de agosto</TableHead>
+                                  <TableHead className="min-w-28">Repetir valor</TableHead>
+                                  <TableHead className="min-w-32">Cálculo</TableHead>
+                                  <TableHead className="min-w-28">Boletos</TableHead>
+                                  <TableHead className="w-12"></TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {contribuicaoLoteRows.length === 0 ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma empresa encontrada no ano anterior. Adicione uma empresa abaixo.</TableCell></TableRow> : contribuicaoLoteRows.map((row) => {
+                                  const folhaAtual = parseCurrencyInput(row.folhaAtual);
+                                  const percentual = Number(boletoForm.percentual.replace(",", ".")) || 0;
+                                  return <TableRow key={row.empresaId}>
+                                    <TableCell className="font-medium">{row.empresaNome}</TableCell>
+                                    <TableCell>{row.folhaAnoAnterior > 0 ? formatCurrencyBRL(row.folhaAnoAnterior) : "—"}</TableCell>
+                                    <TableCell><Input inputMode="decimal" placeholder="0,00" value={row.folhaAtual} disabled={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { folhaAtual: event.target.value, repetiuFolhaAnterior: false })} /></TableCell>
+                                    <TableCell><label className="flex items-center gap-2 text-xs"><input type="checkbox" disabled={row.folhaAnoAnterior <= 0} checked={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { repetiuFolhaAnterior: event.target.checked, folhaAtual: event.target.checked ? row.folhaAnoAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "" })} />Ano anterior</label></TableCell>
+                                    <TableCell className="font-semibold text-primary">{folhaAtual > 0 ? formatCurrencyBRL((folhaAtual * percentual) / 100) : "—"}</TableCell>
+                                    <TableCell><Select value={String(row.quantidadeParcelas)} onValueChange={(value) => updateContribuicaoLoteRow(row.empresaId, { quantidadeParcelas: Number(value) as 1 | 2 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">Único</SelectItem><SelectItem value="2">2 parcelas</SelectItem></SelectContent></Select></TableCell>
+                                    <TableCell><Button type="button" variant="ghost" size="sm" aria-label={`Remover ${row.empresaNome}`} onClick={() => setContribuicaoLoteRows((rows) => rows.filter((item) => item.empresaId !== row.empresaId))}>×</Button></TableCell>
+                                  </TableRow>;
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                          <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 sm:flex-row sm:items-end">
+                            <div className="flex-1 space-y-2"><Label>Adicionar empresa da lista</Label><Select value={empresaContribuicaoParaAdicionar} onValueChange={setEmpresaContribuicaoParaAdicionar}><SelectTrigger><SelectValue placeholder="Selecione uma empresa" /></SelectTrigger><SelectContent>{mockEmpresas.filter((empresa) => !contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)).map((empresa) => <SelectItem key={empresa.id} value={empresa.id}>{empresa.nome}</SelectItem>)}</SelectContent></Select></div>
+                            <Button type="button" variant="outline" disabled={!empresaContribuicaoParaAdicionar} onClick={addEmpresaAoLoteContribuicao}>Adicionar</Button>
+                            <Button type="button" variant="outline" onClick={() => { setWizardOpen(false); navigate("/dashboard/empresas"); }}>Novo cadastro</Button>
+                          </div>
+                        </div>
                       </CardContent>
                     </Card>
                   </div>
@@ -3540,7 +3582,7 @@ const Financeiro = () => {
                         <div className="grid grid-cols-2 gap-3 text-sm">
                           <div>
                             <p className="font-semibold text-muted-foreground">Empresa:</p>
-                            <p className="font-medium">{isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
+                            <p className="font-medium">{boletoForm.tipo === "contribuicao" ? `${contribuicaoLoteRows.length} empresa(s) selecionada(s)` : isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
                           </div>
                           <div>
                             <p className="font-semibold text-muted-foreground">Tipo:</p>
@@ -3606,20 +3648,18 @@ const Financeiro = () => {
                                 <p className="font-medium">{boletoForm.anoContribuicao}</p>
                               </div>
                               <div>
-                                <p className="font-semibold text-muted-foreground">Forma de cálculo:</p>
-                                <p className="font-medium">{boletoForm.modoCalculoContribuicao === "folhas_separadas" ? "Folhas de agosto e setembro separadas" : "Base total dividida em duas parcelas"}</p>
-                              </div>
-                              <div>
                                 <p className="font-semibold text-muted-foreground">Percentual (%):</p>
                                 <p className="font-medium">{boletoForm.percentual}</p>
                               </div>
-                              <div className="col-span-2 space-y-2 rounded-md border p-3">
-                                {getContribuicaoParcelas(boletoForm).map((parcela) => (
-                                  <div key={parcela.numero} className="flex flex-wrap items-center justify-between gap-2">
-                                    <span>Parcela {parcela.numero}/2 — {formatCompetenciaBR(parcela.competencia)} — vence {formatDateBR(parcela.vencimento)}</span>
-                                    <strong>{formatCurrencyBRL(parcela.valor)}</strong>
-                                  </div>
-                                ))}
+                              <div className="col-span-2 overflow-x-auto rounded-md border">
+                                <Table>
+                                  <TableHeader><TableRow><TableHead>Empresa</TableHead><TableHead>Folha de agosto</TableHead><TableHead>Origem</TableHead><TableHead>Contribuição</TableHead><TableHead>Boletos</TableHead></TableRow></TableHeader>
+                                  <TableBody>{contribuicaoLoteRows.map((row) => {
+                                    const folha = parseCurrencyInput(row.folhaAtual);
+                                    const valor = folha * (Number(boletoForm.percentual.replace(",", ".")) || 0) / 100;
+                                    return <TableRow key={row.empresaId}><TableCell className="font-medium">{row.empresaNome}</TableCell><TableCell>{formatCurrencyBRL(folha)}</TableCell><TableCell>{row.repetiuFolhaAnterior ? <Badge variant="outline">Repetida do ano anterior</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell><TableCell className="font-semibold">{formatCurrencyBRL(valor)}</TableCell><TableCell className="max-w-72 text-xs">{row.quantidadeParcelas === 1 ? getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 1) : <><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 2)}</div><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 2, 2)}</div></>}</TableCell></TableRow>;
+                                  })}</TableBody>
+                                </Table>
                               </div>
                             </>
                           )}
@@ -3628,7 +3668,7 @@ const Financeiro = () => {
                           <p className="text-sm font-semibold text-muted-foreground">Valor estimado:</p>
                           <p className="text-3xl font-bold text-primary">
                             {boletoForm.tipo === "contribuicao"
-                              ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                              ? formatCurrencyBRL(contribuicaoLoteRows.reduce((total, row) => total + parseCurrencyInput(row.folhaAtual) * (Number(boletoForm.percentual.replace(",", ".")) || 0) / 100, 0))
                               : boletoForm.tipo === "avulso"
                                 ? `R$ ${parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
                               : `R$ ${getMensalidadePreview().valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
@@ -3666,7 +3706,7 @@ const Financeiro = () => {
                       </Button>
                     ) : (
                       <Button onClick={() => void handleEmitirBoleto()} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
+                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : boletoForm.tipo === "contribuicao" ? "Gerar boletos do lote" : "Emitir"}
                       </Button>
                     )}
                   </div>

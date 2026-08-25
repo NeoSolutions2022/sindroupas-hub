@@ -35,6 +35,7 @@ type ContribuicaoRow = {
   valor?: number | null;
   vencimento?: string | null;
   situacao?: string | null;
+  folha_repetida_ano_anterior?: boolean | null;
   empresa?: { id: string; razao_social: string } | null;
 };
 
@@ -46,7 +47,7 @@ type BoletoContribuicaoRow = {
   empresa?: { id: string } | null;
 };
 
-type HistoricoContribuicaoView = HistoricoContribuicao & { parcela?: string };
+type HistoricoContribuicaoView = HistoricoContribuicao & { parcela?: string; folhaRepetidaAnoAnterior: boolean };
 
 const normalizeSituacao = (status?: string | null) => {
   const normalized = status?.trim().toLowerCase();
@@ -69,6 +70,7 @@ const CONTRIBUICAO_QUERY = `
       valor
       vencimento
       situacao
+      folha_repetida_ano_anterior
       empresa {
         id
         razao_social
@@ -114,7 +116,8 @@ const FinanceiroContribuicao = () => {
           empresa: item.empresa?.razao_social ?? "Empresa não informada",
           periodicidade: item.periodicidade ?? "",
           parcelas: item.parcelas ?? 0,
-          parcela: boleto?.descricao?.match(/Parcela ([12]\/2)/)?.[1],
+          parcela: boleto?.descricao?.match(/\((boleto único|[12]ª parcela de 2)\)/i)?.[1],
+          folhaRepetidaAnoAnterior: item.folha_repetida_ano_anterior ?? false,
           base: item.base ?? 0,
           percentual: item.percentual ?? 0,
           descontos: item.descontos ?? 0,
@@ -258,6 +261,7 @@ const FinanceiroContribuicao = () => {
                         <TableHead>Periodicidade</TableHead>
                         <TableHead>Parcelas</TableHead>
                         <TableHead>Referência</TableHead>
+                        <TableHead>Origem da folha</TableHead>
                         <TableHead>Base (R$)</TableHead>
                         <TableHead>Percentual (%)</TableHead>
                         <TableHead>Descontos (R$)</TableHead>
@@ -269,7 +273,7 @@ const FinanceiroContribuicao = () => {
                     <TableBody>
                       {historicoFiltrado.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={11} className="text-center text-muted-foreground">
+                          <TableCell colSpan={12} className="text-center text-muted-foreground">
                             Nenhum registro encontrado para os filtros selecionados.
                           </TableCell>
                         </TableRow>
@@ -280,7 +284,8 @@ const FinanceiroContribuicao = () => {
                             <TableCell className="font-medium">{item.empresa}</TableCell>
                             <TableCell>{item.periodicidade}</TableCell>
                             <TableCell>{item.parcelas}</TableCell>
-                            <TableCell>{item.parcela ? `Parcela ${item.parcela}` : "—"}</TableCell>
+                            <TableCell>{item.parcela ?? "—"}</TableCell>
+                            <TableCell>{item.folhaRepetidaAnoAnterior ? <Badge variant="outline">Repetida</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell>
                             <TableCell>R$ {item.base.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                             <TableCell>{item.percentual}%</TableCell>
                             <TableCell>R$ {item.descontos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
