@@ -3286,14 +3286,22 @@ const Financeiro = () => {
                 </div>
 
                 {empresasAssociadasSemData.length > 0 && (
-                  <div role="alert" className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+                  <div role="alert" className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900 sm:flex-row sm:items-center">
                     <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
-                    <div>
+                    <div className="flex-1">
                       <p className="font-semibold">Há associadas sem data de associação</p>
                       <p className="text-sm">
                         {empresasAssociadasSemData.length} empresa(s) não podem entrar na análise automática até que a data de associação seja cadastrada.
                       </p>
                     </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0 border-amber-400 bg-white text-amber-950 hover:bg-amber-100"
+                      onClick={() => navigate("/dashboard/empresas?semDataAssociacao=1")}
+                    >
+                      Preencher datas nas empresas
+                    </Button>
                   </div>
                 )}
 
