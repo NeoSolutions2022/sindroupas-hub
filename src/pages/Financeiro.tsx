@@ -68,6 +68,7 @@ type EmpresaLookupRow = {
   id: string;
   razao_social: string;
   nome_fantasia?: string | null;
+  data_associacao?: string | null;
   faixa_id?: string | null;
   associada?: boolean | null;
   tipo_vinculo?: "Associado" | "Mantenedor" | "Parceiro" | "Fornecedor" | null;
@@ -186,6 +187,7 @@ const FINANCEIRO_QUERY = `
       id
       razao_social
       nome_fantasia
+      data_associacao
       faixa_id
       associada
       tipo_vinculo
@@ -372,6 +374,21 @@ type ContribuicaoLoteRow = {
   quantidadeParcelas: 1 | 2;
 };
 
+type TrimestreNumero = 1 | 2 | 3 | 4;
+
+type TrimestreAutomaticoRow = {
+  empresaId: string;
+  empresaNome: string;
+  dataAssociacao: string;
+  faixaId: string;
+  competenciasEmitidas: string[];
+  competenciasPendentes: string[];
+  valorMensal: number;
+  descontoMensal: number;
+  valorTotal: number;
+  impedimentos: string[];
+};
+
 type ContactCandidate = {
   nome?: string | null;
   email?: string | null;
@@ -447,6 +464,18 @@ const getCurrentQuarterRange = () => {
   const start = startOfMonth(new Date(now.getFullYear(), quarterStartMonth, 1));
   const end = startOfMonth(addMonths(start, 2));
   return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
+};
+
+const getTrimestre = (ano: number, trimestre: TrimestreNumero) => {
+  const inicio = startOfMonth(new Date(ano, (trimestre - 1) * 3, 1));
+  const meses = [inicio, addMonths(inicio, 1), addMonths(inicio, 2)];
+  return {
+    inicio,
+    fim: meses[2],
+    meses,
+    inicioIso: format(inicio, "yyyy-MM-dd"),
+    fimIso: format(meses[2], "yyyy-MM-dd"),
+  };
 };
 
 const MonthPickerField = ({
@@ -628,6 +657,13 @@ const Financeiro = () => {
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
   const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
   const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
+  const [trimestreAutomaticoOpen, setTrimestreAutomaticoOpen] = useState(false);
+  const [trimestreAutomaticoConfirmOpen, setTrimestreAutomaticoConfirmOpen] = useState(false);
+  const [trimestreAutomaticoNumero, setTrimestreAutomaticoNumero] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
+  const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -711,6 +747,8 @@ const Financeiro = () => {
           nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
           razaoSocial: empresa.razao_social,
           nomeFantasia: empresa.nome_fantasia ?? "",
+          associada: Boolean(empresa.associada),
+          dataAssociacao: empresa.data_associacao ?? "",
           faixaId: empresa.faixa_id ?? "",
           tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : "Fornecedor"),
           categoriaMantenedor: empresa.categoria_mantenedor ?? "",
@@ -869,6 +907,89 @@ const Financeiro = () => {
       valorFinal: Math.max(valorBase - descontoValor, 0),
     };
   };
+
+  const planoTrimestreAutomatico = useMemo<TrimestreAutomaticoRow[]>(() => {
+    const ano = Number(trimestreAutomaticoAno);
+    if (!Number.isInteger(ano) || ano < 2000 || ano > 2100) return [];
+
+    const trimestre = getTrimestre(ano, trimestreAutomaticoNumero);
+    const janelaInicio = startOfMonth(addMonths(trimestre.inicio, -1));
+    const janelaFimExclusivo = startOfMonth(addMonths(trimestre.fim, 1));
+
+    return mockEmpresas
+      .filter((empresa) => {
+        if (!empresa.associada || empresa.tipoVinculo !== "Associado" || !empresa.dataAssociacao) return false;
+        const dataAssociacao = parseISO(empresa.dataAssociacao);
+        return isValid(dataAssociacao) && !isBefore(dataAssociacao, janelaInicio) && isBefore(dataAssociacao, janelaFimExclusivo);
+      })
+      .map((empresa) => {
+        const dataAssociacao = parseISO(empresa.dataAssociacao);
+        let primeiraCompetencia = startOfMonth(dataAssociacao);
+        if (dataAssociacao.getDate() >= 28) primeiraCompetencia = startOfMonth(addMonths(primeiraCompetencia, 1));
+        if (isBefore(primeiraCompetencia, trimestre.inicio)) primeiraCompetencia = trimestre.inicio;
+
+        const competenciasEmitidas = trimestre.meses
+          .filter((mes) => boletos.some((boleto) =>
+            boleto.empresaId === empresa.id &&
+            boleto.tipo === "Mensalidade (por Faixa)" &&
+            boleto.status !== "Cancelado" &&
+            rangesOverlap(format(mes, "yyyy-MM-dd"), format(mes, "yyyy-MM-dd"), boleto.competenciaInicial, boleto.competenciaFinal),
+          ))
+          .map((mes) => format(mes, "yyyy-MM-dd"));
+
+        const primeiroIndiceElegivel = trimestre.meses.findIndex((mes) => !isBefore(mes, primeiraCompetencia));
+        const ultimoIndiceEmitido = trimestre.meses.reduce((ultimo, mes, index) =>
+          competenciasEmitidas.includes(format(mes, "yyyy-MM-dd")) ? index : ultimo, -1);
+        const primeiroIndicePendente = primeiroIndiceElegivel < 0
+          ? trimestre.meses.length
+          : Math.max(primeiroIndiceElegivel, ultimoIndiceEmitido + 1);
+        const competenciasPendentes = trimestre.meses
+          .slice(primeiroIndicePendente)
+          .map((mes) => format(mes, "yyyy-MM-dd"));
+
+        const faixa = faixas.find((item) => item.id === empresa.faixaId);
+        const descontoPercentual = Math.min(Math.max(Number(empresa.descontoMensalidadePercentual) || 0, 0), 100);
+        const valorBase = faixa?.valor ?? 0;
+        const descontoMensal = valorBase * (descontoPercentual / 100);
+        const valorMensal = Math.max(valorBase - descontoMensal, 0);
+        const impedimentos: string[] = [];
+        if (competenciasPendentes.length > 0) {
+          if (!empresa.faixaId || !faixa) impedimentos.push("faixa não cadastrada");
+          else if (faixa.valor <= 0) impedimentos.push("valor da faixa inválido");
+          if (!empresa.cnpj) impedimentos.push("CNPJ não cadastrado");
+          if (!empresa.contatoPrincipal.email) impedimentos.push("e-mail não cadastrado");
+          if (!empresa.contatoPrincipal.whatsapp) impedimentos.push("WhatsApp não cadastrado");
+        }
+
+        return {
+          empresaId: empresa.id,
+          empresaNome: empresa.nome,
+          dataAssociacao: empresa.dataAssociacao,
+          faixaId: empresa.faixaId,
+          competenciasEmitidas,
+          competenciasPendentes,
+          valorMensal,
+          descontoMensal,
+          valorTotal: valorMensal * competenciasPendentes.length,
+          impedimentos,
+        };
+      })
+      .sort((a, b) => {
+        if (a.competenciasPendentes.length !== b.competenciasPendentes.length) {
+          return b.competenciasPendentes.length - a.competenciasPendentes.length;
+        }
+        return a.empresaNome.localeCompare(b.empresaNome, "pt-BR");
+      });
+  }, [boletos, faixas, mockEmpresas, trimestreAutomaticoAno, trimestreAutomaticoNumero]);
+
+  const empresasAssociadasSemData = useMemo(
+    () => mockEmpresas.filter((empresa) => empresa.associada && empresa.tipoVinculo === "Associado" && !empresa.dataAssociacao),
+    [mockEmpresas],
+  );
+
+  const trimestreAutomaticoPendentes = planoTrimestreAutomatico.filter((row) => row.competenciasPendentes.length > 0);
+  const trimestreAutomaticoImpedidas = trimestreAutomaticoPendentes.filter((row) => row.impedimentos.length > 0);
+  const trimestreAutomaticoValorTotal = trimestreAutomaticoPendentes.reduce((total, row) => total + row.valorTotal, 0);
   const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
@@ -2224,6 +2345,76 @@ const Financeiro = () => {
     }
   };
 
+  const handleEmitirTrimestreAutomatico = async () => {
+    if (!trimestreAutomaticoVencimento || !isValid(parseISO(trimestreAutomaticoVencimento))) {
+      toast({ title: "Vencimento obrigatório", description: "Informe uma data de vencimento válida.", variant: "destructive" });
+      return;
+    }
+    if (trimestreAutomaticoPendentes.length === 0) {
+      toast({ title: "Nenhum boleto necessário", description: "Todas as competências elegíveis desse trimestre já foram emitidas." });
+      return;
+    }
+    if (trimestreAutomaticoImpedidas.length > 0) {
+      toast({
+        title: "Cadastros incompletos",
+        description: "Corrija os impedimentos mostrados na análise antes de gerar o lote.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    let emitidos = 0;
+    try {
+      setTrimestreAutomaticoConfirmOpen(false);
+      setIsEmittingBoletos(true);
+      setBatchEmissionProgress({ done: 0, total: trimestreAutomaticoPendentes.length });
+
+      for (const row of trimestreAutomaticoPendentes) {
+        const primeiraCompetencia = row.competenciasPendentes[0];
+        const ultimaCompetencia = row.competenciasPendentes[row.competenciasPendentes.length - 1];
+        await createBoletoMutation.mutateAsync({
+          ...boletoForm,
+          tipo: "mensalidade",
+          empresaId: row.empresaId,
+          empresaNome: row.empresaNome,
+          competenciaInicial: primeiraCompetencia,
+          competenciaFinal: ultimaCompetencia,
+          dataVencimento: trimestreAutomaticoVencimento,
+          faixaId: row.faixaId,
+          unificarCompetencias: "Sim",
+          mensagemPersonalizada: `Mensalidade do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referente à competência ${getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia)}.`,
+          anoContribuicao: "",
+          periodicidade: "Trimestral",
+          parcelas: "1",
+          baseCalculo: "",
+          percentual: "",
+          descontos: "",
+          valorCalculado: row.valorTotal,
+          valorOverride: row.valorTotal,
+          descontoValorOverride: row.descontoMensal * row.competenciasPendentes.length,
+        });
+        emitidos += 1;
+        setBatchEmissionProgress((prev) => ({ ...prev, done: emitidos }));
+      }
+
+      toast({
+        title: "Trimestre processado com sucesso",
+        description: `${emitidos} boleto(s) gerado(s). ${planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length} empresa(s) não precisavam de nova emissão.`,
+      });
+      setTrimestreAutomaticoOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    } catch (err) {
+      toast({
+        title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
+        description: `${emitidos} de ${trimestreAutomaticoPendentes.length} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
+        variant: "destructive",
+      });
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    } finally {
+      setIsEmittingBoletos(false);
+    }
+  };
+
   const extractChargeId = (id: string) => {
     const chargeIdFromQuery = data?.financeiro_boletos.find((item) => item.id === id)?.efi_charge_id;
     if (!chargeIdFromQuery) return null;
@@ -3036,6 +3227,164 @@ const Financeiro = () => {
               </AlertDialogContent>
             </AlertDialog>
 
+            <Dialog
+              open={trimestreAutomaticoOpen}
+              onOpenChange={(open) => {
+                if (!isEmittingBoletos) setTrimestreAutomaticoOpen(open);
+              }}
+            >
+              <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Gerar mensalidades do trimestre automaticamente</DialogTitle>
+                  <DialogDescription>
+                    O sistema analisa todas as faixas, identifica as competências já emitidas e gera somente o período restante de cada nova associada.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="trimestreAutomaticoAno">Ano de referência</Label>
+                    <Input
+                      id="trimestreAutomaticoAno"
+                      type="number"
+                      min="2000"
+                      max="2100"
+                      value={trimestreAutomaticoAno}
+                      onChange={(event) => setTrimestreAutomaticoAno(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Trimestre de referência</Label>
+                    <Select
+                      value={String(trimestreAutomaticoNumero)}
+                      onValueChange={(value) => setTrimestreAutomaticoNumero(Number(value) as TrimestreNumero)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                        <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                        <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                        <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Vencimento dos novos boletos</Label>
+                    <DatePickerField
+                      value={trimestreAutomaticoVencimento}
+                      placeholder="Informe o vencimento"
+                      onChange={setTrimestreAutomaticoVencimento}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+                  São analisadas as entradas entre o mês anterior ao trimestre e o último mês do trimestre. Entradas do dia 28 em diante passam a valer no mês seguinte. Boletos pagos, aguardando ou inadimplentes contam como já emitidos; cancelados não contam.
+                </div>
+
+                {empresasAssociadasSemData.length > 0 && (
+                  <div role="alert" className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">Há associadas sem data de associação</p>
+                      <p className="text-sm">
+                        {empresasAssociadasSemData.length} empresa(s) não podem entrar na análise automática até que a data de associação seja cadastrada.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Analisadas</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Com boleto a gerar</p><p className="text-2xl font-bold">{trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sem nova emissão</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Valor do lote</p><p className="text-xl font-bold text-primary">{formatCurrencyBRL(trimestreAutomaticoValorTotal)}</p></CardContent></Card>
+                </div>
+
+                <div className="overflow-x-auto rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Empresa</TableHead>
+                        <TableHead>Entrada</TableHead>
+                        <TableHead>Já emitido</TableHead>
+                        <TableHead>Será gerado</TableHead>
+                        <TableHead>Valor</TableHead>
+                        <TableHead>Situação</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {planoTrimestreAutomatico.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                            Nenhuma associada encontrada na janela de quatro meses desse trimestre.
+                          </TableCell>
+                        </TableRow>
+                      ) : planoTrimestreAutomatico.map((row) => (
+                        <TableRow key={row.empresaId}>
+                          <TableCell className="font-medium">{row.empresaNome}</TableCell>
+                          <TableCell>{formatDateBR(row.dataAssociacao)}</TableCell>
+                          <TableCell>{row.competenciasEmitidas.length > 0 ? row.competenciasEmitidas.map(formatCompetenciaBR).join(", ") : "Nenhuma"}</TableCell>
+                          <TableCell>{row.competenciasPendentes.length > 0 ? getCompetenciaRangeLabel(row.competenciasPendentes[0], row.competenciasPendentes[row.competenciasPendentes.length - 1]) : "—"}</TableCell>
+                          <TableCell>{formatCurrencyBRL(row.valorTotal)}</TableCell>
+                          <TableCell>
+                            {row.impedimentos.length > 0 ? (
+                              <Badge variant="destructive">{row.impedimentos.join(", ")}</Badge>
+                            ) : row.competenciasPendentes.length > 0 ? (
+                              <Badge className="bg-blue-100 text-blue-800">Pronto para gerar</Badge>
+                            ) : (
+                              <Badge variant="secondary">Nenhuma emissão</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {isEmittingBoletos && batchEmissionProgress.total > 0 && (
+                  <div className="space-y-2 text-sm text-muted-foreground">
+                    <div className="flex justify-between"><span>Emitindo boletos...</span><span>{batchEmissionProgress.done}/{batchEmissionProgress.total}</span></div>
+                    <Progress value={(batchEmissionProgress.done / batchEmissionProgress.total) * 100} />
+                  </div>
+                )}
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setTrimestreAutomaticoOpen(false)} disabled={isEmittingBoletos}>Cancelar</Button>
+                  <Button
+                    className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                    disabled={isEmittingBoletos || !trimestreAutomaticoVencimento || trimestreAutomaticoPendentes.length === 0 || trimestreAutomaticoImpedidas.length > 0}
+                    onClick={() => setTrimestreAutomaticoConfirmOpen(true)}
+                  >
+                    Gerar boletos do trimestre
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={trimestreAutomaticoConfirmOpen} onOpenChange={setTrimestreAutomaticoConfirmOpen}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirmar emissão automática?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Serão gerados {trimestreAutomaticoPendentes.length} boleto(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. Competências já emitidas não serão cobradas novamente.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Voltar</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void handleEmitirTrimestreAutomatico();
+                    }}
+                  >
+                    Confirmar e gerar
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
             {/* Wizard de Criação de Boletos */}
             <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
               <DialogContent className={cn("max-h-[90vh] overflow-y-auto", boletoForm.tipo === "contribuicao" ? "max-w-6xl" : "max-w-3xl")}>
@@ -3120,6 +3469,28 @@ const Financeiro = () => {
                       {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
                       {isBatchMode && (
                         <div className="space-y-2 rounded-md border p-3">
+                          <div className="flex flex-col gap-3 rounded-md border border-primary/20 bg-primary/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="font-medium">Mensalidades trimestrais automáticas</p>
+                              <p className="text-xs text-muted-foreground">Analisa todas as faixas e gera somente as competências que ainda faltam.</p>
+                            </div>
+                            <Button
+                              type="button"
+                              className="shrink-0 bg-[#00A86B] hover:bg-[#00A86B]/90"
+                              onClick={() => {
+                                const agora = new Date();
+                                setTrimestreAutomaticoAno(String(agora.getFullYear()));
+                                setTrimestreAutomaticoNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+                                setTrimestreAutomaticoVencimento("");
+                                setWizardOpen(false);
+                                setIsBatchMode(false);
+                                setTrimestreAutomaticoOpen(true);
+                              }}
+                            >
+                              <Calculator className="h-4 w-4 mr-2" />
+                              Gerar boletos do trimestre automático
+                            </Button>
+                          </div>
                           <Label>Tipo de vínculo para o lote</Label>
                           <Select
                             value={batchTipoVinculo}
