@@ -664,6 +664,7 @@ const Financeiro = () => {
   );
   const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
   const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
+  const [trimestreAutomaticoUnificarCompetencias, setTrimestreAutomaticoUnificarCompetencias] = useState<"Sim" | "Não">("Sim");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -994,6 +995,9 @@ const Financeiro = () => {
   const trimestreAutomaticoPendentes = planoTrimestreAutomatico.filter((row) => row.competenciasPendentes.length > 0);
   const trimestreAutomaticoImpedidas = trimestreAutomaticoPendentes.filter((row) => row.impedimentos.length > 0);
   const trimestreAutomaticoValorTotal = trimestreAutomaticoPendentes.reduce((total, row) => total + row.valorTotal, 0);
+  const trimestreAutomaticoQuantidadeBoletos = trimestreAutomaticoUnificarCompetencias === "Sim"
+    ? trimestreAutomaticoPendentes.length
+    : trimestreAutomaticoPendentes.reduce((total, row) => total + row.competenciasPendentes.length, 0);
   const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
@@ -2374,11 +2378,9 @@ const Financeiro = () => {
     try {
       setTrimestreAutomaticoConfirmOpen(false);
       setIsEmittingBoletos(true);
-      setBatchEmissionProgress({ done: 0, total: trimestreAutomaticoPendentes.length });
+      setBatchEmissionProgress({ done: 0, total: trimestreAutomaticoQuantidadeBoletos });
 
-      for (const row of trimestreAutomaticoPendentes) {
-        const primeiraCompetencia = row.competenciasPendentes[0];
-        const ultimaCompetencia = row.competenciasPendentes[row.competenciasPendentes.length - 1];
+      const emitir = async (row: TrimestreAutomaticoRow, primeiraCompetencia: string, ultimaCompetencia: string, valor: number, desconto: number) => {
         await createBoletoMutation.mutateAsync({
           ...boletoForm,
           tipo: "mensalidade",
@@ -2388,20 +2390,38 @@ const Financeiro = () => {
           competenciaFinal: ultimaCompetencia,
           dataVencimento: trimestreAutomaticoVencimento,
           faixaId: row.faixaId,
-          unificarCompetencias: "Sim",
-          mensagemPersonalizada: `Mensalidade do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referente à competência ${getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia)}.`,
+          unificarCompetencias: trimestreAutomaticoUnificarCompetencias,
+          mensagemPersonalizada: primeiraCompetencia === ultimaCompetencia
+            ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
+            : `Mensalidades do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referentes às competências ${getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia)}.`,
           anoContribuicao: "",
           periodicidade: "Trimestral",
           parcelas: "1",
           baseCalculo: "",
           percentual: "",
           descontos: "",
-          valorCalculado: row.valorTotal,
-          valorOverride: row.valorTotal,
-          descontoValorOverride: row.descontoMensal * row.competenciasPendentes.length,
+          valorCalculado: valor,
+          valorOverride: valor,
+          descontoValorOverride: desconto,
         });
         emitidos += 1;
         setBatchEmissionProgress((prev) => ({ ...prev, done: emitidos }));
+      };
+
+      for (const row of trimestreAutomaticoPendentes) {
+        if (trimestreAutomaticoUnificarCompetencias === "Sim") {
+          await emitir(
+            row,
+            row.competenciasPendentes[0],
+            row.competenciasPendentes[row.competenciasPendentes.length - 1],
+            row.valorTotal,
+            row.descontoMensal * row.competenciasPendentes.length,
+          );
+        } else {
+          for (const competencia of row.competenciasPendentes) {
+            await emitir(row, competencia, competencia, row.valorMensal, row.descontoMensal);
+          }
+        }
       }
 
       toast({
@@ -2413,7 +2433,7 @@ const Financeiro = () => {
     } catch (err) {
       toast({
         title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
-        description: `${emitidos} de ${trimestreAutomaticoPendentes.length} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
+        description: `${emitidos} de ${trimestreAutomaticoQuantidadeBoletos} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
         variant: "destructive",
       });
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
@@ -3248,7 +3268,7 @@ const Financeiro = () => {
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                   <div className="space-y-2">
                     <Label htmlFor="trimestreAutomaticoAno">Ano de referência</Label>
                     <Input
@@ -3283,6 +3303,19 @@ const Financeiro = () => {
                       onChange={setTrimestreAutomaticoVencimento}
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="trimestreAutomaticoUnificar">Unificar competências*</Label>
+                    <Select
+                      value={trimestreAutomaticoUnificarCompetencias}
+                      onValueChange={(value) => setTrimestreAutomaticoUnificarCompetencias(value as "Sim" | "Não")}
+                    >
+                      <SelectTrigger id="trimestreAutomaticoUnificar"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Sim">Sim — um boleto por empresa</SelectItem>
+                        <SelectItem value="Não">Não — um boleto por mensalidade</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
 
                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
@@ -3309,9 +3342,10 @@ const Financeiro = () => {
                   </div>
                 )}
 
-                <div className="grid gap-3 sm:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Analisadas</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length}</p></CardContent></Card>
-                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Com boleto a gerar</p><p className="text-2xl font-bold">{trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Empresas com cobrança</p><p className="text-2xl font-bold">{trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Boletos a gerar</p><p className="text-2xl font-bold">{trimestreAutomaticoQuantidadeBoletos}</p></CardContent></Card>
                   <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sem nova emissão</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length}</p></CardContent></Card>
                   <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Valor do lote</p><p className="text-xl font-bold text-primary">{formatCurrencyBRL(trimestreAutomaticoValorTotal)}</p></CardContent></Card>
                 </div>
@@ -3340,7 +3374,18 @@ const Financeiro = () => {
                           <TableCell className="font-medium">{row.empresaNome}</TableCell>
                           <TableCell>{formatDateBR(row.dataAssociacao)}</TableCell>
                           <TableCell>{row.competenciasEmitidas.length > 0 ? row.competenciasEmitidas.map(formatCompetenciaBR).join(", ") : "Nenhuma"}</TableCell>
-                          <TableCell>{row.competenciasPendentes.length > 0 ? getCompetenciaRangeLabel(row.competenciasPendentes[0], row.competenciasPendentes[row.competenciasPendentes.length - 1]) : "—"}</TableCell>
+                          <TableCell>
+                            {row.competenciasPendentes.length > 0 ? (
+                              <div>
+                                <p>{getCompetenciaRangeLabel(row.competenciasPendentes[0], row.competenciasPendentes[row.competenciasPendentes.length - 1])}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {trimestreAutomaticoUnificarCompetencias === "Sim"
+                                    ? "1 boleto unificado"
+                                    : `${row.competenciasPendentes.length} boleto(s), um por mensalidade`}
+                                </p>
+                              </div>
+                            ) : "—"}
+                          </TableCell>
                           <TableCell>{formatCurrencyBRL(row.valorTotal)}</TableCell>
                           <TableCell>
                             {row.impedimentos.length > 0 ? (
@@ -3382,7 +3427,7 @@ const Financeiro = () => {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar emissão automática?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Serão gerados {trimestreAutomaticoPendentes.length} boleto(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. Competências já emitidas não serão cobradas novamente.
+                    Serão gerados {trimestreAutomaticoQuantidadeBoletos} boleto(s) para {trimestreAutomaticoPendentes.length} empresa(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. {trimestreAutomaticoUnificarCompetencias === "Sim" ? "As mensalidades serão reunidas em um boleto por empresa." : "Será criado um boleto separado para cada mensalidade."} Competências já emitidas não serão cobradas novamente.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
