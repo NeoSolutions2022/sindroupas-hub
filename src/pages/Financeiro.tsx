@@ -1363,8 +1363,11 @@ const Financeiro = () => {
         const f = appliedFilters;
 
         // Empresa filter
-        if (f.empresaSearch && !boleto.empresa.toLowerCase().includes(f.empresaSearch.toLowerCase())) {
-          return false;
+        if (f.empresaSearch) {
+          const termo = f.empresaSearch.toLowerCase();
+          const correspondeRazaoSocial = boleto.empresa.toLowerCase().includes(termo);
+          const correspondeNomeFantasia = boleto.empresaFantasia?.toLowerCase().includes(termo) ?? false;
+          if (!correspondeRazaoSocial && !correspondeNomeFantasia) return false;
         }
 
         // Status filter
@@ -2546,7 +2549,7 @@ const Financeiro = () => {
                     setFilters(defaultFilters);
                     setAppliedFilters(defaultFilters);
                   }}
-                  empresas={mockEmpresas.map((e) => ({ id: e.id, nome: e.nome }))}
+                  empresas={mockEmpresas.map((e) => ({ id: e.id, razaoSocial: e.razaoSocial, nomeFantasia: e.nomeFantasia }))}
                 />
 
                 <Card>
