@@ -676,9 +676,10 @@ const Financeiro = () => {
   const [mensalidadeTrimestreNumero, setMensalidadeTrimestreNumero] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
   );
-  const [boletosSelecionadosIds, setBoletosSelecionadosIds] = useState<string[]>([]);
   const [competenciaDialogOpen, setCompetenciaDialogOpen] = useState(false);
+  const [competenciaConfirmOpen, setCompetenciaConfirmOpen] = useState(false);
   const [competenciaBoletoIds, setCompetenciaBoletoIds] = useState<string[]>([]);
+  const [competenciaSearch, setCompetenciaSearch] = useState("");
   const [competenciaAno, setCompetenciaAno] = useState(() => String(new Date().getFullYear()));
   const [competenciaTrimestre, setCompetenciaTrimestre] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
@@ -1472,18 +1473,30 @@ const Financeiro = () => {
     return filteredBoletos.slice(start, start + boletosPageSize);
   }, [filteredBoletos, boletosPage, boletosPageSize]);
 
-  const boletosMensalidadePagina = useMemo(
-    () => paginatedBoletos.filter(isBoletoMensalidade),
-    [paginatedBoletos],
+  const boletosMensalidadeFiltrados = useMemo(
+    () => filteredBoletos.filter(isBoletoMensalidade),
+    [filteredBoletos],
   );
+  const boletosCompetenciaDisponiveis = useMemo(() => {
+    const termo = competenciaSearch.trim().toLowerCase();
+    if (!termo) return boletosMensalidadeFiltrados;
+    return boletosMensalidadeFiltrados.filter((boleto) => {
+      const competencia = getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal).toLowerCase();
+      return boleto.empresa.toLowerCase().includes(termo) ||
+        (boleto.empresaFantasia?.toLowerCase().includes(termo) ?? false) ||
+        boleto.id.toLowerCase().includes(termo) ||
+        (boleto.efiChargeId?.toLowerCase().includes(termo) ?? false) ||
+        competencia.includes(termo);
+    });
+  }, [boletosMensalidadeFiltrados, competenciaSearch]);
   const boletosCompetenciaEmEdicao = useMemo(
     () => boletos.filter((boleto) => competenciaBoletoIds.includes(boleto.id) && isBoletoMensalidade(boleto)),
     [boletos, competenciaBoletoIds],
   );
-  const todosBoletosMensalidadePaginaSelecionados = boletosMensalidadePagina.length > 0 &&
-    boletosMensalidadePagina.every((boleto) => boletosSelecionadosIds.includes(boleto.id));
-  const algunsBoletosMensalidadePaginaSelecionados = boletosMensalidadePagina.some((boleto) =>
-    boletosSelecionadosIds.includes(boleto.id),
+  const todosBoletosCompetenciaVisiveisSelecionados = boletosCompetenciaDisponiveis.length > 0 &&
+    boletosCompetenciaDisponiveis.every((boleto) => competenciaBoletoIds.includes(boleto.id));
+  const algunsBoletosCompetenciaVisiveisSelecionados = boletosCompetenciaDisponiveis.some((boleto) =>
+    competenciaBoletoIds.includes(boleto.id),
   );
   const competenciaAnoNumero = Number(competenciaAno);
   const competenciaNovaFaixa = Number.isInteger(competenciaAnoNumero) && competenciaAnoNumero >= 2000 && competenciaAnoNumero <= 2100
@@ -1491,7 +1504,7 @@ const Financeiro = () => {
     : null;
 
   useEffect(() => {
-    setBoletosSelecionadosIds((ids) => ids.filter((id) => boletos.some((boleto) => boleto.id === id && isBoletoMensalidade(boleto))));
+    setCompetenciaBoletoIds((ids) => ids.filter((id) => boletos.some((boleto) => boleto.id === id && isBoletoMensalidade(boleto))));
   }, [boletos]);
 
   const aplicarTrimestreMensalidade = (ano: string, trimestreNumero: TrimestreNumero) => {
@@ -1519,18 +1532,17 @@ const Financeiro = () => {
     });
   };
 
-  const openCompetenciaDialog = (ids: string[]) => {
-    const targets = boletos.filter((boleto) => ids.includes(boleto.id) && isBoletoMensalidade(boleto));
-    if (targets.length === 0) {
+  const openCompetenciaDialog = (ids: string[] = []) => {
+    if (boletosMensalidadeFiltrados.length === 0) {
       toast({
-        title: "Selecione boletos de mensalidade",
-        description: "A edição de competência está disponível somente para mensalidades.",
-        variant: "destructive",
+        title: "Nenhuma mensalidade encontrada",
+        description: "Não há boletos de mensalidade nos filtros atuais para editar.",
       });
       return;
     }
+    const targets = boletos.filter((boleto) => ids.includes(boleto.id) && isBoletoMensalidade(boleto));
 
-    const primeiraCompetencia = targets[0].competenciaInicial;
+    const primeiraCompetencia = targets[0]?.competenciaInicial;
     const competenciaDate = primeiraCompetencia ? parseISO(primeiraCompetencia) : null;
     if (competenciaDate && isValid(competenciaDate)) {
       setCompetenciaAno(String(competenciaDate.getFullYear()));
@@ -1541,20 +1553,21 @@ const Financeiro = () => {
       setCompetenciaTrimestre((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
     }
     setCompetenciaBoletoIds(targets.map((boleto) => boleto.id));
+    setCompetenciaSearch("");
     setCompetenciaDialogOpen(true);
   };
 
-  const toggleBoletoSelecionado = (boletoId: string, checked: boolean) => {
-    setBoletosSelecionadosIds((ids) => checked
+  const toggleBoletoCompetenciaSelecionado = (boletoId: string, checked: boolean) => {
+    setCompetenciaBoletoIds((ids) => checked
       ? Array.from(new Set([...ids, boletoId]))
       : ids.filter((id) => id !== boletoId));
   };
 
-  const toggleBoletosMensalidadePagina = (checked: boolean) => {
-    const idsPagina = boletosMensalidadePagina.map((boleto) => boleto.id);
-    setBoletosSelecionadosIds((ids) => checked
-      ? Array.from(new Set([...ids, ...idsPagina]))
-      : ids.filter((id) => !idsPagina.includes(id)));
+  const toggleBoletosCompetenciaVisiveis = (checked: boolean) => {
+    const idsVisiveis = boletosCompetenciaDisponiveis.map((boleto) => boleto.id);
+    setCompetenciaBoletoIds((ids) => checked
+      ? Array.from(new Set([...ids, ...idsVisiveis]))
+      : ids.filter((id) => !idsVisiveis.includes(id)));
   };
 
   const canProceed = (() => {
@@ -2644,9 +2657,10 @@ const Financeiro = () => {
       }
 
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
-      setBoletosSelecionadosIds((ids) => ids.filter((id) => !competenciaBoletoIds.includes(id)));
+      setCompetenciaConfirmOpen(false);
       setCompetenciaDialogOpen(false);
       setCompetenciaBoletoIds([]);
+      setCompetenciaSearch("");
       toast({
         title: atualizados === 1 ? "Competência atualizada" : "Competências atualizadas",
         description: `${atualizados} boleto(s) definido(s) para ${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno}.`,
@@ -2771,11 +2785,10 @@ const Financeiro = () => {
                       <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
-                          disabled={boletosSelecionadosIds.length === 0}
-                          onClick={() => openCompetenciaDialog(boletosSelecionadosIds)}
+                          onClick={() => openCompetenciaDialog()}
                         >
                           <CalendarIcon className="h-4 w-4 mr-2" />
-                          Alterar competências{boletosSelecionadosIds.length > 0 ? ` (${boletosSelecionadosIds.length})` : ""}
+                          Alterar competências
                         </Button>
                         <Button 
                           onClick={() => setWizardOpen(true)}
@@ -2799,18 +2812,6 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-10">
-                              <Checkbox
-                                aria-label="Selecionar mensalidades desta página"
-                                checked={todosBoletosMensalidadePaginaSelecionados
-                                  ? true
-                                  : algunsBoletosMensalidadePaginaSelecionados
-                                    ? "indeterminate"
-                                    : false}
-                                disabled={boletosMensalidadePagina.length === 0}
-                                onCheckedChange={(checked) => toggleBoletosMensalidadePagina(checked === true)}
-                              />
-                            </TableHead>
                             <TableHead>Empresa</TableHead>
                             <TableHead>Tipo</TableHead>
                             <TableHead>Competência</TableHead>
@@ -2825,7 +2826,7 @@ const Financeiro = () => {
                         <TableBody>
                           {filteredBoletos.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                                 Nenhum boleto encontrado com os filtros aplicados.
                               </TableCell>
                             </TableRow>
@@ -2844,14 +2845,6 @@ const Financeiro = () => {
 
                               return (
                                 <TableRow key={boleto.id}>
-                                  <TableCell>
-                                    <Checkbox
-                                      aria-label={`Selecionar boleto de ${boleto.empresa}`}
-                                      checked={boletosSelecionadosIds.includes(boleto.id)}
-                                      disabled={!isBoletoMensalidade(boleto)}
-                                      onCheckedChange={(checked) => toggleBoletoSelecionado(boleto.id, checked === true)}
-                                    />
-                                  </TableCell>
                                   <TableCell className="font-medium">
                                     <div className="space-y-0.5">
                                       <p>{boleto.empresa}</p>
@@ -3180,18 +3173,19 @@ const Financeiro = () => {
                 <Dialog
                   open={competenciaDialogOpen}
                   onOpenChange={(open) => {
-                    if (isSavingCompetencia) return;
+                    if (isSavingCompetencia || competenciaConfirmOpen) return;
                     setCompetenciaDialogOpen(open);
-                    if (!open) setCompetenciaBoletoIds([]);
+                    if (!open) {
+                      setCompetenciaBoletoIds([]);
+                      setCompetenciaSearch("");
+                    }
                   }}
                 >
-                  <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+                  <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
                     <DialogHeader>
-                      <DialogTitle>
-                        {boletosCompetenciaEmEdicao.length === 1 ? "Alterar competência do boleto" : "Alterar competências em lote"}
-                      </DialogTitle>
+                      <DialogTitle>Alterar competências de mensalidades</DialogTitle>
                       <DialogDescription>
-                        Selecione o trimestre fixo que será gravado nos {boletosCompetenciaEmEdicao.length} boleto(s) de mensalidade.
+                        Selecione os boletos, informe o novo trimestre e revise tudo antes de confirmar.
                       </DialogDescription>
                     </DialogHeader>
 
@@ -3203,16 +3197,92 @@ const Financeiro = () => {
                     </div>
 
                     <div className="space-y-2">
-                      <Label>Boletos selecionados e competência atual</Label>
-                      <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border p-3">
-                        {boletosCompetenciaEmEdicao.map((boleto) => (
-                          <div key={boleto.id} className="flex flex-col justify-between gap-1 text-sm sm:flex-row sm:items-center">
-                            <span className="font-medium">{boleto.empresa}</span>
-                            <span className="text-muted-foreground">
-                              {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Competência não informada"}
-                            </span>
-                          </div>
-                        ))}
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                        <div className="flex-1 space-y-2">
+                          <Label htmlFor="competenciaSearch">Boletos de mensalidade</Label>
+                          <Input
+                            id="competenciaSearch"
+                            value={competenciaSearch}
+                            onChange={(event) => setCompetenciaSearch(event.target.value)}
+                            placeholder="Buscar por empresa, boleto ou competência"
+                            disabled={isSavingCompetencia}
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => toggleBoletosCompetenciaVisiveis(!todosBoletosCompetenciaVisiveisSelecionados)}
+                            disabled={isSavingCompetencia || boletosCompetenciaDisponiveis.length === 0}
+                          >
+                            {todosBoletosCompetenciaVisiveisSelecionados ? "Desmarcar visíveis" : "Selecionar visíveis"}
+                          </Button>
+                          <Badge variant="secondary">{boletosCompetenciaEmEdicao.length} selecionado(s)</Badge>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {boletosMensalidadeFiltrados.length} mensalidade(s) disponível(is) nos filtros atuais.
+                      </p>
+                      <div className="max-h-72 overflow-auto rounded-md border">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-background">
+                            <TableRow>
+                              <TableHead className="w-10">
+                                <Checkbox
+                                  aria-label="Selecionar boletos visíveis"
+                                  checked={todosBoletosCompetenciaVisiveisSelecionados
+                                    ? true
+                                    : algunsBoletosCompetenciaVisiveisSelecionados
+                                      ? "indeterminate"
+                                      : false}
+                                  disabled={isSavingCompetencia || boletosCompetenciaDisponiveis.length === 0}
+                                  onCheckedChange={(checked) => toggleBoletosCompetenciaVisiveis(checked === true)}
+                                />
+                              </TableHead>
+                              <TableHead>Empresa / boleto</TableHead>
+                              <TableHead>Competência atual</TableHead>
+                              <TableHead>Vencimento</TableHead>
+                              <TableHead>Valor</TableHead>
+                              <TableHead>Status</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {boletosCompetenciaDisponiveis.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                                  Nenhum boleto encontrado nessa busca.
+                                </TableCell>
+                              </TableRow>
+                            ) : boletosCompetenciaDisponiveis.map((boleto) => (
+                              <TableRow key={boleto.id} data-state={competenciaBoletoIds.includes(boleto.id) ? "selected" : undefined}>
+                                <TableCell>
+                                  <Checkbox
+                                    aria-label={`Selecionar boleto de ${boleto.empresa}`}
+                                    checked={competenciaBoletoIds.includes(boleto.id)}
+                                    disabled={isSavingCompetencia}
+                                    onCheckedChange={(checked) => toggleBoletoCompetenciaSelecionado(boleto.id, checked === true)}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <p className="font-medium">{boleto.empresa}</p>
+                                  {boleto.empresaFantasia && boleto.empresaFantasia !== boleto.empresa && (
+                                    <p className="text-xs text-muted-foreground">{boleto.empresaFantasia}</p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    Boleto {boleto.efiChargeId || boleto.id.slice(0, 8)}
+                                  </p>
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap">
+                                  {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap">{formatDueDateBR(boleto.vencimento)}</TableCell>
+                                <TableCell className="whitespace-nowrap">{formatCurrencyBRL(boleto.valor)}</TableCell>
+                                <TableCell>{getStatusBadge(getBoletoEffectiveStatus(boleto))}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
                       </div>
                     </div>
 
@@ -3262,18 +3332,87 @@ const Financeiro = () => {
                     </div>
 
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setCompetenciaDialogOpen(false)} disabled={isSavingCompetencia}>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setCompetenciaDialogOpen(false);
+                          setCompetenciaBoletoIds([]);
+                          setCompetenciaSearch("");
+                        }}
+                        disabled={isSavingCompetencia}
+                      >
                         Cancelar
                       </Button>
                       <Button
-                        onClick={() => void handleSalvarCompetencia()}
+                        onClick={() => setCompetenciaConfirmOpen(true)}
                         disabled={isSavingCompetencia || !competenciaNovaFaixa || boletosCompetenciaEmEdicao.length === 0}
                       >
-                        {isSavingCompetencia ? "Salvando..." : boletosCompetenciaEmEdicao.length === 1 ? "Salvar competência" : `Salvar em ${boletosCompetenciaEmEdicao.length} boletos`}
+                        Revisar alteração
                       </Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
+
+                <AlertDialog
+                  open={competenciaConfirmOpen}
+                  onOpenChange={(open) => {
+                    if (!isSavingCompetencia) setCompetenciaConfirmOpen(open);
+                  }}
+                >
+                  <AlertDialogContent className="max-w-2xl">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Confirmar alteração de competências?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Revise o impacto antes de atualizar {boletosCompetenciaEmEdicao.length} boleto(s).
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    <div className="space-y-4 text-sm">
+                      <div className="rounded-md border bg-muted/20 p-3">
+                        <p><strong>Nova competência:</strong> {competenciaNovaFaixa ? `${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno} (${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)})` : "Inválida"}</p>
+                        <p className="mt-2"><strong>Campos alterados:</strong> competência inicial e competência final.</p>
+                        <p className="mt-1"><strong>Não serão alterados:</strong> valor, vencimento, status, descrição, empresa, PDF e cobrança na EFI.</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className="font-medium">Boletos que serão atualizados</p>
+                        <div className="max-h-52 overflow-y-auto rounded-md border divide-y">
+                          {boletosCompetenciaEmEdicao.map((boleto) => (
+                            <div key={boleto.id} className="flex flex-col justify-between gap-1 p-3 sm:flex-row sm:items-center">
+                              <span>
+                                <strong>{boleto.empresa}</strong>
+                                <span className="ml-1 text-xs text-muted-foreground">({boleto.efiChargeId || boleto.id.slice(0, 8)})</span>
+                              </span>
+                              <span className="text-muted-foreground">
+                                {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                {" → "}
+                                {competenciaNovaFaixa ? getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso) : "—"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-950">
+                        Esta alteração muda a referência usada pelas regras automáticas de identificação de competências já emitidas.
+                      </div>
+                    </div>
+
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={isSavingCompetencia}>Voltar e revisar</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                        disabled={isSavingCompetencia || !competenciaNovaFaixa || boletosCompetenciaEmEdicao.length === 0}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void handleSalvarCompetencia();
+                        }}
+                      >
+                        {isSavingCompetencia ? "Alterando..." : `Confirmar alteração em ${boletosCompetenciaEmEdicao.length} boleto(s)`}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
 
                 <Dialog open={descriptionDialogOpen} onOpenChange={setDescriptionDialogOpen}>
                   <DialogContent>
