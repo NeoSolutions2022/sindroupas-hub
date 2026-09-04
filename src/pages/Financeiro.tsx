@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -405,6 +405,28 @@ type TrimestreAutomaticoRow = {
   impedimentos: string[];
 };
 
+type TrimestreAutomaticoEmissionProgress = {
+  status: "idle" | "running" | "finished";
+  done: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  currentEmpresa: string;
+  currentCompetencia: string;
+  errors: { empresa: string; competencia: string; mensagem: string }[];
+};
+
+const INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS: TrimestreAutomaticoEmissionProgress = {
+  status: "idle",
+  done: 0,
+  total: 0,
+  succeeded: 0,
+  failed: 0,
+  currentEmpresa: "",
+  currentCompetencia: "",
+  errors: [],
+};
+
 type ContactCandidate = {
   nome?: string | null;
   email?: string | null;
@@ -515,10 +537,12 @@ const DatePickerField = ({
   value,
   onChange,
   placeholder = "Selecione uma data",
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) => {
   const parsedDate = value ? parseISO(value) : undefined;
   const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
@@ -576,11 +600,12 @@ const DatePickerField = ({
         onBlur={handleInputBlur}
         inputMode="numeric"
         placeholder={placeholder}
+        disabled={disabled}
         className={cn(!typedValue && "text-muted-foreground")}
       />
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0">
+          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0" disabled={disabled}>
             <CalendarIcon className="h-4 w-4" />
           </Button>
         </PopoverTrigger>
@@ -681,6 +706,10 @@ const Financeiro = () => {
   const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
   const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
   const [trimestreAutomaticoUnificarCompetencias, setTrimestreAutomaticoUnificarCompetencias] = useState<"Sim" | "Não">("Sim");
+  const [trimestreAutomaticoProgress, setTrimestreAutomaticoProgress] = useState<TrimestreAutomaticoEmissionProgress>(
+    INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS,
+  );
+  const trimestreAutomaticoEmissionLockRef = useRef(false);
   const [mensalidadeAnoReferencia, setMensalidadeAnoReferencia] = useState(() => String(new Date().getFullYear()));
   const [mensalidadeTrimestreNumero, setMensalidadeTrimestreNumero] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
@@ -2516,6 +2545,8 @@ const Financeiro = () => {
   };
 
   const handleEmitirTrimestreAutomatico = async () => {
+    if (trimestreAutomaticoEmissionLockRef.current || isEmittingBoletos) return;
+
     if (!trimestreAutomaticoVencimento || !isValid(parseISO(trimestreAutomaticoVencimento))) {
       toast({ title: "Vencimento obrigatório", description: "Informe uma data de vencimento válida.", variant: "destructive" });
       return;
@@ -2533,16 +2564,45 @@ const Financeiro = () => {
       return;
     }
 
+    const rowsParaEmitir = trimestreAutomaticoPendentes.map((row) => ({
+      ...row,
+      competenciasEmitidas: [...row.competenciasEmitidas],
+      competenciasPendentes: [...row.competenciasPendentes],
+      impedimentos: [...row.impedimentos],
+    }));
+    const vencimento = trimestreAutomaticoVencimento;
+    const unificarCompetencias = trimestreAutomaticoUnificarCompetencias;
+    const trimestreNumero = trimestreAutomaticoNumero;
+    const trimestreAno = trimestreAutomaticoAno;
+    const totalOperacoes = unificarCompetencias === "Sim"
+      ? rowsParaEmitir.length
+      : rowsParaEmitir.reduce((total, row) => total + row.competenciasPendentes.length, 0);
+
+    trimestreAutomaticoEmissionLockRef.current = true;
     let emitidos = 0;
     let processados = 0;
     const falhas: { empresa: string; competencia: string; mensagem: string }[] = [];
     try {
       setTrimestreAutomaticoConfirmOpen(false);
       setIsEmittingBoletos(true);
-      setBatchEmissionProgress({ done: 0, total: trimestreAutomaticoQuantidadeBoletos });
+      setTrimestreAutomaticoProgress({
+        status: "running",
+        done: 0,
+        total: totalOperacoes,
+        succeeded: 0,
+        failed: 0,
+        currentEmpresa: "",
+        currentCompetencia: "",
+        errors: [],
+      });
 
       const emitir = async (row: TrimestreAutomaticoRow, primeiraCompetencia: string, ultimaCompetencia: string, valor: number, desconto: number) => {
         const competencia = getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia);
+        setTrimestreAutomaticoProgress((prev) => ({
+          ...prev,
+          currentEmpresa: row.empresaNome,
+          currentCompetencia: competencia,
+        }));
         try {
           await createBoletoMutation.mutateAsync({
             ...boletoForm,
@@ -2551,12 +2611,12 @@ const Financeiro = () => {
             empresaNome: row.empresaNome,
             competenciaInicial: primeiraCompetencia,
             competenciaFinal: ultimaCompetencia,
-            dataVencimento: trimestreAutomaticoVencimento,
+            dataVencimento: vencimento,
             faixaId: row.faixaId,
-            unificarCompetencias: trimestreAutomaticoUnificarCompetencias,
+            unificarCompetencias,
             mensagemPersonalizada: primeiraCompetencia === ultimaCompetencia
               ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
-              : `Mensalidades do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referentes às competências ${competencia}.`,
+              : `Mensalidades do ${trimestreNumero}º trimestre de ${trimestreAno}, referentes às competências ${competencia}.`,
             anoContribuicao: "",
             periodicidade: "Trimestral",
             parcelas: "1",
@@ -2576,12 +2636,18 @@ const Financeiro = () => {
           });
         } finally {
           processados += 1;
-          setBatchEmissionProgress((prev) => ({ ...prev, done: processados }));
+          setTrimestreAutomaticoProgress((prev) => ({
+            ...prev,
+            done: processados,
+            succeeded: emitidos,
+            failed: falhas.length,
+            errors: [...falhas],
+          }));
         }
       };
 
-      for (const row of trimestreAutomaticoPendentes) {
-        if (trimestreAutomaticoUnificarCompetencias === "Sim") {
+      for (const row of rowsParaEmitir) {
+        if (unificarCompetencias === "Sim") {
           await emitir(
             row,
             row.competenciasPendentes[0],
@@ -2597,6 +2663,12 @@ const Financeiro = () => {
       }
 
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      setTrimestreAutomaticoProgress((prev) => ({
+        ...prev,
+        status: "finished",
+        currentEmpresa: "",
+        currentCompetencia: "",
+      }));
       if (falhas.length > 0) {
         const resumoFalhas = falhas
           .slice(0, 3)
@@ -2604,7 +2676,7 @@ const Financeiro = () => {
           .join(" | ");
         toast({
           title: emitidos > 0 ? "Lote concluído parcialmente" : "Nenhum boleto foi gerado",
-          description: `${emitidos} de ${trimestreAutomaticoQuantidadeBoletos} boleto(s) gerado(s); ${falhas.length} falharam. Os sucessos já foram retirados da prévia para uma tentativa segura. ${resumoFalhas}${falhas.length > 3 ? ` | e mais ${falhas.length - 3} falha(s).` : ""}`,
+          description: `${emitidos} de ${totalOperacoes} boleto(s) gerado(s); ${falhas.length} falharam. Os sucessos já foram retirados da prévia para uma tentativa segura. ${resumoFalhas}${falhas.length > 3 ? ` | e mais ${falhas.length - 3} falha(s).` : ""}`,
           variant: "destructive",
         });
         return;
@@ -2616,14 +2688,21 @@ const Financeiro = () => {
       });
       setTrimestreAutomaticoOpen(false);
     } catch (err) {
+      setTrimestreAutomaticoProgress((prev) => ({
+        ...prev,
+        status: "finished",
+        currentEmpresa: "",
+        currentCompetencia: "",
+      }));
       toast({
         title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
-        description: `${emitidos} de ${trimestreAutomaticoQuantidadeBoletos} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
+        description: `${emitidos} de ${totalOperacoes} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
         variant: "destructive",
       });
       await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
     } finally {
       setIsEmittingBoletos(false);
+      trimestreAutomaticoEmissionLockRef.current = false;
     }
   };
 
@@ -3831,6 +3910,7 @@ const Financeiro = () => {
                       max="2100"
                       value={trimestreAutomaticoAno}
                       onChange={(event) => setTrimestreAutomaticoAno(event.target.value)}
+                      disabled={isEmittingBoletos}
                     />
                   </div>
                   <div className="space-y-2">
@@ -3838,6 +3918,7 @@ const Financeiro = () => {
                     <Select
                       value={String(trimestreAutomaticoNumero)}
                       onValueChange={(value) => setTrimestreAutomaticoNumero(Number(value) as TrimestreNumero)}
+                      disabled={isEmittingBoletos}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -3854,6 +3935,7 @@ const Financeiro = () => {
                       value={trimestreAutomaticoVencimento}
                       placeholder="Informe o vencimento"
                       onChange={setTrimestreAutomaticoVencimento}
+                      disabled={isEmittingBoletos}
                     />
                   </div>
                   <div className="space-y-2">
@@ -3861,6 +3943,7 @@ const Financeiro = () => {
                     <Select
                       value={trimestreAutomaticoUnificarCompetencias}
                       onValueChange={(value) => setTrimestreAutomaticoUnificarCompetencias(value as "Sim" | "Não")}
+                      disabled={isEmittingBoletos}
                     >
                       <SelectTrigger id="trimestreAutomaticoUnificar"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -3955,10 +4038,57 @@ const Financeiro = () => {
                   </Table>
                 </div>
 
-                {isEmittingBoletos && batchEmissionProgress.total > 0 && (
-                  <div className="space-y-2 text-sm text-muted-foreground">
-                    <div className="flex justify-between"><span>Emitindo boletos...</span><span>{batchEmissionProgress.done}/{batchEmissionProgress.total}</span></div>
-                    <Progress value={(batchEmissionProgress.done / batchEmissionProgress.total) * 100} />
+                {trimestreAutomaticoProgress.status !== "idle" && trimestreAutomaticoProgress.total > 0 && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={cn(
+                      "space-y-3 rounded-lg border p-4",
+                      trimestreAutomaticoProgress.status === "running"
+                        ? "border-blue-200 bg-blue-50/70"
+                        : trimestreAutomaticoProgress.failed > 0
+                          ? "border-amber-300 bg-amber-50"
+                          : "border-emerald-200 bg-emerald-50/70",
+                    )}
+                  >
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="font-medium text-foreground">
+                        {trimestreAutomaticoProgress.status === "running"
+                          ? "Gerando boletos. Aguarde e não feche esta tela."
+                          : trimestreAutomaticoProgress.failed > 0
+                            ? "Processamento concluído com falhas."
+                            : "Processamento concluído."}
+                      </span>
+                      <span className="text-sm font-medium text-foreground">
+                        {trimestreAutomaticoProgress.done}/{trimestreAutomaticoProgress.total}
+                      </span>
+                    </div>
+                    {trimestreAutomaticoProgress.status === "running" && trimestreAutomaticoProgress.currentEmpresa && (
+                      <p className="text-sm text-muted-foreground">
+                        Agora: {trimestreAutomaticoProgress.currentEmpresa} — {trimestreAutomaticoProgress.currentCompetencia}
+                      </p>
+                    )}
+                    <Progress
+                      value={(trimestreAutomaticoProgress.done / trimestreAutomaticoProgress.total) * 100}
+                      aria-label="Progresso da emissão automática"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {trimestreAutomaticoProgress.succeeded} gerado(s)
+                      {trimestreAutomaticoProgress.failed > 0 ? `; ${trimestreAutomaticoProgress.failed} falha(s)` : ""}.
+                    </p>
+                    {trimestreAutomaticoProgress.errors.length > 0 && (
+                      <div className="space-y-1 rounded-md border border-amber-200 bg-white/70 p-3 text-sm text-amber-950">
+                        <p className="font-medium">Falhas encontradas:</p>
+                        {trimestreAutomaticoProgress.errors.slice(0, 5).map((failure, index) => (
+                          <p key={`${failure.empresa}-${failure.competencia}-${index}`}>
+                            {failure.empresa} ({failure.competencia}): {failure.mensagem}
+                          </p>
+                        ))}
+                        {trimestreAutomaticoProgress.errors.length > 5 && (
+                          <p>E mais {trimestreAutomaticoProgress.errors.length - 5} falha(s).</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3969,13 +4099,18 @@ const Financeiro = () => {
                     disabled={isEmittingBoletos || !trimestreAutomaticoVencimento || trimestreAutomaticoPendentes.length === 0 || trimestreAutomaticoImpedidas.length > 0}
                     onClick={() => setTrimestreAutomaticoConfirmOpen(true)}
                   >
-                    Gerar boletos do trimestre
+                    {isEmittingBoletos ? "Gerando boletos..." : "Gerar boletos do trimestre"}
                   </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
 
-            <AlertDialog open={trimestreAutomaticoConfirmOpen} onOpenChange={setTrimestreAutomaticoConfirmOpen}>
+            <AlertDialog
+              open={trimestreAutomaticoConfirmOpen}
+              onOpenChange={(open) => {
+                if (!isEmittingBoletos) setTrimestreAutomaticoConfirmOpen(open);
+              }}
+            >
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar emissão automática?</AlertDialogTitle>
@@ -3984,15 +4119,16 @@ const Financeiro = () => {
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Voltar</AlertDialogCancel>
+                  <AlertDialogCancel disabled={isEmittingBoletos}>Voltar</AlertDialogCancel>
                   <AlertDialogAction
                     className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                    disabled={isEmittingBoletos || createBoletoMutation.isPending}
                     onClick={(event) => {
                       event.preventDefault();
                       void handleEmitirTrimestreAutomatico();
                     }}
                   >
-                    Confirmar e gerar
+                    {isEmittingBoletos || createBoletoMutation.isPending ? "Iniciando emissão..." : "Confirmar e gerar"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -4099,11 +4235,13 @@ const Financeiro = () => {
                             <Button
                               type="button"
                               className="shrink-0 bg-[#00A86B] hover:bg-[#00A86B]/90"
+                              disabled={isEmittingBoletos}
                               onClick={() => {
                                 const agora = new Date();
                                 setTrimestreAutomaticoAno(String(agora.getFullYear()));
                                 setTrimestreAutomaticoNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
                                 setTrimestreAutomaticoVencimento("");
+                                setTrimestreAutomaticoProgress(INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS);
                                 setWizardOpen(false);
                                 setIsBatchMode(false);
                                 setTrimestreAutomaticoOpen(true);
