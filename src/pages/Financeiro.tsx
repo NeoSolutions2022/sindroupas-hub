@@ -815,6 +815,12 @@ const Financeiro = () => {
       const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
       const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
       const parcelasNumero = payload.parcelas ? Number(payload.parcelas) : undefined;
+      const competenciaCustomId = payload.competenciaInicial
+        ? payload.competenciaFinal && payload.competenciaFinal !== payload.competenciaInicial
+          ? `${payload.competenciaInicial}-${payload.competenciaFinal}`
+          : payload.competenciaInicial
+        : undefined;
+      const referenciaCustomId = payload.anoContribuicao || competenciaCustomId || payload.dataVencimento;
 
       const boletoPayload: CreateBoletoPayload = {
         empresa_id: payload.empresaId,
@@ -832,7 +838,7 @@ const Financeiro = () => {
         base: baseValor || undefined,
         item_name: itemName,
         item_amount: 1,
-        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.anoContribuicao || payload.dataVencimento}${payload.contribuicaoParcelaNumero ? `-parcela-${payload.contribuicaoParcelaNumero}` : ""}`,
+        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${referenciaCustomId}${payload.contribuicaoParcelaNumero ? `-parcela-${payload.contribuicaoParcelaNumero}` : ""}`,
         message: payload.mensagemPersonalizada || undefined,
         customer: {
           email: emailBoleto,
@@ -2348,9 +2354,10 @@ const Financeiro = () => {
     } catch (err) {
       toast({
         title: "Falha ao emitir boleto",
-        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        description: `${err instanceof Error ? err.message : "Tente novamente em instantes."} A lista financeira será atualizada antes de uma nova tentativa.`,
         variant: "destructive",
       });
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
     } finally {
       setIsEmittingBoletos(false);
     }
@@ -2375,37 +2382,50 @@ const Financeiro = () => {
     }
 
     let emitidos = 0;
+    let processados = 0;
+    const falhas: { empresa: string; competencia: string; mensagem: string }[] = [];
     try {
       setTrimestreAutomaticoConfirmOpen(false);
       setIsEmittingBoletos(true);
       setBatchEmissionProgress({ done: 0, total: trimestreAutomaticoQuantidadeBoletos });
 
       const emitir = async (row: TrimestreAutomaticoRow, primeiraCompetencia: string, ultimaCompetencia: string, valor: number, desconto: number) => {
-        await createBoletoMutation.mutateAsync({
-          ...boletoForm,
-          tipo: "mensalidade",
-          empresaId: row.empresaId,
-          empresaNome: row.empresaNome,
-          competenciaInicial: primeiraCompetencia,
-          competenciaFinal: ultimaCompetencia,
-          dataVencimento: trimestreAutomaticoVencimento,
-          faixaId: row.faixaId,
-          unificarCompetencias: trimestreAutomaticoUnificarCompetencias,
-          mensagemPersonalizada: primeiraCompetencia === ultimaCompetencia
-            ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
-            : `Mensalidades do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referentes às competências ${getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia)}.`,
-          anoContribuicao: "",
-          periodicidade: "Trimestral",
-          parcelas: "1",
-          baseCalculo: "",
-          percentual: "",
-          descontos: "",
-          valorCalculado: valor,
-          valorOverride: valor,
-          descontoValorOverride: desconto,
-        });
-        emitidos += 1;
-        setBatchEmissionProgress((prev) => ({ ...prev, done: emitidos }));
+        const competencia = getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia);
+        try {
+          await createBoletoMutation.mutateAsync({
+            ...boletoForm,
+            tipo: "mensalidade",
+            empresaId: row.empresaId,
+            empresaNome: row.empresaNome,
+            competenciaInicial: primeiraCompetencia,
+            competenciaFinal: ultimaCompetencia,
+            dataVencimento: trimestreAutomaticoVencimento,
+            faixaId: row.faixaId,
+            unificarCompetencias: trimestreAutomaticoUnificarCompetencias,
+            mensagemPersonalizada: primeiraCompetencia === ultimaCompetencia
+              ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
+              : `Mensalidades do ${trimestreAutomaticoNumero}º trimestre de ${trimestreAutomaticoAno}, referentes às competências ${competencia}.`,
+            anoContribuicao: "",
+            periodicidade: "Trimestral",
+            parcelas: "1",
+            baseCalculo: "",
+            percentual: "",
+            descontos: "",
+            valorCalculado: valor,
+            valorOverride: valor,
+            descontoValorOverride: desconto,
+          });
+          emitidos += 1;
+        } catch (err) {
+          falhas.push({
+            empresa: row.empresaNome,
+            competencia,
+            mensagem: err instanceof Error ? err.message : "Erro inesperado na emissão.",
+          });
+        } finally {
+          processados += 1;
+          setBatchEmissionProgress((prev) => ({ ...prev, done: processados }));
+        }
       };
 
       for (const row of trimestreAutomaticoPendentes) {
@@ -2424,12 +2444,25 @@ const Financeiro = () => {
         }
       }
 
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      if (falhas.length > 0) {
+        const resumoFalhas = falhas
+          .slice(0, 3)
+          .map((falha) => `${falha.empresa} (${falha.competencia}): ${falha.mensagem}`)
+          .join(" | ");
+        toast({
+          title: emitidos > 0 ? "Lote concluído parcialmente" : "Nenhum boleto foi gerado",
+          description: `${emitidos} de ${trimestreAutomaticoQuantidadeBoletos} boleto(s) gerado(s); ${falhas.length} falharam. Os sucessos já foram retirados da prévia para uma tentativa segura. ${resumoFalhas}${falhas.length > 3 ? ` | e mais ${falhas.length - 3} falha(s).` : ""}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
       toast({
         title: "Trimestre processado com sucesso",
         description: `${emitidos} boleto(s) gerado(s). ${planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length} empresa(s) não precisavam de nova emissão.`,
       });
       setTrimestreAutomaticoOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
     } catch (err) {
       toast({
         title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
