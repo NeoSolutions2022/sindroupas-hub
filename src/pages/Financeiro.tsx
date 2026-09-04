@@ -62,6 +62,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
 import { normalizeBrazilianWhatsappNumber, sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type EmpresaLookupRow = {
@@ -283,6 +284,20 @@ const UPDATE_BOLETO_DESCRICAO_HASURA = `
   }
 `;
 
+const UPDATE_BOLETOS_COMPETENCIA_HASURA = `
+  mutation UpdateBoletosCompetencia($ids: [uuid!]!, $competenciaInicial: date!, $competenciaFinal: date!) {
+    update_financeiro_boletos(
+      where: { id: { _in: $ids } }
+      _set: {
+        competencia_inicial: $competenciaInicial
+        competencia_final: $competenciaFinal
+      }
+    ) {
+      affected_rows
+    }
+  }
+`;
+
 const UPDATE_BOLETO_ENVIO_EMAIL_HASURA = `
   mutation UpdateBoletoEnvioEmail($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
     update_financeiro_boletos_by_pk(
@@ -458,14 +473,6 @@ const rangesOverlap = (startA?: string, endA?: string, startB?: string, endB?: s
   return !isAfter(aStart, bEnd) && !isAfter(bStart, aEnd);
 };
 
-const getCurrentQuarterRange = () => {
-  const now = new Date();
-  const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
-  const start = startOfMonth(new Date(now.getFullYear(), quarterStartMonth, 1));
-  const end = startOfMonth(addMonths(start, 2));
-  return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
-};
-
 const getTrimestre = (ano: number, trimestre: TrimestreNumero) => {
   const inicio = startOfMonth(new Date(ano, (trimestre - 1) * 3, 1));
   const meses = [inicio, addMonths(inicio, 1), addMonths(inicio, 2)];
@@ -478,22 +485,22 @@ const getTrimestre = (ano: number, trimestre: TrimestreNumero) => {
   };
 };
 
-const MonthPickerField = ({
-  value,
-  onChange,
-  placeholder = "Selecione a competência",
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) => (
-  <Input
-    type="month"
-    aria-label={placeholder}
-    value={value ? format(parseISO(value), "yyyy-MM") : ""}
-    onChange={(event) => onChange(event.target.value ? `${event.target.value}-01` : "")}
-  />
-);
+const getTrimestreNumeroDaCompetencia = (competencia?: string): TrimestreNumero | null => {
+  if (!competencia) return null;
+  const parsed = parseISO(competencia);
+  if (!isValid(parsed)) return null;
+  return (Math.floor(parsed.getMonth() / 3) + 1) as TrimestreNumero;
+};
+
+const getTrimestreLabel = (trimestre: TrimestreNumero) => ({
+  1: "1º trimestre — janeiro a março",
+  2: "2º trimestre — abril a junho",
+  3: "3º trimestre — julho a setembro",
+  4: "4º trimestre — outubro a dezembro",
+})[trimestre];
+
+const isBoletoMensalidade = (boleto: Pick<BoletoRegistro, "tipo">) =>
+  boleto.tipo === "Mensalidade (por Faixa)";
 
 const DatePickerField = ({
   value,
@@ -665,6 +672,18 @@ const Financeiro = () => {
   const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
   const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
   const [trimestreAutomaticoUnificarCompetencias, setTrimestreAutomaticoUnificarCompetencias] = useState<"Sim" | "Não">("Sim");
+  const [mensalidadeAnoReferencia, setMensalidadeAnoReferencia] = useState(() => String(new Date().getFullYear()));
+  const [mensalidadeTrimestreNumero, setMensalidadeTrimestreNumero] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [boletosSelecionadosIds, setBoletosSelecionadosIds] = useState<string[]>([]);
+  const [competenciaDialogOpen, setCompetenciaDialogOpen] = useState(false);
+  const [competenciaBoletoIds, setCompetenciaBoletoIds] = useState<string[]>([]);
+  const [competenciaAno, setCompetenciaAno] = useState(() => String(new Date().getFullYear()));
+  const [competenciaTrimestre, setCompetenciaTrimestre] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [isSavingCompetencia, setIsSavingCompetencia] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -1453,6 +1472,91 @@ const Financeiro = () => {
     return filteredBoletos.slice(start, start + boletosPageSize);
   }, [filteredBoletos, boletosPage, boletosPageSize]);
 
+  const boletosMensalidadePagina = useMemo(
+    () => paginatedBoletos.filter(isBoletoMensalidade),
+    [paginatedBoletos],
+  );
+  const boletosCompetenciaEmEdicao = useMemo(
+    () => boletos.filter((boleto) => competenciaBoletoIds.includes(boleto.id) && isBoletoMensalidade(boleto)),
+    [boletos, competenciaBoletoIds],
+  );
+  const todosBoletosMensalidadePaginaSelecionados = boletosMensalidadePagina.length > 0 &&
+    boletosMensalidadePagina.every((boleto) => boletosSelecionadosIds.includes(boleto.id));
+  const algunsBoletosMensalidadePaginaSelecionados = boletosMensalidadePagina.some((boleto) =>
+    boletosSelecionadosIds.includes(boleto.id),
+  );
+  const competenciaAnoNumero = Number(competenciaAno);
+  const competenciaNovaFaixa = Number.isInteger(competenciaAnoNumero) && competenciaAnoNumero >= 2000 && competenciaAnoNumero <= 2100
+    ? getTrimestre(competenciaAnoNumero, competenciaTrimestre)
+    : null;
+
+  useEffect(() => {
+    setBoletosSelecionadosIds((ids) => ids.filter((id) => boletos.some((boleto) => boleto.id === id && isBoletoMensalidade(boleto))));
+  }, [boletos]);
+
+  const aplicarTrimestreMensalidade = (ano: string, trimestreNumero: TrimestreNumero) => {
+    setMensalidadeAnoReferencia(ano);
+    setMensalidadeTrimestreNumero(trimestreNumero);
+    const anoNumero = Number(ano);
+    const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
+      ? getTrimestre(anoNumero, trimestreNumero)
+      : null;
+
+    setBoletoForm((prev) => {
+      const competenciaInicial = faixa?.inicioIso ?? "";
+      const competenciaFinal = faixa?.fimIso ?? "";
+      const mensagemAutomaticaAnterior = prev.mensagemPersonalizada.startsWith("Boleto referente à competência ");
+      return {
+        ...prev,
+        competenciaInicial,
+        competenciaFinal,
+        mensagemPersonalizada: !prev.mensagemPersonalizada || mensagemAutomaticaAnterior
+          ? competenciaInicial
+            ? `Boleto referente à competência ${getCompetenciaRangeLabel(competenciaInicial, competenciaFinal)}`
+            : ""
+          : prev.mensagemPersonalizada,
+      };
+    });
+  };
+
+  const openCompetenciaDialog = (ids: string[]) => {
+    const targets = boletos.filter((boleto) => ids.includes(boleto.id) && isBoletoMensalidade(boleto));
+    if (targets.length === 0) {
+      toast({
+        title: "Selecione boletos de mensalidade",
+        description: "A edição de competência está disponível somente para mensalidades.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const primeiraCompetencia = targets[0].competenciaInicial;
+    const competenciaDate = primeiraCompetencia ? parseISO(primeiraCompetencia) : null;
+    if (competenciaDate && isValid(competenciaDate)) {
+      setCompetenciaAno(String(competenciaDate.getFullYear()));
+      setCompetenciaTrimestre(getTrimestreNumeroDaCompetencia(primeiraCompetencia) ?? 1);
+    } else {
+      const agora = new Date();
+      setCompetenciaAno(String(agora.getFullYear()));
+      setCompetenciaTrimestre((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+    }
+    setCompetenciaBoletoIds(targets.map((boleto) => boleto.id));
+    setCompetenciaDialogOpen(true);
+  };
+
+  const toggleBoletoSelecionado = (boletoId: string, checked: boolean) => {
+    setBoletosSelecionadosIds((ids) => checked
+      ? Array.from(new Set([...ids, boletoId]))
+      : ids.filter((id) => id !== boletoId));
+  };
+
+  const toggleBoletosMensalidadePagina = (checked: boolean) => {
+    const idsPagina = boletosMensalidadePagina.map((boleto) => boleto.id);
+    setBoletosSelecionadosIds((ids) => checked
+      ? Array.from(new Set([...ids, ...idsPagina]))
+      : ids.filter((id) => !idsPagina.includes(id)));
+  };
+
   const canProceed = (() => {
     if (wizardStep === 1) {
       if (boletoForm.tipo === "contribuicao") return true;
@@ -1754,6 +1858,7 @@ const Financeiro = () => {
 
   // Funções para Wizard de Boletos
   const resetWizard = () => {
+    const agora = new Date();
     setWizardOpen(false);
     setWizardStep(1);
     setBoletoForm({
@@ -1792,6 +1897,8 @@ const Financeiro = () => {
     setEmailFallbackDialogOpen(false);
     setEmailFallbackEmpresaIds([]);
     setEmailFallbackDraft("");
+    setMensalidadeAnoReferencia(String(agora.getFullYear()));
+    setMensalidadeTrimestreNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
@@ -1862,7 +1969,7 @@ const Financeiro = () => {
       basesPorEmpresa.set(empresaId, (basesPorEmpresa.get(empresaId) ?? 0) + Number(contribuicao.base ?? 0));
     }
     return Array.from(basesPorEmpresa.entries())
-      .map(([empresaId, folhaAnoAnterior]) => {
+      .map(([empresaId, folhaAnoAnterior]): ContribuicaoLoteRow | null => {
         const empresa = mockEmpresas.find((item) => item.id === empresaId);
         return empresa ? {
           empresaId,
@@ -2022,10 +2129,14 @@ const Financeiro = () => {
   };
 
   const handleLimparEtapa2 = () => {
+    const anoNumero = Number(mensalidadeAnoReferencia);
+    const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
+      ? getTrimestre(anoNumero, mensalidadeTrimestreNumero)
+      : null;
     setBoletoForm({
       ...boletoForm,
-      competenciaInicial: "",
-      competenciaFinal: "",
+      competenciaInicial: faixa?.inicioIso ?? "",
+      competenciaFinal: faixa?.fimIso ?? "",
       dataVencimento: "",
       faixaId: "",
       unificarCompetencias: "Não",
@@ -2111,14 +2222,15 @@ const Financeiro = () => {
   const addEmpresaAoLoteContribuicao = () => {
     const empresa = mockEmpresas.find((item) => item.id === empresaContribuicaoParaAdicionar);
     if (!empresa || contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)) return;
-    setContribuicaoLoteRows((rows) => [...rows, {
+    const novaEmpresa: ContribuicaoLoteRow = {
       empresaId: empresa.id,
       empresaNome: empresa.nome,
       folhaAnoAnterior: 0,
       folhaAtual: "",
       repetiuFolhaAnterior: false,
       quantidadeParcelas: 2,
-    }].sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR")));
+    };
+    setContribuicaoLoteRows((rows) => [...rows, novaEmpresa].sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR")));
     setEmpresaContribuicaoParaAdicionar("");
   };
 
@@ -2231,16 +2343,6 @@ const Financeiro = () => {
         );
         if (duplicadas.length > 0) {
           throw new Error(`Já existe boleto de mensalidade para a competência selecionada: ${duplicadas.map((empresa) => empresa.nome).join(", ")}.`);
-        }
-
-        if (isBatchMode && targetEmpresas.some((empresa) => empresa.tipoVinculo === "Associado")) {
-          const trimestreAtual = getCurrentQuarterRange();
-          const emitidasNoTrimestre = targetEmpresas.filter((empresa) =>
-            hasBoletoOverlap(empresa.id, trimestreAtual.start, trimestreAtual.end),
-          );
-          if (emitidasNoTrimestre.length > 0) {
-            throw new Error(`Emissão em lote bloqueada para empresa(s) com boleto emitido no trimestre corrente: ${emitidasNoTrimestre.map((empresa) => empresa.nome).join(", ")}.`);
-          }
         }
 
         const totalOperacoes = boletoForm.unificarCompetencias === "Sim" ? targetEmpresas.length : targetEmpresas.length * competencias.length;
@@ -2512,6 +2614,54 @@ const Financeiro = () => {
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
   };
 
+  const handleSalvarCompetencia = async () => {
+    if (competenciaBoletoIds.length === 0 || !competenciaNovaFaixa) {
+      toast({
+        title: "Competência inválida",
+        description: "Informe um ano entre 2000 e 2100 e selecione um trimestre.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsSavingCompetencia(true);
+      const result = await hasuraRequest<{
+        update_financeiro_boletos: { affected_rows: number };
+      }>({
+        token,
+        query: UPDATE_BOLETOS_COMPETENCIA_HASURA,
+        variables: {
+          ids: competenciaBoletoIds,
+          competenciaInicial: competenciaNovaFaixa.inicioIso,
+          competenciaFinal: competenciaNovaFaixa.fimIso,
+        },
+      });
+
+      const atualizados = result.update_financeiro_boletos?.affected_rows ?? 0;
+      if (atualizados !== competenciaBoletoIds.length) {
+        throw new Error(`${atualizados} de ${competenciaBoletoIds.length} boleto(s) foram encontrados para atualização.`);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      setBoletosSelecionadosIds((ids) => ids.filter((id) => !competenciaBoletoIds.includes(id)));
+      setCompetenciaDialogOpen(false);
+      setCompetenciaBoletoIds([]);
+      toast({
+        title: atualizados === 1 ? "Competência atualizada" : "Competências atualizadas",
+        description: `${atualizados} boleto(s) definido(s) para ${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno}.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Falha ao alterar competência",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingCompetencia(false);
+    }
+  };
+
   const appendObservacaoEmpresa = async (empresaNome: string, comentario: string) => {
     const empresa = data?.empresas.find((item) => item.razao_social === empresaNome);
     if (!empresa || !comentario.trim()) return;
@@ -2618,7 +2768,15 @@ const Financeiro = () => {
                           {filteredBoletos.length} boleto(s) encontrado(s)
                         </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          disabled={boletosSelecionadosIds.length === 0}
+                          onClick={() => openCompetenciaDialog(boletosSelecionadosIds)}
+                        >
+                          <CalendarIcon className="h-4 w-4 mr-2" />
+                          Alterar competências{boletosSelecionadosIds.length > 0 ? ` (${boletosSelecionadosIds.length})` : ""}
+                        </Button>
                         <Button 
                           onClick={() => setWizardOpen(true)}
                           className="bg-[#00A86B] hover:bg-[#00A86B]/90"
@@ -2641,8 +2799,21 @@ const Financeiro = () => {
                       <Table>
                         <TableHeader>
                           <TableRow>
+                            <TableHead className="w-10">
+                              <Checkbox
+                                aria-label="Selecionar mensalidades desta página"
+                                checked={todosBoletosMensalidadePaginaSelecionados
+                                  ? true
+                                  : algunsBoletosMensalidadePaginaSelecionados
+                                    ? "indeterminate"
+                                    : false}
+                                disabled={boletosMensalidadePagina.length === 0}
+                                onCheckedChange={(checked) => toggleBoletosMensalidadePagina(checked === true)}
+                              />
+                            </TableHead>
                             <TableHead>Empresa</TableHead>
                             <TableHead>Tipo</TableHead>
+                            <TableHead>Competência</TableHead>
                             <TableHead>Valor</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
@@ -2654,7 +2825,7 @@ const Financeiro = () => {
                         <TableBody>
                           {filteredBoletos.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                                 Nenhum boleto encontrado com os filtros aplicados.
                               </TableCell>
                             </TableRow>
@@ -2673,6 +2844,14 @@ const Financeiro = () => {
 
                               return (
                                 <TableRow key={boleto.id}>
+                                  <TableCell>
+                                    <Checkbox
+                                      aria-label={`Selecionar boleto de ${boleto.empresa}`}
+                                      checked={boletosSelecionadosIds.includes(boleto.id)}
+                                      disabled={!isBoletoMensalidade(boleto)}
+                                      onCheckedChange={(checked) => toggleBoletoSelecionado(boleto.id, checked === true)}
+                                    />
+                                  </TableCell>
                                   <TableCell className="font-medium">
                                     <div className="space-y-0.5">
                                       <p>{boleto.empresa}</p>
@@ -2683,6 +2862,11 @@ const Financeiro = () => {
                                   </TableCell>
                                   <TableCell>
                                     <span className="text-sm">{boleto.tipo}</span>
+                                  </TableCell>
+                                  <TableCell>
+                                    <span className="whitespace-nowrap text-sm">
+                                      {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                    </span>
                                   </TableCell>
                                   <TableCell>
                                     R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -2779,6 +2963,9 @@ const Financeiro = () => {
                                         setNewDueDate(boleto.vencimento);
                                         setDueDateDialogOpen(true);
                                       }}
+                                      onChangeCompetencia={isBoletoMensalidade(boleto)
+                                        ? () => openCompetenciaDialog([boleto.id])
+                                        : undefined}
                                       onDescription={() => {
                                         setSelectedBoletoForDescription(boleto as BoletoView);
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
@@ -2835,7 +3022,7 @@ const Financeiro = () => {
                       );
                       const tipoOriginal = original.tipo === "Contribuição Assistencial"
                         ? "contribuicao"
-                        : original.tipo === "Boleto avulso" || original.tipo === "Avulso"
+                        : original.tipo === "Boleto avulso"
                           ? "avulso"
                           : "mensalidade";
                       const payload: BoletoForm = {
@@ -2857,6 +3044,10 @@ const Financeiro = () => {
                         valorCalculado: original.valor,
                         valorOverride: novoValor,
                         pesquisaContribuicaoFeita: true,
+                        baseCalculoAgosto: original.base ? String(original.base) : "",
+                        quantidadeParcelasContribuicao: original.parcelas === 1 ? 1 : 2,
+                        vencimentoParcela1: format(novaData, "yyyy-MM-dd"),
+                        vencimentoParcela2: "",
                         valorAvulso: novoValor ? String(novoValor) : String(original.valor),
                         motivoCobranca: original.descricao ?? "",
                       };
@@ -2981,6 +3172,104 @@ const Financeiro = () => {
                         }}
                       >
                         {isUpdatingDueDate ? "Salvando..." : "Salvar"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog
+                  open={competenciaDialogOpen}
+                  onOpenChange={(open) => {
+                    if (isSavingCompetencia) return;
+                    setCompetenciaDialogOpen(open);
+                    if (!open) setCompetenciaBoletoIds([]);
+                  }}
+                >
+                  <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>
+                        {boletosCompetenciaEmEdicao.length === 1 ? "Alterar competência do boleto" : "Alterar competências em lote"}
+                      </DialogTitle>
+                      <DialogDescription>
+                        Selecione o trimestre fixo que será gravado nos {boletosCompetenciaEmEdicao.length} boleto(s) de mensalidade.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    <div role="note" className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                      <p className="font-semibold">Somente a competência será alterada.</p>
+                      <p className="mt-1">
+                        Este modal muda apenas os campos “competência inicial” e “competência final” no sistema. Valor, vencimento, status, descrição e o boleto já emitido na EFI permanecem iguais.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Boletos selecionados e competência atual</Label>
+                      <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border p-3">
+                        {boletosCompetenciaEmEdicao.map((boleto) => (
+                          <div key={boleto.id} className="flex flex-col justify-between gap-1 text-sm sm:flex-row sm:items-center">
+                            <span className="font-medium">{boleto.empresa}</span>
+                            <span className="text-muted-foreground">
+                              {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Competência não informada"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaAno">Ano de referência*</Label>
+                        <Input
+                          id="competenciaAno"
+                          type="number"
+                          min={2000}
+                          max={2100}
+                          value={competenciaAno}
+                          onChange={(event) => setCompetenciaAno(event.target.value)}
+                          disabled={isSavingCompetencia}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaTrimestre">Trimestre de referência*</Label>
+                        <Select
+                          value={String(competenciaTrimestre)}
+                          onValueChange={(value) => setCompetenciaTrimestre(Number(value) as TrimestreNumero)}
+                          disabled={isSavingCompetencia}
+                        >
+                          <SelectTrigger id="competenciaTrimestre"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                            <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                            <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                            <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                      <p className="font-medium">Nova competência</p>
+                      <p className="text-muted-foreground">
+                        {competenciaNovaFaixa
+                          ? `${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno} (${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)}).`
+                          : "Informe um ano válido entre 2000 e 2100."}
+                      </p>
+                      {boletosCompetenciaEmEdicao.length > 1 && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          O mesmo intervalo será aplicado a todos os boletos selecionados.
+                        </p>
+                      )}
+                    </div>
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setCompetenciaDialogOpen(false)} disabled={isSavingCompetencia}>
+                        Cancelar
+                      </Button>
+                      <Button
+                        onClick={() => void handleSalvarCompetencia()}
+                        disabled={isSavingCompetencia || !competenciaNovaFaixa || boletosCompetenciaEmEdicao.length === 0}
+                      >
+                        {isSavingCompetencia ? "Salvando..." : boletosCompetenciaEmEdicao.length === 1 ? "Salvar competência" : `Salvar em ${boletosCompetenciaEmEdicao.length} boletos`}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -3508,6 +3797,10 @@ const Financeiro = () => {
                         onValueChange={(value) => {
                           const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
                           const anoAtual = String(new Date().getFullYear());
+                          const anoMensalidadeNumero = Number(mensalidadeAnoReferencia);
+                          const trimestreMensalidade = Number.isInteger(anoMensalidadeNumero) && anoMensalidadeNumero >= 2000 && anoMensalidadeNumero <= 2100
+                            ? getTrimestre(anoMensalidadeNumero, mensalidadeTrimestreNumero)
+                            : null;
                           if (tipoSelecionado === "contribuicao") {
                             setIsBatchMode(false);
                             setBatchEmpresaIds([]);
@@ -3516,6 +3809,11 @@ const Financeiro = () => {
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
+                            competenciaInicial: tipoSelecionado === "mensalidade" ? trimestreMensalidade?.inicioIso ?? "" : boletoForm.competenciaInicial,
+                            competenciaFinal: tipoSelecionado === "mensalidade" ? trimestreMensalidade?.fimIso ?? "" : boletoForm.competenciaFinal,
+                            mensagemPersonalizada: tipoSelecionado === "mensalidade" && trimestreMensalidade
+                              ? `Boleto referente à competência ${getCompetenciaRangeLabel(trimestreMensalidade.inicioIso, trimestreMensalidade.fimIso)}`
+                              : boletoForm.mensagemPersonalizada,
                             anoContribuicao: tipoSelecionado === "contribuicao" ? anoAtual : boletoForm.anoContribuicao,
                             periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : boletoForm.periodicidade,
                             parcelas: tipoSelecionado === "contribuicao" ? "2" : boletoForm.parcelas,
@@ -3759,32 +4057,44 @@ const Financeiro = () => {
                         <CardTitle className="text-lg">Detalhes da mensalidade</CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div className="space-y-2">
-                            <Label>Competência Inicial*</Label>
-                            <MonthPickerField
-                              value={boletoForm.competenciaInicial}
-                              placeholder="Selecione a competência inicial"
-                              onChange={(value) => setBoletoForm((prev) => ({
-                                ...prev,
-                                competenciaInicial: value,
-                                competenciaFinal: prev.competenciaFinal || value,
-                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(value, prev.competenciaFinal || value)}`,
-                              }))}
+                            <Label htmlFor="mensalidadeAnoReferencia">Ano de referência*</Label>
+                            <Input
+                              id="mensalidadeAnoReferencia"
+                              type="number"
+                              min={2000}
+                              max={2100}
+                              value={mensalidadeAnoReferencia}
+                              onChange={(event) => aplicarTrimestreMensalidade(event.target.value, mensalidadeTrimestreNumero)}
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label>Competência Final*</Label>
-                            <MonthPickerField
-                              value={boletoForm.competenciaFinal}
-                              placeholder="Selecione a competência final"
-                              onChange={(value) => setBoletoForm((prev) => ({
-                                ...prev,
-                                competenciaFinal: value,
-                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(prev.competenciaInicial, value)}`,
-                              }))}
-                            />
+                            <Label htmlFor="mensalidadeTrimestreReferencia">Trimestre de referência*</Label>
+                            <Select
+                              value={String(mensalidadeTrimestreNumero)}
+                              onValueChange={(value) => aplicarTrimestreMensalidade(mensalidadeAnoReferencia, Number(value) as TrimestreNumero)}
+                            >
+                              <SelectTrigger id="mensalidadeTrimestreReferencia"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                                <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                                <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                                <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
+                        </div>
+                        <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                          <p className="font-medium">Competência fixa do trimestre</p>
+                          <p className="text-muted-foreground">
+                            {boletoForm.competenciaInicial && boletoForm.competenciaFinal
+                              ? `${getTrimestreLabel(mensalidadeTrimestreNumero)} de ${mensalidadeAnoReferencia} (${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}).`
+                              : "Informe um ano válido entre 2000 e 2100."}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Se unificar, será criado um boleto para todo o trimestre. Se não unificar, será criado um boleto para cada mês desse trimestre.
+                          </p>
                         </div>
 
                         {((!isBatchMode && mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.tipoVinculo !== "Associado") || (isBatchMode && batchTipoVinculo !== "Associado")) && (
