@@ -920,13 +920,17 @@ const Financeiro = () => {
       .filter((empresa) => {
         if (!empresa.associada || empresa.tipoVinculo !== "Associado" || !empresa.dataAssociacao) return false;
         const dataAssociacao = parseISO(empresa.dataAssociacao);
-        return isValid(dataAssociacao) && !isBefore(dataAssociacao, janelaInicio) && isBefore(dataAssociacao, janelaFimExclusivo);
+        return isValid(dataAssociacao) && isBefore(dataAssociacao, janelaFimExclusivo);
       })
       .map((empresa) => {
         const dataAssociacao = parseISO(empresa.dataAssociacao);
-        let primeiraCompetencia = startOfMonth(dataAssociacao);
-        if (dataAssociacao.getDate() >= 28) primeiraCompetencia = startOfMonth(addMonths(primeiraCompetencia, 1));
-        if (isBefore(primeiraCompetencia, trimestre.inicio)) primeiraCompetencia = trimestre.inicio;
+        const entradaRecente = !isBefore(dataAssociacao, janelaInicio);
+        let primeiraCompetencia = trimestre.inicio;
+        if (entradaRecente) {
+          primeiraCompetencia = startOfMonth(dataAssociacao);
+          if (dataAssociacao.getDate() >= 28) primeiraCompetencia = startOfMonth(addMonths(primeiraCompetencia, 1));
+          if (isBefore(primeiraCompetencia, trimestre.inicio)) primeiraCompetencia = trimestre.inicio;
+        }
 
         const competenciasEmitidas = trimestre.meses
           .filter((mes) => boletos.some((boleto) =>
@@ -3240,7 +3244,7 @@ const Financeiro = () => {
                 <DialogHeader>
                   <DialogTitle>Gerar mensalidades do trimestre automaticamente</DialogTitle>
                   <DialogDescription>
-                    O sistema analisa todas as faixas, identifica as competências já emitidas e gera somente o período restante de cada nova associada.
+                    O sistema analisa todas as associadas de todas as faixas. Para novas associadas, aplica a cobrança proporcional ao mês de entrada.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -3282,7 +3286,7 @@ const Financeiro = () => {
                 </div>
 
                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-                  São analisadas as entradas entre o mês anterior ao trimestre e o último mês do trimestre. Entradas do dia 28 em diante passam a valer no mês seguinte. Boletos pagos, aguardando ou inadimplentes contam como já emitidos; cancelados não contam.
+                  Associadas antigas recebem a cobrança normal do trimestre. Entradas entre o mês anterior e o último mês do trimestre seguem a regra proporcional; do dia 28 em diante, passam a valer no mês seguinte. Competências já emitidas não são cobradas novamente e boletos cancelados não contam.
                 </div>
 
                 {empresasAssociadasSemData.length > 0 && (
@@ -3328,7 +3332,7 @@ const Financeiro = () => {
                       {planoTrimestreAutomatico.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                            Nenhuma associada encontrada na janela de quatro meses desse trimestre.
+                            Nenhuma associada elegível encontrada para esse trimestre.
                           </TableCell>
                         </TableRow>
                       ) : planoTrimestreAutomatico.map((row) => (
