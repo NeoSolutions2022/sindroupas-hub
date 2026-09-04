@@ -390,6 +390,7 @@ type ContribuicaoLoteRow = {
 };
 
 type TrimestreNumero = 1 | 2 | 3 | 4;
+type MesNoTrimestre = 0 | 1 | 2;
 
 type TrimestreAutomaticoRow = {
   empresaId: string;
@@ -498,6 +499,14 @@ const getTrimestreLabel = (trimestre: TrimestreNumero) => ({
   3: "3º trimestre — julho a setembro",
   4: "4º trimestre — outubro a dezembro",
 })[trimestre];
+
+const getMesAnoLabel = (date: Date) => {
+  const meses = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+  ];
+  return `${meses[date.getMonth()]} de ${date.getFullYear()}`;
+};
 
 const isBoletoMensalidade = (boleto: Pick<BoletoRegistro, "tipo">) =>
   boleto.tipo === "Mensalidade (por Faixa)";
@@ -684,6 +693,8 @@ const Financeiro = () => {
   const [competenciaTrimestre, setCompetenciaTrimestre] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
   );
+  const [competenciaMesInicial, setCompetenciaMesInicial] = useState<MesNoTrimestre>(0);
+  const [competenciaMesFinal, setCompetenciaMesFinal] = useState<MesNoTrimestre>(2);
   const [isSavingCompetencia, setIsSavingCompetencia] = useState(false);
 
   const { data, isLoading, error } = useQuery({
@@ -1499,8 +1510,14 @@ const Financeiro = () => {
     competenciaBoletoIds.includes(boleto.id),
   );
   const competenciaAnoNumero = Number(competenciaAno);
-  const competenciaNovaFaixa = Number.isInteger(competenciaAnoNumero) && competenciaAnoNumero >= 2000 && competenciaAnoNumero <= 2100
+  const competenciaTrimestreBase = Number.isInteger(competenciaAnoNumero) && competenciaAnoNumero >= 2000 && competenciaAnoNumero <= 2100
     ? getTrimestre(competenciaAnoNumero, competenciaTrimestre)
+    : null;
+  const competenciaNovaFaixa = competenciaTrimestreBase && competenciaMesInicial <= competenciaMesFinal
+    ? {
+        inicioIso: format(competenciaTrimestreBase.meses[competenciaMesInicial], "yyyy-MM-dd"),
+        fimIso: format(competenciaTrimestreBase.meses[competenciaMesFinal], "yyyy-MM-dd"),
+      }
     : null;
 
   useEffect(() => {
@@ -1532,6 +1549,30 @@ const Financeiro = () => {
     });
   };
 
+  const configurarPeriodoCompetencia = (boleto?: BoletoView) => {
+    const inicio = boleto?.competenciaInicial ? parseISO(boleto.competenciaInicial) : null;
+    const fim = boleto?.competenciaFinal ? parseISO(boleto.competenciaFinal) : null;
+    if (inicio && isValid(inicio)) {
+      const trimestre = getTrimestreNumeroDaCompetencia(boleto?.competenciaInicial) ?? 1;
+      const indiceInicial = (inicio.getMonth() % 3) as MesNoTrimestre;
+      const fimNoMesmoTrimestre = fim && isValid(fim) &&
+        fim.getFullYear() === inicio.getFullYear() &&
+        getTrimestreNumeroDaCompetencia(boleto?.competenciaFinal) === trimestre;
+      const indiceFinal = fimNoMesmoTrimestre ? (fim.getMonth() % 3) as MesNoTrimestre : indiceInicial;
+      setCompetenciaAno(String(inicio.getFullYear()));
+      setCompetenciaTrimestre(trimestre);
+      setCompetenciaMesInicial(indiceInicial);
+      setCompetenciaMesFinal(indiceFinal);
+      return;
+    }
+
+    const agora = new Date();
+    setCompetenciaAno(String(agora.getFullYear()));
+    setCompetenciaTrimestre((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+    setCompetenciaMesInicial(0);
+    setCompetenciaMesFinal(2);
+  };
+
   const openCompetenciaDialog = (ids: string[] = []) => {
     if (boletosMensalidadeFiltrados.length === 0) {
       toast({
@@ -1541,23 +1582,16 @@ const Financeiro = () => {
       return;
     }
     const targets = boletos.filter((boleto) => ids.includes(boleto.id) && isBoletoMensalidade(boleto));
-
-    const primeiraCompetencia = targets[0]?.competenciaInicial;
-    const competenciaDate = primeiraCompetencia ? parseISO(primeiraCompetencia) : null;
-    if (competenciaDate && isValid(competenciaDate)) {
-      setCompetenciaAno(String(competenciaDate.getFullYear()));
-      setCompetenciaTrimestre(getTrimestreNumeroDaCompetencia(primeiraCompetencia) ?? 1);
-    } else {
-      const agora = new Date();
-      setCompetenciaAno(String(agora.getFullYear()));
-      setCompetenciaTrimestre((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
-    }
+    configurarPeriodoCompetencia(targets[0]);
     setCompetenciaBoletoIds(targets.map((boleto) => boleto.id));
     setCompetenciaSearch("");
     setCompetenciaDialogOpen(true);
   };
 
   const toggleBoletoCompetenciaSelecionado = (boletoId: string, checked: boolean) => {
+    if (checked && competenciaBoletoIds.length === 0) {
+      configurarPeriodoCompetencia(boletos.find((boleto) => boleto.id === boletoId));
+    }
     setCompetenciaBoletoIds((ids) => checked
       ? Array.from(new Set([...ids, boletoId]))
       : ids.filter((id) => id !== boletoId));
@@ -1565,6 +1599,9 @@ const Financeiro = () => {
 
   const toggleBoletosCompetenciaVisiveis = (checked: boolean) => {
     const idsVisiveis = boletosCompetenciaDisponiveis.map((boleto) => boleto.id);
+    if (checked && competenciaBoletoIds.length === 0) {
+      configurarPeriodoCompetencia(boletosCompetenciaDisponiveis[0]);
+    }
     setCompetenciaBoletoIds((ids) => checked
       ? Array.from(new Set([...ids, ...idsVisiveis]))
       : ids.filter((id) => !idsVisiveis.includes(id)));
@@ -3317,13 +3354,64 @@ const Financeiro = () => {
                       </div>
                     </div>
 
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaMesInicial">Competência inicial*</Label>
+                        <Select
+                          value={String(competenciaMesInicial)}
+                          onValueChange={(value) => {
+                            const indice = Number(value) as MesNoTrimestre;
+                            setCompetenciaMesInicial(indice);
+                            if (indice > competenciaMesFinal) setCompetenciaMesFinal(indice);
+                          }}
+                          disabled={isSavingCompetencia || !competenciaTrimestreBase}
+                        >
+                          <SelectTrigger id="competenciaMesInicial"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {competenciaTrimestreBase?.meses.map((mes, indice) => (
+                              <SelectItem key={format(mes, "yyyy-MM-dd")} value={String(indice)}>
+                                {getMesAnoLabel(mes)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaMesFinal">Competência final*</Label>
+                        <Select
+                          value={String(competenciaMesFinal)}
+                          onValueChange={(value) => {
+                            const indice = Number(value) as MesNoTrimestre;
+                            setCompetenciaMesFinal(indice);
+                            if (indice < competenciaMesInicial) setCompetenciaMesInicial(indice);
+                          }}
+                          disabled={isSavingCompetencia || !competenciaTrimestreBase}
+                        >
+                          <SelectTrigger id="competenciaMesFinal"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {competenciaTrimestreBase?.meses.map((mes, indice) => (
+                              <SelectItem key={format(mes, "yyyy-MM-dd")} value={String(indice)}>
+                                {getMesAnoLabel(mes)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Para um boleto de uma única mensalidade, escolha o mesmo mês nos dois campos. Use meses diferentes somente quando o boleto reunir mais de uma mensalidade.
+                    </p>
+
                     <div className="rounded-md border bg-muted/20 p-3 text-sm">
                       <p className="font-medium">Nova competência</p>
                       <p className="text-muted-foreground">
                         {competenciaNovaFaixa
-                          ? `${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno} (${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)}).`
+                          ? `${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)} — dentro do ${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno}.`
                           : "Informe um ano válido entre 2000 e 2100."}
                       </p>
+                      {competenciaNovaFaixa && competenciaMesInicial === competenciaMesFinal && (
+                        <p className="mt-1 text-xs font-medium text-primary">Este boleto ficará referente a apenas um mês.</p>
+                      )}
                       {boletosCompetenciaEmEdicao.length > 1 && (
                         <p className="mt-1 text-xs text-muted-foreground">
                           O mesmo intervalo será aplicado a todos os boletos selecionados.
@@ -3369,7 +3457,11 @@ const Financeiro = () => {
 
                     <div className="space-y-4 text-sm">
                       <div className="rounded-md border bg-muted/20 p-3">
-                        <p><strong>Nova competência:</strong> {competenciaNovaFaixa ? `${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno} (${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)})` : "Inválida"}</p>
+                        <p><strong>Nova competência:</strong> {competenciaNovaFaixa ? getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso) : "Inválida"}</p>
+                        <p className="mt-1"><strong>Trimestre:</strong> {getTrimestreLabel(competenciaTrimestre)} de {competenciaAno}.</p>
+                        {competenciaNovaFaixa && competenciaMesInicial === competenciaMesFinal && (
+                          <p className="mt-1 font-medium text-primary">Cada boleto selecionado ficará referente a somente um mês.</p>
+                        )}
                         <p className="mt-2"><strong>Campos alterados:</strong> competência inicial e competência final.</p>
                         <p className="mt-1"><strong>Não serão alterados:</strong> valor, vencimento, status, descrição, empresa, PDF e cobrança na EFI.</p>
                       </div>
