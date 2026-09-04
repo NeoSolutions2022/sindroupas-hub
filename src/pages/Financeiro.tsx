@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -62,12 +62,14 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
 import { normalizeBrazilianWhatsappNumber, sendEvolutionTextRequest } from "@/lib/api/evolution";
 
 type EmpresaLookupRow = {
   id: string;
   razao_social: string;
   nome_fantasia?: string | null;
+  data_associacao?: string | null;
   faixa_id?: string | null;
   associada?: boolean | null;
   tipo_vinculo?: "Associado" | "Mantenedor" | "Parceiro" | "Fornecedor" | null;
@@ -121,6 +123,7 @@ type ContribuicaoRow = {
   valor?: number | string | null;
   vencimento?: string | null;
   situacao?: string | null;
+  folha_repetida_ano_anterior?: boolean | null;
   empresa?: { id: string; razao_social: string; nome_fantasia?: string | null } | null;
 };
 
@@ -175,6 +178,7 @@ const FINANCEIRO_QUERY = `
       valor
       vencimento
       situacao
+      folha_repetida_ano_anterior
       empresa {
         id
         razao_social
@@ -184,6 +188,7 @@ const FINANCEIRO_QUERY = `
       id
       razao_social
       nome_fantasia
+      data_associacao
       faixa_id
       associada
       tipo_vinculo
@@ -279,6 +284,20 @@ const UPDATE_BOLETO_DESCRICAO_HASURA = `
   }
 `;
 
+const UPDATE_BOLETOS_COMPETENCIA_HASURA = `
+  mutation UpdateBoletosCompetencia($ids: [uuid!]!, $competenciaInicial: date!, $competenciaFinal: date!) {
+    update_financeiro_boletos(
+      where: { id: { _in: $ids } }
+      _set: {
+        competencia_inicial: $competenciaInicial
+        competencia_final: $competenciaFinal
+      }
+    ) {
+      affected_rows
+    }
+  }
+`;
+
 const UPDATE_BOLETO_ENVIO_EMAIL_HASURA = `
   mutation UpdateBoletoEnvioEmail($id: uuid!, $enviadoEm: timestamptz!, $destinatario: String!) {
     update_financeiro_boletos_by_pk(
@@ -348,12 +367,65 @@ interface BoletoForm {
   descontos: string;
   valorCalculado: number;
   pesquisaContribuicaoFeita: boolean;
+  baseCalculoAgosto: string;
+  quantidadeParcelasContribuicao: 1 | 2;
+  vencimentoParcela1: string;
+  vencimentoParcela2: string;
+  contribuicaoParcelaNumero?: 1 | 2;
+  folhaRepetidaAnoAnterior?: boolean;
   valorAvulso: string;
   motivoCobranca: string;
   valorOverride?: number;
   descontoValorOverride?: number;
   emailOverride?: string;
 }
+
+type ContribuicaoLoteRow = {
+  empresaId: string;
+  empresaNome: string;
+  folhaAnoAnterior: number;
+  folhaAtual: string;
+  repetiuFolhaAnterior: boolean;
+  quantidadeParcelas: 1 | 2;
+};
+
+type TrimestreNumero = 1 | 2 | 3 | 4;
+type MesNoTrimestre = 0 | 1 | 2;
+
+type TrimestreAutomaticoRow = {
+  empresaId: string;
+  empresaNome: string;
+  dataAssociacao: string;
+  faixaId: string;
+  competenciasEmitidas: string[];
+  competenciasPendentes: string[];
+  valorMensal: number;
+  descontoMensal: number;
+  valorTotal: number;
+  impedimentos: string[];
+};
+
+type TrimestreAutomaticoEmissionProgress = {
+  status: "idle" | "running" | "finished";
+  done: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  currentEmpresa: string;
+  currentCompetencia: string;
+  errors: { empresa: string; competencia: string; mensagem: string }[];
+};
+
+const INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS: TrimestreAutomaticoEmissionProgress = {
+  status: "idle",
+  done: 0,
+  total: 0,
+  succeeded: 0,
+  failed: 0,
+  currentEmpresa: "",
+  currentCompetencia: "",
+  errors: [],
+};
 
 type ContactCandidate = {
   nome?: string | null;
@@ -373,6 +445,9 @@ const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | 
 
 const formatCurrencyBRL = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+
+const getDescricaoContribuicao = (ano: string, numero: number, total: 1 | 2) =>
+  `Referente a contribuição assistencial de ${ano} (${total === 1 ? "boleto único" : `${numero}ª parcela de 2`})`;
 
 const periodicidadeToNumero = (periodicidade?: string) => {
   const normalized = periodicidade?.trim().toLowerCase();
@@ -421,39 +496,53 @@ const rangesOverlap = (startA?: string, endA?: string, startB?: string, endB?: s
   return !isAfter(aStart, bEnd) && !isAfter(bStart, aEnd);
 };
 
-const getCurrentQuarterRange = () => {
-  const now = new Date();
-  const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
-  const start = startOfMonth(new Date(now.getFullYear(), quarterStartMonth, 1));
-  const end = startOfMonth(addMonths(start, 2));
-  return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
+const getTrimestre = (ano: number, trimestre: TrimestreNumero) => {
+  const inicio = startOfMonth(new Date(ano, (trimestre - 1) * 3, 1));
+  const meses = [inicio, addMonths(inicio, 1), addMonths(inicio, 2)];
+  return {
+    inicio,
+    fim: meses[2],
+    meses,
+    inicioIso: format(inicio, "yyyy-MM-dd"),
+    fimIso: format(meses[2], "yyyy-MM-dd"),
+  };
 };
 
-const MonthPickerField = ({
-  value,
-  onChange,
-  placeholder = "Selecione a competência",
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) => (
-  <Input
-    type="month"
-    aria-label={placeholder}
-    value={value ? format(parseISO(value), "yyyy-MM") : ""}
-    onChange={(event) => onChange(event.target.value ? `${event.target.value}-01` : "")}
-  />
-);
+const getTrimestreNumeroDaCompetencia = (competencia?: string): TrimestreNumero | null => {
+  if (!competencia) return null;
+  const parsed = parseISO(competencia);
+  if (!isValid(parsed)) return null;
+  return (Math.floor(parsed.getMonth() / 3) + 1) as TrimestreNumero;
+};
+
+const getTrimestreLabel = (trimestre: TrimestreNumero) => ({
+  1: "1º trimestre — janeiro a março",
+  2: "2º trimestre — abril a junho",
+  3: "3º trimestre — julho a setembro",
+  4: "4º trimestre — outubro a dezembro",
+})[trimestre];
+
+const getMesAnoLabel = (date: Date) => {
+  const meses = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+  ];
+  return `${meses[date.getMonth()]} de ${date.getFullYear()}`;
+};
+
+const isBoletoMensalidade = (boleto: Pick<BoletoRegistro, "tipo">) =>
+  boleto.tipo === "Mensalidade (por Faixa)";
 
 const DatePickerField = ({
   value,
   onChange,
   placeholder = "Selecione uma data",
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) => {
   const parsedDate = value ? parseISO(value) : undefined;
   const selectedDate = parsedDate && isValid(parsedDate) ? parsedDate : undefined;
@@ -511,11 +600,12 @@ const DatePickerField = ({
         onBlur={handleInputBlur}
         inputMode="numeric"
         placeholder={placeholder}
+        disabled={disabled}
         className={cn(!typedValue && "text-muted-foreground")}
       />
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0">
+          <Button variant="outline" size="icon" aria-label="Selecionar data no calendário" className="shrink-0" disabled={disabled}>
             <CalendarIcon className="h-4 w-4" />
           </Button>
         </PopoverTrigger>
@@ -608,6 +698,33 @@ const Financeiro = () => {
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
   const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
   const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
+  const [trimestreAutomaticoOpen, setTrimestreAutomaticoOpen] = useState(false);
+  const [trimestreAutomaticoConfirmOpen, setTrimestreAutomaticoConfirmOpen] = useState(false);
+  const [trimestreAutomaticoNumero, setTrimestreAutomaticoNumero] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
+  const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
+  const [trimestreAutomaticoUnificarCompetencias, setTrimestreAutomaticoUnificarCompetencias] = useState<"Sim" | "Não">("Sim");
+  const [trimestreAutomaticoProgress, setTrimestreAutomaticoProgress] = useState<TrimestreAutomaticoEmissionProgress>(
+    INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS,
+  );
+  const trimestreAutomaticoEmissionLockRef = useRef(false);
+  const [mensalidadeAnoReferencia, setMensalidadeAnoReferencia] = useState(() => String(new Date().getFullYear()));
+  const [mensalidadeTrimestreNumero, setMensalidadeTrimestreNumero] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [competenciaDialogOpen, setCompetenciaDialogOpen] = useState(false);
+  const [competenciaConfirmOpen, setCompetenciaConfirmOpen] = useState(false);
+  const [competenciaBoletoIds, setCompetenciaBoletoIds] = useState<string[]>([]);
+  const [competenciaSearch, setCompetenciaSearch] = useState("");
+  const [competenciaAno, setCompetenciaAno] = useState(() => String(new Date().getFullYear()));
+  const [competenciaTrimestre, setCompetenciaTrimestre] = useState<TrimestreNumero>(
+    () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [competenciaMesInicial, setCompetenciaMesInicial] = useState<MesNoTrimestre>(0);
+  const [competenciaMesFinal, setCompetenciaMesFinal] = useState<MesNoTrimestre>(2);
+  const [isSavingCompetencia, setIsSavingCompetencia] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["financeiro-page"],
@@ -691,6 +808,8 @@ const Financeiro = () => {
           nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
           razaoSocial: empresa.razao_social,
           nomeFantasia: empresa.nome_fantasia ?? "",
+          associada: Boolean(empresa.associada),
+          dataAssociacao: empresa.data_associacao ?? "",
           faixaId: empresa.faixa_id ?? "",
           tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : "Fornecedor"),
           categoriaMantenedor: empresa.categoria_mantenedor ?? "",
@@ -726,7 +845,7 @@ const Financeiro = () => {
       }
 
       const valorBoleto = payload.tipo === "contribuicao"
-        ? payload.valorCalculado
+        ? payload.valorOverride ?? payload.valorCalculado
         : payload.tipo === "avulso"
           ? parseCurrencyInput(payload.valorAvulso)
           : payload.valorOverride ?? previaBoleto ?? (
@@ -739,14 +858,14 @@ const Financeiro = () => {
       }
 
       const descricaoBoleto = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        ? getDescricaoContribuicao(payload.anoContribuicao, payload.contribuicaoParcelaNumero ?? 1, payload.quantidadeParcelasContribuicao)
         : payload.tipo === "avulso"
           ? payload.motivoCobranca.trim()
           : empresa.tipoVinculo === "Associado"
             ? "Mensalidade de associado por faixa"
             : `Mensalidade de ${empresa.tipoVinculo.toLowerCase()}`;
       const itemName = payload.tipo === "contribuicao"
-        ? `Contribuição Assistencial ${payload.anoContribuicao}`
+        ? `Contribuição Assistencial ${payload.anoContribuicao} - ${payload.quantidadeParcelasContribuicao === 1 ? "boleto único" : `${payload.contribuicaoParcelaNumero}ª parcela de 2`}`
         : payload.tipo === "avulso"
           ? "Boleto avulso"
           : "Mensalidade";
@@ -756,6 +875,12 @@ const Financeiro = () => {
       const percentualValor = parseFloat(payload.percentual.replace(",", ".") || "0");
       const periodicidadeNumero = periodicidadeToNumero(payload.periodicidade);
       const parcelasNumero = payload.parcelas ? Number(payload.parcelas) : undefined;
+      const competenciaCustomId = payload.competenciaInicial
+        ? payload.competenciaFinal && payload.competenciaFinal !== payload.competenciaInicial
+          ? `${payload.competenciaInicial}-${payload.competenciaFinal}`
+          : payload.competenciaInicial
+        : undefined;
+      const referenciaCustomId = payload.anoContribuicao || competenciaCustomId || payload.dataVencimento;
 
       const boletoPayload: CreateBoletoPayload = {
         empresa_id: payload.empresaId,
@@ -773,7 +898,7 @@ const Financeiro = () => {
         base: baseValor || undefined,
         item_name: itemName,
         item_amount: 1,
-        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${payload.dataVencimento}`,
+        custom_id: `${payload.tipo || "boleto"}-${payload.empresaId}-${referenciaCustomId}${payload.contribuicaoParcelaNumero ? `-parcela-${payload.contribuicaoParcelaNumero}` : ""}`,
         message: payload.mensagemPersonalizada || undefined,
         customer: {
           email: emailBoleto,
@@ -800,12 +925,13 @@ const Financeiro = () => {
               ano: payload.anoContribuicao || null,
               periodicidade: payload.periodicidade || null,
               parcelas: payload.parcelas ? Number(payload.parcelas) : null,
-              base: payload.baseCalculo ? Number(payload.baseCalculo) : null,
-              percentual: payload.percentual ? Number(payload.percentual) : null,
-              descontos: payload.descontos ? Number(payload.descontos) : null,
-              valor: payload.valorCalculado || null,
+              base: baseValor || null,
+              percentual: percentualValor || null,
+              descontos: descontoValor || null,
+              valor: valorBoleto || null,
               vencimento: payload.dataVencimento || null,
               situacao: "Emitida",
+              folha_repetida_ano_anterior: payload.folhaRepetidaAnoAnterior ?? false,
             },
           },
           token,
@@ -848,6 +974,96 @@ const Financeiro = () => {
       valorFinal: Math.max(valorBase - descontoValor, 0),
     };
   };
+
+  const planoTrimestreAutomatico = useMemo<TrimestreAutomaticoRow[]>(() => {
+    const ano = Number(trimestreAutomaticoAno);
+    if (!Number.isInteger(ano) || ano < 2000 || ano > 2100) return [];
+
+    const trimestre = getTrimestre(ano, trimestreAutomaticoNumero);
+    const janelaInicio = startOfMonth(addMonths(trimestre.inicio, -1));
+    const janelaFimExclusivo = startOfMonth(addMonths(trimestre.fim, 1));
+
+    return mockEmpresas
+      .filter((empresa) => {
+        if (!empresa.associada || empresa.tipoVinculo !== "Associado" || !empresa.dataAssociacao) return false;
+        const dataAssociacao = parseISO(empresa.dataAssociacao);
+        return isValid(dataAssociacao) && isBefore(dataAssociacao, janelaFimExclusivo);
+      })
+      .map((empresa) => {
+        const dataAssociacao = parseISO(empresa.dataAssociacao);
+        const entradaRecente = !isBefore(dataAssociacao, janelaInicio);
+        let primeiraCompetencia = trimestre.inicio;
+        if (entradaRecente) {
+          primeiraCompetencia = startOfMonth(dataAssociacao);
+          if (dataAssociacao.getDate() >= 28) primeiraCompetencia = startOfMonth(addMonths(primeiraCompetencia, 1));
+          if (isBefore(primeiraCompetencia, trimestre.inicio)) primeiraCompetencia = trimestre.inicio;
+        }
+
+        const competenciasEmitidas = trimestre.meses
+          .filter((mes) => boletos.some((boleto) =>
+            boleto.empresaId === empresa.id &&
+            boleto.tipo === "Mensalidade (por Faixa)" &&
+            boleto.status !== "Cancelado" &&
+            rangesOverlap(format(mes, "yyyy-MM-dd"), format(mes, "yyyy-MM-dd"), boleto.competenciaInicial, boleto.competenciaFinal),
+          ))
+          .map((mes) => format(mes, "yyyy-MM-dd"));
+
+        const primeiroIndiceElegivel = trimestre.meses.findIndex((mes) => !isBefore(mes, primeiraCompetencia));
+        const ultimoIndiceEmitido = trimestre.meses.reduce((ultimo, mes, index) =>
+          competenciasEmitidas.includes(format(mes, "yyyy-MM-dd")) ? index : ultimo, -1);
+        const primeiroIndicePendente = primeiroIndiceElegivel < 0
+          ? trimestre.meses.length
+          : Math.max(primeiroIndiceElegivel, ultimoIndiceEmitido + 1);
+        const competenciasPendentes = trimestre.meses
+          .slice(primeiroIndicePendente)
+          .map((mes) => format(mes, "yyyy-MM-dd"));
+
+        const faixa = faixas.find((item) => item.id === empresa.faixaId);
+        const descontoPercentual = Math.min(Math.max(Number(empresa.descontoMensalidadePercentual) || 0, 0), 100);
+        const valorBase = faixa?.valor ?? 0;
+        const descontoMensal = valorBase * (descontoPercentual / 100);
+        const valorMensal = Math.max(valorBase - descontoMensal, 0);
+        const impedimentos: string[] = [];
+        if (competenciasPendentes.length > 0) {
+          if (!empresa.faixaId || !faixa) impedimentos.push("faixa não cadastrada");
+          else if (faixa.valor <= 0) impedimentos.push("valor da faixa inválido");
+          if (!empresa.cnpj) impedimentos.push("CNPJ não cadastrado");
+          if (!empresa.contatoPrincipal.email) impedimentos.push("e-mail não cadastrado");
+          if (!empresa.contatoPrincipal.whatsapp) impedimentos.push("WhatsApp não cadastrado");
+        }
+
+        return {
+          empresaId: empresa.id,
+          empresaNome: empresa.nome,
+          dataAssociacao: empresa.dataAssociacao,
+          faixaId: empresa.faixaId,
+          competenciasEmitidas,
+          competenciasPendentes,
+          valorMensal,
+          descontoMensal,
+          valorTotal: valorMensal * competenciasPendentes.length,
+          impedimentos,
+        };
+      })
+      .sort((a, b) => {
+        if (a.competenciasPendentes.length !== b.competenciasPendentes.length) {
+          return b.competenciasPendentes.length - a.competenciasPendentes.length;
+        }
+        return a.empresaNome.localeCompare(b.empresaNome, "pt-BR");
+      });
+  }, [boletos, faixas, mockEmpresas, trimestreAutomaticoAno, trimestreAutomaticoNumero]);
+
+  const empresasAssociadasSemData = useMemo(
+    () => mockEmpresas.filter((empresa) => empresa.associada && empresa.tipoVinculo === "Associado" && !empresa.dataAssociacao),
+    [mockEmpresas],
+  );
+
+  const trimestreAutomaticoPendentes = planoTrimestreAutomatico.filter((row) => row.competenciasPendentes.length > 0);
+  const trimestreAutomaticoImpedidas = trimestreAutomaticoPendentes.filter((row) => row.impedimentos.length > 0);
+  const trimestreAutomaticoValorTotal = trimestreAutomaticoPendentes.reduce((total, row) => total + row.valorTotal, 0);
+  const trimestreAutomaticoQuantidadeBoletos = trimestreAutomaticoUnificarCompetencias === "Sim"
+    ? trimestreAutomaticoPendentes.length
+    : trimestreAutomaticoPendentes.reduce((total, row) => total + row.competenciasPendentes.length, 0);
   const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
@@ -981,6 +1197,10 @@ const Financeiro = () => {
     descontos: "",
     valorCalculado: 0,
     pesquisaContribuicaoFeita: false,
+    baseCalculoAgosto: "",
+    quantidadeParcelasContribuicao: 2,
+    vencimentoParcela1: "",
+    vencimentoParcela2: "",
     valorAvulso: "",
     motivoCobranca: "",
   });
@@ -989,6 +1209,8 @@ const Financeiro = () => {
   const [batchEmpresaIds, setBatchEmpresaIds] = useState<string[]>([]);
   const [batchFaixaId, setBatchFaixaId] = useState("");
   const [batchTipoVinculo, setBatchTipoVinculo] = useState<"Associado" | "Mantenedor" | "Parceiro" | "Fornecedor">("Associado");
+  const [contribuicaoLoteRows, setContribuicaoLoteRows] = useState<ContribuicaoLoteRow[]>([]);
+  const [empresaContribuicaoParaAdicionar, setEmpresaContribuicaoParaAdicionar] = useState("");
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
@@ -1215,8 +1437,11 @@ const Financeiro = () => {
         const f = appliedFilters;
 
         // Empresa filter
-        if (f.empresaSearch && !boleto.empresa.toLowerCase().includes(f.empresaSearch.toLowerCase())) {
-          return false;
+        if (f.empresaSearch) {
+          const termo = f.empresaSearch.toLowerCase();
+          const correspondeRazaoSocial = boleto.empresa.toLowerCase().includes(termo);
+          const correspondeNomeFantasia = boleto.empresaFantasia?.toLowerCase().includes(termo) ?? false;
+          if (!correspondeRazaoSocial && !correspondeNomeFantasia) return false;
         }
 
         // Status filter
@@ -1288,8 +1513,132 @@ const Financeiro = () => {
     return filteredBoletos.slice(start, start + boletosPageSize);
   }, [filteredBoletos, boletosPage, boletosPageSize]);
 
-  const canProceed = useMemo(() => {
+  const boletosMensalidadeFiltrados = useMemo(
+    () => filteredBoletos.filter(isBoletoMensalidade),
+    [filteredBoletos],
+  );
+  const boletosCompetenciaDisponiveis = useMemo(() => {
+    const termo = competenciaSearch.trim().toLowerCase();
+    if (!termo) return boletosMensalidadeFiltrados;
+    return boletosMensalidadeFiltrados.filter((boleto) => {
+      const competencia = getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal).toLowerCase();
+      return boleto.empresa.toLowerCase().includes(termo) ||
+        (boleto.empresaFantasia?.toLowerCase().includes(termo) ?? false) ||
+        boleto.id.toLowerCase().includes(termo) ||
+        (boleto.efiChargeId?.toLowerCase().includes(termo) ?? false) ||
+        competencia.includes(termo);
+    });
+  }, [boletosMensalidadeFiltrados, competenciaSearch]);
+  const boletosCompetenciaEmEdicao = useMemo(
+    () => boletos.filter((boleto) => competenciaBoletoIds.includes(boleto.id) && isBoletoMensalidade(boleto)),
+    [boletos, competenciaBoletoIds],
+  );
+  const todosBoletosCompetenciaVisiveisSelecionados = boletosCompetenciaDisponiveis.length > 0 &&
+    boletosCompetenciaDisponiveis.every((boleto) => competenciaBoletoIds.includes(boleto.id));
+  const algunsBoletosCompetenciaVisiveisSelecionados = boletosCompetenciaDisponiveis.some((boleto) =>
+    competenciaBoletoIds.includes(boleto.id),
+  );
+  const competenciaAnoNumero = Number(competenciaAno);
+  const competenciaTrimestreBase = Number.isInteger(competenciaAnoNumero) && competenciaAnoNumero >= 2000 && competenciaAnoNumero <= 2100
+    ? getTrimestre(competenciaAnoNumero, competenciaTrimestre)
+    : null;
+  const competenciaNovaFaixa = competenciaTrimestreBase && competenciaMesInicial <= competenciaMesFinal
+    ? {
+        inicioIso: format(competenciaTrimestreBase.meses[competenciaMesInicial], "yyyy-MM-dd"),
+        fimIso: format(competenciaTrimestreBase.meses[competenciaMesFinal], "yyyy-MM-dd"),
+      }
+    : null;
+
+  useEffect(() => {
+    setCompetenciaBoletoIds((ids) => ids.filter((id) => boletos.some((boleto) => boleto.id === id && isBoletoMensalidade(boleto))));
+  }, [boletos]);
+
+  const aplicarTrimestreMensalidade = (ano: string, trimestreNumero: TrimestreNumero) => {
+    setMensalidadeAnoReferencia(ano);
+    setMensalidadeTrimestreNumero(trimestreNumero);
+    const anoNumero = Number(ano);
+    const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
+      ? getTrimestre(anoNumero, trimestreNumero)
+      : null;
+
+    setBoletoForm((prev) => {
+      const competenciaInicial = faixa?.inicioIso ?? "";
+      const competenciaFinal = faixa?.fimIso ?? "";
+      const mensagemAutomaticaAnterior = prev.mensagemPersonalizada.startsWith("Boleto referente à competência ");
+      return {
+        ...prev,
+        competenciaInicial,
+        competenciaFinal,
+        mensagemPersonalizada: !prev.mensagemPersonalizada || mensagemAutomaticaAnterior
+          ? competenciaInicial
+            ? `Boleto referente à competência ${getCompetenciaRangeLabel(competenciaInicial, competenciaFinal)}`
+            : ""
+          : prev.mensagemPersonalizada,
+      };
+    });
+  };
+
+  const configurarPeriodoCompetencia = (boleto?: BoletoView) => {
+    const inicio = boleto?.competenciaInicial ? parseISO(boleto.competenciaInicial) : null;
+    const fim = boleto?.competenciaFinal ? parseISO(boleto.competenciaFinal) : null;
+    if (inicio && isValid(inicio)) {
+      const trimestre = getTrimestreNumeroDaCompetencia(boleto?.competenciaInicial) ?? 1;
+      const indiceInicial = (inicio.getMonth() % 3) as MesNoTrimestre;
+      const fimNoMesmoTrimestre = fim && isValid(fim) &&
+        fim.getFullYear() === inicio.getFullYear() &&
+        getTrimestreNumeroDaCompetencia(boleto?.competenciaFinal) === trimestre;
+      const indiceFinal = fimNoMesmoTrimestre ? (fim.getMonth() % 3) as MesNoTrimestre : indiceInicial;
+      setCompetenciaAno(String(inicio.getFullYear()));
+      setCompetenciaTrimestre(trimestre);
+      setCompetenciaMesInicial(indiceInicial);
+      setCompetenciaMesFinal(indiceFinal);
+      return;
+    }
+
+    const agora = new Date();
+    setCompetenciaAno(String(agora.getFullYear()));
+    setCompetenciaTrimestre((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+    setCompetenciaMesInicial(0);
+    setCompetenciaMesFinal(2);
+  };
+
+  const openCompetenciaDialog = (ids: string[] = []) => {
+    if (boletosMensalidadeFiltrados.length === 0) {
+      toast({
+        title: "Nenhuma mensalidade encontrada",
+        description: "Não há boletos de mensalidade nos filtros atuais para editar.",
+      });
+      return;
+    }
+    const targets = boletos.filter((boleto) => ids.includes(boleto.id) && isBoletoMensalidade(boleto));
+    configurarPeriodoCompetencia(targets[0]);
+    setCompetenciaBoletoIds(targets.map((boleto) => boleto.id));
+    setCompetenciaSearch("");
+    setCompetenciaDialogOpen(true);
+  };
+
+  const toggleBoletoCompetenciaSelecionado = (boletoId: string, checked: boolean) => {
+    if (checked && competenciaBoletoIds.length === 0) {
+      configurarPeriodoCompetencia(boletos.find((boleto) => boleto.id === boletoId));
+    }
+    setCompetenciaBoletoIds((ids) => checked
+      ? Array.from(new Set([...ids, boletoId]))
+      : ids.filter((id) => id !== boletoId));
+  };
+
+  const toggleBoletosCompetenciaVisiveis = (checked: boolean) => {
+    const idsVisiveis = boletosCompetenciaDisponiveis.map((boleto) => boleto.id);
+    if (checked && competenciaBoletoIds.length === 0) {
+      configurarPeriodoCompetencia(boletosCompetenciaDisponiveis[0]);
+    }
+    setCompetenciaBoletoIds((ids) => checked
+      ? Array.from(new Set([...ids, ...idsVisiveis]))
+      : ids.filter((id) => !idsVisiveis.includes(id)));
+  };
+
+  const canProceed = (() => {
     if (wizardStep === 1) {
+      if (boletoForm.tipo === "contribuicao") return true;
       return !!(boletoForm.tipo && (isBatchMode ? batchEmpresaIds.length > 0 : boletoForm.empresaId));
     }
 
@@ -1307,12 +1656,15 @@ const Financeiro = () => {
       if (boletoForm.tipo === "avulso") {
         return !!(boletoForm.dataVencimento && boletoForm.motivoCobranca.trim() && parseCurrencyInput(boletoForm.valorAvulso) > 0);
       }
+      if (boletoForm.tipo === "contribuicao") {
+        return isContribuicaoLoteValido();
+      }
 
       return false;
     }
 
     return true;
-  }, [batchEmpresaIds, boletoForm, isBatchMode, mockEmpresas, wizardStep]);
+  })();
 
   const handleExport = async (formato: "PDF" | "Excel" | "CSV") => {
     const now = new Date();
@@ -1585,6 +1937,7 @@ const Financeiro = () => {
 
   // Funções para Wizard de Boletos
   const resetWizard = () => {
+    const agora = new Date();
     setWizardOpen(false);
     setWizardStep(1);
     setBoletoForm({
@@ -1605,18 +1958,26 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      baseCalculoAgosto: "",
+      quantidadeParcelasContribuicao: 2,
+      vencimentoParcela1: "",
+      vencimentoParcela2: "",
       valorAvulso: "",
       motivoCobranca: "",
     });
     setEmpresaSearch("");
     setIsBatchMode(false);
     setBatchTipoVinculo("Associado");
+    setContribuicaoLoteRows([]);
+    setEmpresaContribuicaoParaAdicionar("");
     setPreviaBoleto(null);
     setContribuicaoPreview("");
     setBatchEmissionProgress({ done: 0, total: 0 });
     setEmailFallbackDialogOpen(false);
     setEmailFallbackEmpresaIds([]);
     setEmailFallbackDraft("");
+    setMensalidadeAnoReferencia(String(agora.getFullYear()));
+    setMensalidadeTrimestreNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
   };
 
   const handleSelectEmpresa = (empresa: typeof mockEmpresas[0]) => {
@@ -1677,6 +2038,86 @@ const Financeiro = () => {
     return parseFloat(value.replace(/\./g, "").replace(",", ".")) || 0;
   }
 
+  function buildContribuicaoRowsFromPreviousYear(ano: string): ContribuicaoLoteRow[] {
+    const anoAnterior = String(Number(ano) - 1);
+    if (!/^\d{4}$/.test(ano) || !data?.contribuicoes_assistenciais) return [];
+    const basesPorEmpresa = new Map<string, number>();
+    for (const contribuicao of data.contribuicoes_assistenciais) {
+      const empresaId = contribuicao.empresa?.id;
+      if (!empresaId || contribuicao.ano !== anoAnterior || contribuicao.situacao?.toLowerCase() === "cancelada") continue;
+      basesPorEmpresa.set(empresaId, (basesPorEmpresa.get(empresaId) ?? 0) + Number(contribuicao.base ?? 0));
+    }
+    return Array.from(basesPorEmpresa.entries())
+      .map(([empresaId, folhaAnoAnterior]): ContribuicaoLoteRow | null => {
+        const empresa = mockEmpresas.find((item) => item.id === empresaId);
+        return empresa ? {
+          empresaId,
+          empresaNome: empresa.nome,
+          folhaAnoAnterior,
+          folhaAtual: "",
+          repetiuFolhaAnterior: false,
+          quantidadeParcelas: 2 as const,
+        } : null;
+      })
+      .filter((row): row is ContribuicaoLoteRow => Boolean(row))
+      .sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR"));
+  }
+
+  function getContribuicaoParcelas(form: BoletoForm) {
+    const percentual = Number(form.percentual.replace(",", "."));
+    const baseAgosto = parseCurrencyInput(form.baseCalculoAgosto);
+    const descontos = parseCurrencyInput(form.descontos);
+    const primeiroVencimento = parseISO(form.vencimentoParcela1);
+    const segundoVencimento = parseISO(form.vencimentoParcela2);
+    const quantidade = form.quantidadeParcelasContribuicao;
+    if (
+      !/^\d{4}$/.test(form.anoContribuicao) ||
+      !Number.isFinite(percentual) ||
+      percentual <= 0 ||
+      baseAgosto <= 0 ||
+      !isValid(primeiroVencimento) ||
+      (quantidade === 2 && (!isValid(segundoVencimento) || !isAfter(segundoVencimento, primeiroVencimento)))
+    ) return [];
+
+    const valorTotal = Math.max((baseAgosto * percentual) / 100 - descontos, 0);
+    if (valorTotal <= 0) return [];
+    if (quantidade === 1) {
+      return [{
+        numero: 1 as const,
+        totalParcelas: 1 as const,
+        competencia: `${form.anoContribuicao}-08-01`,
+        base: baseAgosto,
+        desconto: descontos,
+        valor: Number(valorTotal.toFixed(2)),
+        vencimento: form.vencimentoParcela1,
+      }];
+    }
+
+    const primeiraParcela = Math.floor((valorTotal * 100) / 2) / 100;
+    const segundaParcela = Number((valorTotal - primeiraParcela).toFixed(2));
+    const primeiraBase = Math.floor((baseAgosto * 100) / 2) / 100;
+    const segundaBase = Number((baseAgosto - primeiraBase).toFixed(2));
+    const primeiroDesconto = Math.floor((descontos * 100) / 2) / 100;
+    const segundoDesconto = Number((descontos - primeiroDesconto).toFixed(2));
+    return [
+      { numero: 1 as const, totalParcelas: 2 as const, competencia: `${form.anoContribuicao}-08-01`, base: primeiraBase, desconto: primeiroDesconto, valor: primeiraParcela, vencimento: form.vencimentoParcela1 },
+      { numero: 2 as const, totalParcelas: 2 as const, competencia: `${form.anoContribuicao}-08-01`, base: segundaBase, desconto: segundoDesconto, valor: segundaParcela, vencimento: form.vencimentoParcela2 },
+    ];
+  }
+
+  function isContribuicaoLoteValido() {
+    const percentual = Number(boletoForm.percentual.replace(",", "."));
+    const primeiroVencimento = parseISO(boletoForm.vencimentoParcela1);
+    const segundoVencimento = parseISO(boletoForm.vencimentoParcela2);
+    const exigeSegundaParcela = contribuicaoLoteRows.some((row) => row.quantidadeParcelas === 2);
+    return /^\d{4}$/.test(boletoForm.anoContribuicao) &&
+      Number.isFinite(percentual) && percentual > 0 &&
+      contribuicaoLoteRows.length > 0 &&
+      contribuicaoLoteRows.every((row) => parseCurrencyInput(row.folhaAtual) > 0) &&
+      isValid(primeiroVencimento) &&
+      (!exigeSegundaParcela || (isValid(segundoVencimento) && isAfter(segundoVencimento, primeiroVencimento)));
+  }
+
   const calcularValorContribuicao = () => {
     const base = parseCurrencyInput(boletoForm.baseCalculo);
     const perc = parseFloat(boletoForm.percentual.replace(",", ".") || "0");
@@ -1688,14 +2129,15 @@ const Financeiro = () => {
 
   useEffect(() => {
     if (boletoForm.tipo === "contribuicao") {
-      calcularValorContribuicao();
+      const total = getContribuicaoParcelas(boletoForm).reduce((sum, parcela) => sum + parcela.valor, 0);
+      setBoletoForm((prev) => prev.valorCalculado === total ? prev : { ...prev, valorCalculado: total });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boletoForm.baseCalculo, boletoForm.percentual, boletoForm.descontos, boletoForm.tipo]);
+  }, [boletoForm.anoContribuicao, boletoForm.baseCalculoAgosto, boletoForm.descontos, boletoForm.percentual, boletoForm.quantidadeParcelasContribuicao, boletoForm.tipo, boletoForm.vencimentoParcela1, boletoForm.vencimentoParcela2]);
 
   const handleNextStep = () => {
     if (wizardStep === 1) {
-      if (!boletoForm.tipo || (!isBatchMode && !boletoForm.empresaId) || (isBatchMode && batchEmpresaIds.length === 0)) {
+      if (!boletoForm.tipo || (boletoForm.tipo !== "contribuicao" && ((!isBatchMode && !boletoForm.empresaId) || (isBatchMode && batchEmpresaIds.length === 0)))) {
         toast({
           title: "Campos obrigatórios",
           description: "Selecione o tipo de boleto e uma empresa.",
@@ -1730,29 +2172,10 @@ const Financeiro = () => {
           return;
         }
       } else {
-        const parcelasNumber = parseInt(boletoForm.parcelas, 10);
-        const camposObrigatorios =
-          boletoForm.anoContribuicao.length === 4 &&
-          boletoForm.periodicidade &&
-          boletoForm.parcelas &&
-          !Number.isNaN(parcelasNumber) &&
-          boletoForm.dataVencimento &&
-          boletoForm.percentual &&
-          boletoForm.baseCalculo;
-
-        if (!camposObrigatorios || !boletoForm.pesquisaContribuicaoFeita) {
+        if (!isContribuicaoLoteValido()) {
           toast({
             title: "Campos obrigatórios",
-            description: "Pesquise e valide os dados antes de avançar.",
-            variant: "destructive",
-          });
-          return;
-        }
-
-        if (boletoForm.valorCalculado <= 0) {
-          toast({
-            title: "Valor obrigatório",
-            description: "O valor calculado deve ser maior que zero.",
+            description: "Preencha as folhas, a quantidade de parcelas e os vencimentos necessários para todas as empresas.",
             variant: "destructive",
           });
           return;
@@ -1785,10 +2208,14 @@ const Financeiro = () => {
   };
 
   const handleLimparEtapa2 = () => {
+    const anoNumero = Number(mensalidadeAnoReferencia);
+    const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
+      ? getTrimestre(anoNumero, mensalidadeTrimestreNumero)
+      : null;
     setBoletoForm({
       ...boletoForm,
-      competenciaInicial: "",
-      competenciaFinal: "",
+      competenciaInicial: faixa?.inicioIso ?? "",
+      competenciaFinal: faixa?.fimIso ?? "",
       dataVencimento: "",
       faixaId: "",
       unificarCompetencias: "Não",
@@ -1850,6 +2277,10 @@ const Financeiro = () => {
       descontos: "",
       valorCalculado: 0,
       pesquisaContribuicaoFeita: false,
+      baseCalculoAgosto: "",
+      quantidadeParcelasContribuicao: 2,
+      vencimentoParcela1: "",
+      vencimentoParcela2: "",
     }));
     setContribuicaoPreview("");
   };
@@ -1861,6 +2292,37 @@ const Financeiro = () => {
       if (boleto.status === "Cancelado") return false;
       return rangesOverlap(competenciaInicial, competenciaFinal, boleto.competenciaInicial, boleto.competenciaFinal);
     });
+  };
+
+  const updateContribuicaoLoteRow = (empresaId: string, patch: Partial<ContribuicaoLoteRow>) => {
+    setContribuicaoLoteRows((rows) => rows.map((row) => row.empresaId === empresaId ? { ...row, ...patch } : row));
+  };
+
+  const addEmpresaAoLoteContribuicao = () => {
+    const empresa = mockEmpresas.find((item) => item.id === empresaContribuicaoParaAdicionar);
+    if (!empresa || contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)) return;
+    const novaEmpresa: ContribuicaoLoteRow = {
+      empresaId: empresa.id,
+      empresaNome: empresa.nome,
+      folhaAnoAnterior: 0,
+      folhaAtual: "",
+      repetiuFolhaAnterior: false,
+      quantidadeParcelas: 2,
+    };
+    setContribuicaoLoteRows((rows) => [...rows, novaEmpresa].sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR")));
+    setEmpresaContribuicaoParaAdicionar("");
+  };
+
+  const hasContribuicaoParcela = (empresaId: string, ano: string, parcela: 1 | 2, total: 1 | 2) => {
+    const marcador = total === 1 ? "(boleto único)" : `(${parcela}ª parcela de 2)`;
+    const marcadorLegado = total === 2 ? `Parcela ${parcela}/2` : "";
+    return boletos.some((boleto) =>
+      boleto.empresaId === empresaId &&
+      boleto.tipo === "Contribuição Assistencial" &&
+      boleto.status !== "Cancelado" &&
+      boleto.ano === ano &&
+      (boleto.descricao.includes(marcador) || Boolean(marcadorLegado && boleto.descricao.includes(marcadorLegado))),
+    );
   };
 
   const getEmpresasSemEmail = (empresas: typeof mockEmpresas, emailOverrides: Record<string, string>) => {
@@ -1913,7 +2375,9 @@ const Financeiro = () => {
   };
 
   const handleEmitirBoleto = async (options?: { emailOverrides?: Record<string, string> }) => {
-    const selectedIds = isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
+    const selectedIds = boletoForm.tipo === "contribuicao"
+      ? new Set(contribuicaoLoteRows.map((row) => row.empresaId))
+      : isBatchMode ? new Set(batchEmpresaIds) : new Set([boletoForm.empresaId]);
     const targetEmpresas = mockEmpresas.filter((empresa) => selectedIds.has(empresa.id));
     const emailOverrides = options?.emailOverrides ?? {};
     const empresasSemEmail = getEmpresasSemEmail(targetEmpresas, emailOverrides);
@@ -1935,6 +2399,7 @@ const Financeiro = () => {
       }
       return competencias;
     };
+    let parcelasContribuicaoEmitidas = 0;
 
     try {
       setIsEmittingBoletos(true);
@@ -1957,16 +2422,6 @@ const Financeiro = () => {
         );
         if (duplicadas.length > 0) {
           throw new Error(`Já existe boleto de mensalidade para a competência selecionada: ${duplicadas.map((empresa) => empresa.nome).join(", ")}.`);
-        }
-
-        if (isBatchMode && targetEmpresas.some((empresa) => empresa.tipoVinculo === "Associado")) {
-          const trimestreAtual = getCurrentQuarterRange();
-          const emitidasNoTrimestre = targetEmpresas.filter((empresa) =>
-            hasBoletoOverlap(empresa.id, trimestreAtual.start, trimestreAtual.end),
-          );
-          if (emitidasNoTrimestre.length > 0) {
-            throw new Error(`Emissão em lote bloqueada para empresa(s) com boleto emitido no trimestre corrente: ${emitidasNoTrimestre.map((empresa) => empresa.nome).join(", ")}.`);
-          }
         }
 
         const totalOperacoes = boletoForm.unificarCompetencias === "Sim" ? targetEmpresas.length : targetEmpresas.length * competencias.length;
@@ -2013,6 +2468,50 @@ const Financeiro = () => {
             }
           }
         }
+      } else if (boletoForm.tipo === "contribuicao") {
+        const tarefas: { empresa: (typeof mockEmpresas)[number]; form: BoletoForm; parcela: ReturnType<typeof getContribuicaoParcelas>[number] }[] = [];
+        for (const row of contribuicaoLoteRows) {
+          const empresa = targetEmpresas.find((item) => item.id === row.empresaId);
+          if (!empresa) continue;
+          const form = {
+            ...boletoForm,
+            empresaId: empresa.id,
+            empresaNome: empresa.nome,
+            baseCalculoAgosto: row.folhaAtual,
+            quantidadeParcelasContribuicao: row.quantidadeParcelas,
+            folhaRepetidaAnoAnterior: row.repetiuFolhaAnterior,
+          };
+          const parcelas = getContribuicaoParcelas(form);
+          if (parcelas.length !== row.quantidadeParcelas) throw new Error(`Dados inválidos para ${empresa.nome}.`);
+          for (const parcela of parcelas) {
+            if (!hasContribuicaoParcela(empresa.id, boletoForm.anoContribuicao, parcela.numero, parcela.totalParcelas)) {
+              tarefas.push({ empresa, form, parcela });
+            }
+          }
+        }
+        if (tarefas.length === 0) throw new Error(`Todos os boletos da contribuição de ${boletoForm.anoContribuicao} já foram emitidos.`);
+        setBatchEmissionProgress({ done: 0, total: tarefas.length });
+        for (const { empresa, form, parcela } of tarefas) {
+          const descricao = getDescricaoContribuicao(boletoForm.anoContribuicao, parcela.numero, parcela.totalParcelas);
+          await createBoletoMutation.mutateAsync({
+            ...form,
+            empresaId: empresa.id,
+            empresaNome: empresa.nome,
+            dataVencimento: parcela.vencimento,
+            competenciaInicial: parcela.competencia,
+            competenciaFinal: parcela.competencia,
+            periodicidade: "Anual",
+            parcelas: String(parcela.totalParcelas),
+            baseCalculo: parcela.base.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
+            descontos: parcela.desconto.toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: 2 }),
+            valorOverride: parcela.valor,
+            contribuicaoParcelaNumero: parcela.numero,
+            emailOverride: emailOverrides[empresa.id],
+            mensagemPersonalizada: descricao,
+          });
+          parcelasContribuicaoEmitidas += 1;
+          setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
+        }
       } else {
         setBatchEmissionProgress({ done: 0, total: targetEmpresas.length });
         for (const empresa of targetEmpresas) {
@@ -2021,22 +2520,189 @@ const Financeiro = () => {
         }
       }
       toast({
-        title: isBatchMode
-          ? "Boletos em lote emitidos com sucesso"
-          : boletoForm.tipo === "contribuicao"
-            ? "Boleto de Contribuição Assistencial emitido com sucesso"
+        title: boletoForm.tipo === "contribuicao"
+          ? "Boletos de Contribuição Assistencial emitidos com sucesso"
+          : isBatchMode
+            ? "Boletos em lote emitidos com sucesso"
             : "Boleto emitido com sucesso",
-        description: isBatchMode ? `${targetEmpresas.length} empresa(s) processada(s).` : `Boleto para ${boletoForm.empresaNome} criado.`,
+        description: boletoForm.tipo === "contribuicao"
+          ? `${parcelasContribuicaoEmitidas} boleto(s) pendente(s) de ${contribuicaoLoteRows.length} empresa(s) foram criados.`
+          : isBatchMode
+            ? `${targetEmpresas.length} empresa(s) processada(s).`
+            : `Boleto para ${boletoForm.empresaNome} criado.`,
       });
       resetWizard();
     } catch (err) {
       toast({
         title: "Falha ao emitir boleto",
-        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        description: `${err instanceof Error ? err.message : "Tente novamente em instantes."} A lista financeira será atualizada antes de uma nova tentativa.`,
         variant: "destructive",
       });
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
     } finally {
       setIsEmittingBoletos(false);
+    }
+  };
+
+  const handleEmitirTrimestreAutomatico = async () => {
+    if (trimestreAutomaticoEmissionLockRef.current || isEmittingBoletos) return;
+
+    if (!trimestreAutomaticoVencimento || !isValid(parseISO(trimestreAutomaticoVencimento))) {
+      toast({ title: "Vencimento obrigatório", description: "Informe uma data de vencimento válida.", variant: "destructive" });
+      return;
+    }
+    if (trimestreAutomaticoPendentes.length === 0) {
+      toast({ title: "Nenhum boleto necessário", description: "Todas as competências elegíveis desse trimestre já foram emitidas." });
+      return;
+    }
+    if (trimestreAutomaticoImpedidas.length > 0) {
+      toast({
+        title: "Cadastros incompletos",
+        description: "Corrija os impedimentos mostrados na análise antes de gerar o lote.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const rowsParaEmitir = trimestreAutomaticoPendentes.map((row) => ({
+      ...row,
+      competenciasEmitidas: [...row.competenciasEmitidas],
+      competenciasPendentes: [...row.competenciasPendentes],
+      impedimentos: [...row.impedimentos],
+    }));
+    const vencimento = trimestreAutomaticoVencimento;
+    const unificarCompetencias = trimestreAutomaticoUnificarCompetencias;
+    const trimestreNumero = trimestreAutomaticoNumero;
+    const trimestreAno = trimestreAutomaticoAno;
+    const totalOperacoes = unificarCompetencias === "Sim"
+      ? rowsParaEmitir.length
+      : rowsParaEmitir.reduce((total, row) => total + row.competenciasPendentes.length, 0);
+
+    trimestreAutomaticoEmissionLockRef.current = true;
+    let emitidos = 0;
+    let processados = 0;
+    const falhas: { empresa: string; competencia: string; mensagem: string }[] = [];
+    try {
+      setTrimestreAutomaticoConfirmOpen(false);
+      setIsEmittingBoletos(true);
+      setTrimestreAutomaticoProgress({
+        status: "running",
+        done: 0,
+        total: totalOperacoes,
+        succeeded: 0,
+        failed: 0,
+        currentEmpresa: "",
+        currentCompetencia: "",
+        errors: [],
+      });
+
+      const emitir = async (row: TrimestreAutomaticoRow, primeiraCompetencia: string, ultimaCompetencia: string, valor: number, desconto: number) => {
+        const competencia = getCompetenciaRangeLabel(primeiraCompetencia, ultimaCompetencia);
+        setTrimestreAutomaticoProgress((prev) => ({
+          ...prev,
+          currentEmpresa: row.empresaNome,
+          currentCompetencia: competencia,
+        }));
+        try {
+          await createBoletoMutation.mutateAsync({
+            ...boletoForm,
+            tipo: "mensalidade",
+            empresaId: row.empresaId,
+            empresaNome: row.empresaNome,
+            competenciaInicial: primeiraCompetencia,
+            competenciaFinal: ultimaCompetencia,
+            dataVencimento: vencimento,
+            faixaId: row.faixaId,
+            unificarCompetencias,
+            mensagemPersonalizada: primeiraCompetencia === ultimaCompetencia
+              ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
+              : `Mensalidades do ${trimestreNumero}º trimestre de ${trimestreAno}, referentes às competências ${competencia}.`,
+            anoContribuicao: "",
+            periodicidade: "Trimestral",
+            parcelas: "1",
+            baseCalculo: "",
+            percentual: "",
+            descontos: "",
+            valorCalculado: valor,
+            valorOverride: valor,
+            descontoValorOverride: desconto,
+          });
+          emitidos += 1;
+        } catch (err) {
+          falhas.push({
+            empresa: row.empresaNome,
+            competencia,
+            mensagem: err instanceof Error ? err.message : "Erro inesperado na emissão.",
+          });
+        } finally {
+          processados += 1;
+          setTrimestreAutomaticoProgress((prev) => ({
+            ...prev,
+            done: processados,
+            succeeded: emitidos,
+            failed: falhas.length,
+            errors: [...falhas],
+          }));
+        }
+      };
+
+      for (const row of rowsParaEmitir) {
+        if (unificarCompetencias === "Sim") {
+          await emitir(
+            row,
+            row.competenciasPendentes[0],
+            row.competenciasPendentes[row.competenciasPendentes.length - 1],
+            row.valorTotal,
+            row.descontoMensal * row.competenciasPendentes.length,
+          );
+        } else {
+          for (const competencia of row.competenciasPendentes) {
+            await emitir(row, competencia, competencia, row.valorMensal, row.descontoMensal);
+          }
+        }
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      setTrimestreAutomaticoProgress((prev) => ({
+        ...prev,
+        status: "finished",
+        currentEmpresa: "",
+        currentCompetencia: "",
+      }));
+      if (falhas.length > 0) {
+        const resumoFalhas = falhas
+          .slice(0, 3)
+          .map((falha) => `${falha.empresa} (${falha.competencia}): ${falha.mensagem}`)
+          .join(" | ");
+        toast({
+          title: emitidos > 0 ? "Lote concluído parcialmente" : "Nenhum boleto foi gerado",
+          description: `${emitidos} de ${totalOperacoes} boleto(s) gerado(s); ${falhas.length} falharam. Os sucessos já foram retirados da prévia para uma tentativa segura. ${resumoFalhas}${falhas.length > 3 ? ` | e mais ${falhas.length - 3} falha(s).` : ""}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Trimestre processado com sucesso",
+        description: `${emitidos} boleto(s) gerado(s). ${planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length} empresa(s) não precisavam de nova emissão.`,
+      });
+      setTrimestreAutomaticoOpen(false);
+    } catch (err) {
+      setTrimestreAutomaticoProgress((prev) => ({
+        ...prev,
+        status: "finished",
+        currentEmpresa: "",
+        currentCompetencia: "",
+      }));
+      toast({
+        title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
+        description: `${emitidos} de ${totalOperacoes} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
+        variant: "destructive",
+      });
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+    } finally {
+      setIsEmittingBoletos(false);
+      trimestreAutomaticoEmissionLockRef.current = false;
     }
   };
 
@@ -2075,6 +2741,55 @@ const Financeiro = () => {
       variables: { id, descricao: descricao || null },
     });
     queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+  };
+
+  const handleSalvarCompetencia = async () => {
+    if (competenciaBoletoIds.length === 0 || !competenciaNovaFaixa) {
+      toast({
+        title: "Competência inválida",
+        description: "Informe um ano entre 2000 e 2100 e selecione um trimestre.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setIsSavingCompetencia(true);
+      const result = await hasuraRequest<{
+        update_financeiro_boletos: { affected_rows: number };
+      }>({
+        token,
+        query: UPDATE_BOLETOS_COMPETENCIA_HASURA,
+        variables: {
+          ids: competenciaBoletoIds,
+          competenciaInicial: competenciaNovaFaixa.inicioIso,
+          competenciaFinal: competenciaNovaFaixa.fimIso,
+        },
+      });
+
+      const atualizados = result.update_financeiro_boletos?.affected_rows ?? 0;
+      if (atualizados !== competenciaBoletoIds.length) {
+        throw new Error(`${atualizados} de ${competenciaBoletoIds.length} boleto(s) foram encontrados para atualização.`);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["financeiro-page"] });
+      setCompetenciaConfirmOpen(false);
+      setCompetenciaDialogOpen(false);
+      setCompetenciaBoletoIds([]);
+      setCompetenciaSearch("");
+      toast({
+        title: atualizados === 1 ? "Competência atualizada" : "Competências atualizadas",
+        description: `${atualizados} boleto(s) definido(s) para ${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno}.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Falha ao alterar competência",
+        description: err instanceof Error ? err.message : "Tente novamente em instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSavingCompetencia(false);
+    }
   };
 
   const appendObservacaoEmpresa = async (empresaNome: string, comentario: string) => {
@@ -2171,7 +2886,7 @@ const Financeiro = () => {
                     setFilters(defaultFilters);
                     setAppliedFilters(defaultFilters);
                   }}
-                  empresas={mockEmpresas.map((e) => ({ id: e.id, nome: e.nome }))}
+                  empresas={mockEmpresas.map((e) => ({ id: e.id, razaoSocial: e.razaoSocial, nomeFantasia: e.nomeFantasia }))}
                 />
 
                 <Card>
@@ -2183,7 +2898,14 @@ const Financeiro = () => {
                           {filteredBoletos.length} boleto(s) encontrado(s)
                         </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => openCompetenciaDialog()}
+                        >
+                          <CalendarIcon className="h-4 w-4 mr-2" />
+                          Alterar competências
+                        </Button>
                         <Button 
                           onClick={() => setWizardOpen(true)}
                           className="bg-[#00A86B] hover:bg-[#00A86B]/90"
@@ -2208,6 +2930,7 @@ const Financeiro = () => {
                           <TableRow>
                             <TableHead>Empresa</TableHead>
                             <TableHead>Tipo</TableHead>
+                            <TableHead>Competência</TableHead>
                             <TableHead>Valor</TableHead>
                             <TableHead>Vencimento</TableHead>
                             <TableHead>Status</TableHead>
@@ -2219,7 +2942,7 @@ const Financeiro = () => {
                         <TableBody>
                           {filteredBoletos.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                                 Nenhum boleto encontrado com os filtros aplicados.
                               </TableCell>
                             </TableRow>
@@ -2248,6 +2971,11 @@ const Financeiro = () => {
                                   </TableCell>
                                   <TableCell>
                                     <span className="text-sm">{boleto.tipo}</span>
+                                  </TableCell>
+                                  <TableCell>
+                                    <span className="whitespace-nowrap text-sm">
+                                      {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                    </span>
                                   </TableCell>
                                   <TableCell>
                                     R$ {boleto.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
@@ -2344,6 +3072,9 @@ const Financeiro = () => {
                                         setNewDueDate(boleto.vencimento);
                                         setDueDateDialogOpen(true);
                                       }}
+                                      onChangeCompetencia={isBoletoMensalidade(boleto)
+                                        ? () => openCompetenciaDialog([boleto.id])
+                                        : undefined}
                                       onDescription={() => {
                                         setSelectedBoletoForDescription(boleto as BoletoView);
                                         setDescriptionDraft((boleto as BoletoView & { descricao?: string }).descricao ?? "");
@@ -2400,7 +3131,7 @@ const Financeiro = () => {
                       );
                       const tipoOriginal = original.tipo === "Contribuição Assistencial"
                         ? "contribuicao"
-                        : original.tipo === "Boleto avulso" || original.tipo === "Avulso"
+                        : original.tipo === "Boleto avulso"
                           ? "avulso"
                           : "mensalidade";
                       const payload: BoletoForm = {
@@ -2422,6 +3153,10 @@ const Financeiro = () => {
                         valorCalculado: original.valor,
                         valorOverride: novoValor,
                         pesquisaContribuicaoFeita: true,
+                        baseCalculoAgosto: original.base ? String(original.base) : "",
+                        quantidadeParcelasContribuicao: original.parcelas === 1 ? 1 : 2,
+                        vencimentoParcela1: format(novaData, "yyyy-MM-dd"),
+                        vencimentoParcela2: "",
                         valorAvulso: novoValor ? String(novoValor) : String(original.valor),
                         motivoCobranca: original.descricao ?? "",
                       };
@@ -2551,6 +3286,305 @@ const Financeiro = () => {
                   </DialogContent>
                 </Dialog>
 
+                <Dialog
+                  open={competenciaDialogOpen}
+                  onOpenChange={(open) => {
+                    if (isSavingCompetencia || competenciaConfirmOpen) return;
+                    setCompetenciaDialogOpen(open);
+                    if (!open) {
+                      setCompetenciaBoletoIds([]);
+                      setCompetenciaSearch("");
+                    }
+                  }}
+                >
+                  <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Alterar competências de mensalidades</DialogTitle>
+                      <DialogDescription>
+                        Selecione os boletos, informe o novo trimestre e revise tudo antes de confirmar.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    <div role="note" className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                      <p className="font-semibold">Somente a competência será alterada.</p>
+                      <p className="mt-1">
+                        Este modal muda apenas os campos “competência inicial” e “competência final” no sistema. Valor, vencimento, status, descrição e o boleto já emitido na EFI permanecem iguais.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                        <div className="flex-1 space-y-2">
+                          <Label htmlFor="competenciaSearch">Boletos de mensalidade</Label>
+                          <Input
+                            id="competenciaSearch"
+                            value={competenciaSearch}
+                            onChange={(event) => setCompetenciaSearch(event.target.value)}
+                            placeholder="Buscar por empresa, boleto ou competência"
+                            disabled={isSavingCompetencia}
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => toggleBoletosCompetenciaVisiveis(!todosBoletosCompetenciaVisiveisSelecionados)}
+                            disabled={isSavingCompetencia || boletosCompetenciaDisponiveis.length === 0}
+                          >
+                            {todosBoletosCompetenciaVisiveisSelecionados ? "Desmarcar visíveis" : "Selecionar visíveis"}
+                          </Button>
+                          <Badge variant="secondary">{boletosCompetenciaEmEdicao.length} selecionado(s)</Badge>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {boletosMensalidadeFiltrados.length} mensalidade(s) disponível(is) nos filtros atuais.
+                      </p>
+                      <div className="max-h-72 overflow-auto rounded-md border">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-background">
+                            <TableRow>
+                              <TableHead className="w-10">
+                                <Checkbox
+                                  aria-label="Selecionar boletos visíveis"
+                                  checked={todosBoletosCompetenciaVisiveisSelecionados
+                                    ? true
+                                    : algunsBoletosCompetenciaVisiveisSelecionados
+                                      ? "indeterminate"
+                                      : false}
+                                  disabled={isSavingCompetencia || boletosCompetenciaDisponiveis.length === 0}
+                                  onCheckedChange={(checked) => toggleBoletosCompetenciaVisiveis(checked === true)}
+                                />
+                              </TableHead>
+                              <TableHead>Empresa / boleto</TableHead>
+                              <TableHead>Competência atual</TableHead>
+                              <TableHead>Vencimento</TableHead>
+                              <TableHead>Valor</TableHead>
+                              <TableHead>Status</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {boletosCompetenciaDisponiveis.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                                  Nenhum boleto encontrado nessa busca.
+                                </TableCell>
+                              </TableRow>
+                            ) : boletosCompetenciaDisponiveis.map((boleto) => (
+                              <TableRow key={boleto.id} data-state={competenciaBoletoIds.includes(boleto.id) ? "selected" : undefined}>
+                                <TableCell>
+                                  <Checkbox
+                                    aria-label={`Selecionar boleto de ${boleto.empresa}`}
+                                    checked={competenciaBoletoIds.includes(boleto.id)}
+                                    disabled={isSavingCompetencia}
+                                    onCheckedChange={(checked) => toggleBoletoCompetenciaSelecionado(boleto.id, checked === true)}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <p className="font-medium">{boleto.empresa}</p>
+                                  {boleto.empresaFantasia && boleto.empresaFantasia !== boleto.empresa && (
+                                    <p className="text-xs text-muted-foreground">{boleto.empresaFantasia}</p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    Boleto {boleto.efiChargeId || boleto.id.slice(0, 8)}
+                                  </p>
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap">
+                                  {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap">{formatDueDateBR(boleto.vencimento)}</TableCell>
+                                <TableCell className="whitespace-nowrap">{formatCurrencyBRL(boleto.valor)}</TableCell>
+                                <TableCell>{getStatusBadge(getBoletoEffectiveStatus(boleto))}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaAno">Ano de referência*</Label>
+                        <Input
+                          id="competenciaAno"
+                          type="number"
+                          min={2000}
+                          max={2100}
+                          value={competenciaAno}
+                          onChange={(event) => setCompetenciaAno(event.target.value)}
+                          disabled={isSavingCompetencia}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaTrimestre">Trimestre de referência*</Label>
+                        <Select
+                          value={String(competenciaTrimestre)}
+                          onValueChange={(value) => setCompetenciaTrimestre(Number(value) as TrimestreNumero)}
+                          disabled={isSavingCompetencia}
+                        >
+                          <SelectTrigger id="competenciaTrimestre"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                            <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                            <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                            <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaMesInicial">Competência inicial*</Label>
+                        <Select
+                          value={String(competenciaMesInicial)}
+                          onValueChange={(value) => {
+                            const indice = Number(value) as MesNoTrimestre;
+                            setCompetenciaMesInicial(indice);
+                            if (indice > competenciaMesFinal) setCompetenciaMesFinal(indice);
+                          }}
+                          disabled={isSavingCompetencia || !competenciaTrimestreBase}
+                        >
+                          <SelectTrigger id="competenciaMesInicial"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {competenciaTrimestreBase?.meses.map((mes, indice) => (
+                              <SelectItem key={format(mes, "yyyy-MM-dd")} value={String(indice)}>
+                                {getMesAnoLabel(mes)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="competenciaMesFinal">Competência final*</Label>
+                        <Select
+                          value={String(competenciaMesFinal)}
+                          onValueChange={(value) => {
+                            const indice = Number(value) as MesNoTrimestre;
+                            setCompetenciaMesFinal(indice);
+                            if (indice < competenciaMesInicial) setCompetenciaMesInicial(indice);
+                          }}
+                          disabled={isSavingCompetencia || !competenciaTrimestreBase}
+                        >
+                          <SelectTrigger id="competenciaMesFinal"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {competenciaTrimestreBase?.meses.map((mes, indice) => (
+                              <SelectItem key={format(mes, "yyyy-MM-dd")} value={String(indice)}>
+                                {getMesAnoLabel(mes)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Para um boleto de uma única mensalidade, escolha o mesmo mês nos dois campos. Use meses diferentes somente quando o boleto reunir mais de uma mensalidade.
+                    </p>
+
+                    <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                      <p className="font-medium">Nova competência</p>
+                      <p className="text-muted-foreground">
+                        {competenciaNovaFaixa
+                          ? `${getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso)} — dentro do ${getTrimestreLabel(competenciaTrimestre)} de ${competenciaAno}.`
+                          : "Informe um ano válido entre 2000 e 2100."}
+                      </p>
+                      {competenciaNovaFaixa && competenciaMesInicial === competenciaMesFinal && (
+                        <p className="mt-1 text-xs font-medium text-primary">Este boleto ficará referente a apenas um mês.</p>
+                      )}
+                      {boletosCompetenciaEmEdicao.length > 1 && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          O mesmo intervalo será aplicado a todos os boletos selecionados.
+                        </p>
+                      )}
+                    </div>
+
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setCompetenciaDialogOpen(false);
+                          setCompetenciaBoletoIds([]);
+                          setCompetenciaSearch("");
+                        }}
+                        disabled={isSavingCompetencia}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        onClick={() => setCompetenciaConfirmOpen(true)}
+                        disabled={isSavingCompetencia || !competenciaNovaFaixa || boletosCompetenciaEmEdicao.length === 0}
+                      >
+                        Revisar alteração
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <AlertDialog
+                  open={competenciaConfirmOpen}
+                  onOpenChange={(open) => {
+                    if (!isSavingCompetencia) setCompetenciaConfirmOpen(open);
+                  }}
+                >
+                  <AlertDialogContent className="max-w-2xl">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Confirmar alteração de competências?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Revise o impacto antes de atualizar {boletosCompetenciaEmEdicao.length} boleto(s).
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    <div className="space-y-4 text-sm">
+                      <div className="rounded-md border bg-muted/20 p-3">
+                        <p><strong>Nova competência:</strong> {competenciaNovaFaixa ? getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso) : "Inválida"}</p>
+                        <p className="mt-1"><strong>Trimestre:</strong> {getTrimestreLabel(competenciaTrimestre)} de {competenciaAno}.</p>
+                        {competenciaNovaFaixa && competenciaMesInicial === competenciaMesFinal && (
+                          <p className="mt-1 font-medium text-primary">Cada boleto selecionado ficará referente a somente um mês.</p>
+                        )}
+                        <p className="mt-2"><strong>Campos alterados:</strong> competência inicial e competência final.</p>
+                        <p className="mt-1"><strong>Não serão alterados:</strong> valor, vencimento, status, descrição, empresa, PDF e cobrança na EFI.</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className="font-medium">Boletos que serão atualizados</p>
+                        <div className="max-h-52 overflow-y-auto rounded-md border divide-y">
+                          {boletosCompetenciaEmEdicao.map((boleto) => (
+                            <div key={boleto.id} className="flex flex-col justify-between gap-1 p-3 sm:flex-row sm:items-center">
+                              <span>
+                                <strong>{boleto.empresa}</strong>
+                                <span className="ml-1 text-xs text-muted-foreground">({boleto.efiChargeId || boleto.id.slice(0, 8)})</span>
+                              </span>
+                              <span className="text-muted-foreground">
+                                {getCompetenciaRangeLabel(boleto.competenciaInicial, boleto.competenciaFinal) || "Não informada"}
+                                {" → "}
+                                {competenciaNovaFaixa ? getCompetenciaRangeLabel(competenciaNovaFaixa.inicioIso, competenciaNovaFaixa.fimIso) : "—"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-950">
+                        Esta alteração muda a referência usada pelas regras automáticas de identificação de competências já emitidas.
+                      </div>
+                    </div>
+
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={isSavingCompetencia}>Voltar e revisar</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                        disabled={isSavingCompetencia || !competenciaNovaFaixa || boletosCompetenciaEmEdicao.length === 0}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void handleSalvarCompetencia();
+                        }}
+                      >
+                        {isSavingCompetencia ? "Alterando..." : `Confirmar alteração em ${boletosCompetenciaEmEdicao.length} boleto(s)`}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+
                 <Dialog open={descriptionDialogOpen} onOpenChange={setDescriptionDialogOpen}>
                   <DialogContent>
                     <DialogHeader>
@@ -2657,7 +3691,13 @@ const Financeiro = () => {
                       <Button variant="outline" onClick={() => navigate("/dashboard/financeiro/contribuicao") }>
                         Ver histórico completo
                       </Button>
-                      <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => setWizardOpen(true)}>
+                      <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90" onClick={() => {
+                        const anoAtual = String(new Date().getFullYear());
+                        setBoletoForm((prev) => ({ ...prev, tipo: "contribuicao", anoContribuicao: anoAtual, percentual: prev.percentual || "2", periodicidade: "Anual", parcelas: "2" }));
+                        setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(anoAtual));
+                        setWizardStep(2);
+                        setWizardOpen(true);
+                      }}>
                         <Plus className="h-4 w-4 mr-2" />
                         Criar boleto
                       </Button>
@@ -2707,10 +3747,10 @@ const Financeiro = () => {
 
                 <Card className="bg-[#F7F8F4] border-secondary/40">
                   <CardHeader>
-                    <CardTitle className="text-lg">Calculadora disponível no wizard</CardTitle>
+                    <CardTitle className="text-lg">Emissão em lote disponível no wizard</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      Utilize o fluxo de criação de boletos para calcular automaticamente o valor de Contribuição
-                      Assistencial. A fórmula aplicada é: (Base de Cálculo × Percentual / 100) – Descontos/Isenções.
+                      Carregue os contribuintes do ano anterior, informe ou repita a folha de agosto e revise os valores antes de gerar os boletos.
+                      A fórmula aplicada é: Folha de agosto × Percentual / 100.
                     </p>
                   </CardHeader>
                   <CardContent className="space-y-2">
@@ -2846,9 +3886,257 @@ const Financeiro = () => {
               </AlertDialogContent>
             </AlertDialog>
 
+            <Dialog
+              open={trimestreAutomaticoOpen}
+              onOpenChange={(open) => {
+                if (!isEmittingBoletos) setTrimestreAutomaticoOpen(open);
+              }}
+            >
+              <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Gerar mensalidades do trimestre automaticamente</DialogTitle>
+                  <DialogDescription>
+                    O sistema analisa todas as associadas de todas as faixas. Para novas associadas, aplica a cobrança proporcional ao mês de entrada.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="trimestreAutomaticoAno">Ano de referência</Label>
+                    <Input
+                      id="trimestreAutomaticoAno"
+                      type="number"
+                      min="2000"
+                      max="2100"
+                      value={trimestreAutomaticoAno}
+                      onChange={(event) => setTrimestreAutomaticoAno(event.target.value)}
+                      disabled={isEmittingBoletos}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Trimestre de referência</Label>
+                    <Select
+                      value={String(trimestreAutomaticoNumero)}
+                      onValueChange={(value) => setTrimestreAutomaticoNumero(Number(value) as TrimestreNumero)}
+                      disabled={isEmittingBoletos}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                        <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                        <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                        <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Vencimento dos novos boletos</Label>
+                    <DatePickerField
+                      value={trimestreAutomaticoVencimento}
+                      placeholder="Informe o vencimento"
+                      onChange={setTrimestreAutomaticoVencimento}
+                      disabled={isEmittingBoletos}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="trimestreAutomaticoUnificar">Unificar competências*</Label>
+                    <Select
+                      value={trimestreAutomaticoUnificarCompetencias}
+                      onValueChange={(value) => setTrimestreAutomaticoUnificarCompetencias(value as "Sim" | "Não")}
+                      disabled={isEmittingBoletos}
+                    >
+                      <SelectTrigger id="trimestreAutomaticoUnificar"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Sim">Sim — um boleto por empresa</SelectItem>
+                        <SelectItem value="Não">Não — um boleto por mensalidade</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+                  Associadas antigas recebem a cobrança normal do trimestre. Entradas entre o mês anterior e o último mês do trimestre seguem a regra proporcional; do dia 28 em diante, passam a valer no mês seguinte. Competências já emitidas não são cobradas novamente e boletos cancelados não contam.
+                </div>
+
+                {empresasAssociadasSemData.length > 0 && (
+                  <div role="alert" className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900 sm:flex-row sm:items-center">
+                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-semibold">Há associadas sem data de associação</p>
+                      <p className="text-sm">
+                        {empresasAssociadasSemData.length} empresa(s) não podem entrar na análise automática até que a data de associação seja cadastrada.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0 border-amber-400 bg-white text-amber-950 hover:bg-amber-100"
+                      onClick={() => navigate("/dashboard/empresas?semDataAssociacao=1")}
+                    >
+                      Preencher datas nas empresas
+                    </Button>
+                  </div>
+                )}
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Analisadas</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Empresas com cobrança</p><p className="text-2xl font-bold">{trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Boletos a gerar</p><p className="text-2xl font-bold">{trimestreAutomaticoQuantidadeBoletos}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Sem nova emissão</p><p className="text-2xl font-bold">{planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length}</p></CardContent></Card>
+                  <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Valor do lote</p><p className="text-xl font-bold text-primary">{formatCurrencyBRL(trimestreAutomaticoValorTotal)}</p></CardContent></Card>
+                </div>
+
+                <div className="overflow-x-auto rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Empresa</TableHead>
+                        <TableHead>Entrada</TableHead>
+                        <TableHead>Já emitido</TableHead>
+                        <TableHead>Será gerado</TableHead>
+                        <TableHead>Valor</TableHead>
+                        <TableHead>Situação</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {planoTrimestreAutomatico.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                            Nenhuma associada elegível encontrada para esse trimestre.
+                          </TableCell>
+                        </TableRow>
+                      ) : planoTrimestreAutomatico.map((row) => (
+                        <TableRow key={row.empresaId}>
+                          <TableCell className="font-medium">{row.empresaNome}</TableCell>
+                          <TableCell>{formatDateBR(row.dataAssociacao)}</TableCell>
+                          <TableCell>{row.competenciasEmitidas.length > 0 ? row.competenciasEmitidas.map(formatCompetenciaBR).join(", ") : "Nenhuma"}</TableCell>
+                          <TableCell>
+                            {row.competenciasPendentes.length > 0 ? (
+                              <div>
+                                <p>{getCompetenciaRangeLabel(row.competenciasPendentes[0], row.competenciasPendentes[row.competenciasPendentes.length - 1])}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {trimestreAutomaticoUnificarCompetencias === "Sim"
+                                    ? "1 boleto unificado"
+                                    : `${row.competenciasPendentes.length} boleto(s), um por mensalidade`}
+                                </p>
+                              </div>
+                            ) : "—"}
+                          </TableCell>
+                          <TableCell>{formatCurrencyBRL(row.valorTotal)}</TableCell>
+                          <TableCell>
+                            {row.impedimentos.length > 0 ? (
+                              <Badge variant="destructive">{row.impedimentos.join(", ")}</Badge>
+                            ) : row.competenciasPendentes.length > 0 ? (
+                              <Badge className="bg-blue-100 text-blue-800">Pronto para gerar</Badge>
+                            ) : (
+                              <Badge variant="secondary">Nenhuma emissão</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {trimestreAutomaticoProgress.status !== "idle" && trimestreAutomaticoProgress.total > 0 && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={cn(
+                      "space-y-3 rounded-lg border p-4",
+                      trimestreAutomaticoProgress.status === "running"
+                        ? "border-blue-200 bg-blue-50/70"
+                        : trimestreAutomaticoProgress.failed > 0
+                          ? "border-amber-300 bg-amber-50"
+                          : "border-emerald-200 bg-emerald-50/70",
+                    )}
+                  >
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="font-medium text-foreground">
+                        {trimestreAutomaticoProgress.status === "running"
+                          ? "Gerando boletos. Aguarde e não feche esta tela."
+                          : trimestreAutomaticoProgress.failed > 0
+                            ? "Processamento concluído com falhas."
+                            : "Processamento concluído."}
+                      </span>
+                      <span className="text-sm font-medium text-foreground">
+                        {trimestreAutomaticoProgress.done}/{trimestreAutomaticoProgress.total}
+                      </span>
+                    </div>
+                    {trimestreAutomaticoProgress.status === "running" && trimestreAutomaticoProgress.currentEmpresa && (
+                      <p className="text-sm text-muted-foreground">
+                        Agora: {trimestreAutomaticoProgress.currentEmpresa} — {trimestreAutomaticoProgress.currentCompetencia}
+                      </p>
+                    )}
+                    <Progress
+                      value={(trimestreAutomaticoProgress.done / trimestreAutomaticoProgress.total) * 100}
+                      aria-label="Progresso da emissão automática"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {trimestreAutomaticoProgress.succeeded} gerado(s)
+                      {trimestreAutomaticoProgress.failed > 0 ? `; ${trimestreAutomaticoProgress.failed} falha(s)` : ""}.
+                    </p>
+                    {trimestreAutomaticoProgress.errors.length > 0 && (
+                      <div className="space-y-1 rounded-md border border-amber-200 bg-white/70 p-3 text-sm text-amber-950">
+                        <p className="font-medium">Falhas encontradas:</p>
+                        {trimestreAutomaticoProgress.errors.slice(0, 5).map((failure, index) => (
+                          <p key={`${failure.empresa}-${failure.competencia}-${index}`}>
+                            {failure.empresa} ({failure.competencia}): {failure.mensagem}
+                          </p>
+                        ))}
+                        {trimestreAutomaticoProgress.errors.length > 5 && (
+                          <p>E mais {trimestreAutomaticoProgress.errors.length - 5} falha(s).</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setTrimestreAutomaticoOpen(false)} disabled={isEmittingBoletos}>Cancelar</Button>
+                  <Button
+                    className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                    disabled={isEmittingBoletos || !trimestreAutomaticoVencimento || trimestreAutomaticoPendentes.length === 0 || trimestreAutomaticoImpedidas.length > 0}
+                    onClick={() => setTrimestreAutomaticoConfirmOpen(true)}
+                  >
+                    {isEmittingBoletos ? "Gerando boletos..." : "Gerar boletos do trimestre"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <AlertDialog
+              open={trimestreAutomaticoConfirmOpen}
+              onOpenChange={(open) => {
+                if (!isEmittingBoletos) setTrimestreAutomaticoConfirmOpen(open);
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirmar emissão automática?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Serão gerados {trimestreAutomaticoQuantidadeBoletos} boleto(s) para {trimestreAutomaticoPendentes.length} empresa(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. {trimestreAutomaticoUnificarCompetencias === "Sim" ? "As mensalidades serão reunidas em um boleto por empresa." : "Será criado um boleto separado para cada mensalidade."} Competências já emitidas não serão cobradas novamente.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={isEmittingBoletos}>Voltar</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-[#00A86B] hover:bg-[#00A86B]/90"
+                    disabled={isEmittingBoletos || createBoletoMutation.isPending}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void handleEmitirTrimestreAutomatico();
+                    }}
+                  >
+                    {isEmittingBoletos || createBoletoMutation.isPending ? "Iniciando emissão..." : "Confirmar e gerar"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
             {/* Wizard de Criação de Boletos */}
             <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
-              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+              <DialogContent className={cn("max-h-[90vh] overflow-y-auto", boletoForm.tipo === "contribuicao" ? "max-w-6xl" : "max-w-3xl")}>
                 <DialogHeader>
                   <DialogTitle>Criar Boleto</DialogTitle>
                   <DialogDescription>
@@ -2875,9 +4163,28 @@ const Financeiro = () => {
                         value={boletoForm.tipo}
                         onValueChange={(value) => {
                           const tipoSelecionado = value as "mensalidade" | "contribuicao" | "avulso";
+                          const anoAtual = String(new Date().getFullYear());
+                          const anoMensalidadeNumero = Number(mensalidadeAnoReferencia);
+                          const trimestreMensalidade = Number.isInteger(anoMensalidadeNumero) && anoMensalidadeNumero >= 2000 && anoMensalidadeNumero <= 2100
+                            ? getTrimestre(anoMensalidadeNumero, mensalidadeTrimestreNumero)
+                            : null;
+                          if (tipoSelecionado === "contribuicao") {
+                            setIsBatchMode(false);
+                            setBatchEmpresaIds([]);
+                            setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(anoAtual));
+                          }
                           setBoletoForm({
                             ...boletoForm,
                             tipo: tipoSelecionado,
+                            competenciaInicial: tipoSelecionado === "mensalidade" ? trimestreMensalidade?.inicioIso ?? "" : boletoForm.competenciaInicial,
+                            competenciaFinal: tipoSelecionado === "mensalidade" ? trimestreMensalidade?.fimIso ?? "" : boletoForm.competenciaFinal,
+                            mensagemPersonalizada: tipoSelecionado === "mensalidade" && trimestreMensalidade
+                              ? `Boleto referente à competência ${getCompetenciaRangeLabel(trimestreMensalidade.inicioIso, trimestreMensalidade.fimIso)}`
+                              : boletoForm.mensagemPersonalizada,
+                            anoContribuicao: tipoSelecionado === "contribuicao" ? anoAtual : boletoForm.anoContribuicao,
+                            periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : boletoForm.periodicidade,
+                            parcelas: tipoSelecionado === "contribuicao" ? "2" : boletoForm.parcelas,
+                            percentual: tipoSelecionado === "contribuicao" ? boletoForm.percentual || "2" : boletoForm.percentual,
                             pesquisaContribuicaoFeita: false,
                             valorCalculado: 0,
                           });
@@ -2903,23 +4210,47 @@ const Financeiro = () => {
                             </span>
                           </Label>
                         </div>
-                        <div className="flex items-center space-x-2 border p-3 rounded-lg opacity-60 bg-muted/30">
-                          <RadioGroupItem value="contribuicao" id="contribuicao" disabled />
-                          <Label htmlFor="contribuicao" className="flex-1 cursor-not-allowed">
+                        <div className="flex items-center space-x-2 border p-3 rounded-lg">
+                          <RadioGroupItem value="contribuicao" id="contribuicao" />
+                          <Label htmlFor="contribuicao" className="flex-1 cursor-pointer">
                             Contribuição Assistencial
                             <span className="block text-xs text-muted-foreground mt-1">
-                              Em breve será implementado.
+                              Use a folha de agosto e escolha entre boleto único ou duas parcelas.
                             </span>
                           </Label>
                         </div>
                       </RadioGroup>
                     </div>
 
-                    <div className="space-y-3">
+                    {boletoForm.tipo !== "contribuicao" && <div className="space-y-3">
                       <Label htmlFor="empresaSearch" className="text-base font-semibold">Empresa*</Label>
                       {isBatchMode && <p className="text-xs text-muted-foreground">Modo lote ativo: selecione várias empresas (salvo no navegador).</p>}
                       {isBatchMode && (
                         <div className="space-y-2 rounded-md border p-3">
+                          <div className="flex flex-col gap-3 rounded-md border border-primary/20 bg-primary/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="font-medium">Mensalidades trimestrais automáticas</p>
+                              <p className="text-xs text-muted-foreground">Analisa todas as faixas e gera somente as competências que ainda faltam.</p>
+                            </div>
+                            <Button
+                              type="button"
+                              className="shrink-0 bg-[#00A86B] hover:bg-[#00A86B]/90"
+                              disabled={isEmittingBoletos}
+                              onClick={() => {
+                                const agora = new Date();
+                                setTrimestreAutomaticoAno(String(agora.getFullYear()));
+                                setTrimestreAutomaticoNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+                                setTrimestreAutomaticoVencimento("");
+                                setTrimestreAutomaticoProgress(INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS);
+                                setWizardOpen(false);
+                                setIsBatchMode(false);
+                                setTrimestreAutomaticoOpen(true);
+                              }}
+                            >
+                              <Calculator className="h-4 w-4 mr-2" />
+                              Gerar boletos do trimestre automático
+                            </Button>
+                          </div>
                           <Label>Tipo de vínculo para o lote</Label>
                           <Select
                             value={batchTipoVinculo}
@@ -3074,7 +4405,7 @@ const Financeiro = () => {
                           <Button type="button" variant="outline" size="sm" onClick={() => setBatchEmpresaIds([])}>Deselecionar tudo</Button>
                         </div>
                       )}
-                    </div>
+                    </div>}
                   </div>
                 )}
 
@@ -3095,32 +4426,44 @@ const Financeiro = () => {
                         <CardTitle className="text-lg">Detalhes da mensalidade</CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div className="space-y-2">
-                            <Label>Competência Inicial*</Label>
-                            <MonthPickerField
-                              value={boletoForm.competenciaInicial}
-                              placeholder="Selecione a competência inicial"
-                              onChange={(value) => setBoletoForm((prev) => ({
-                                ...prev,
-                                competenciaInicial: value,
-                                competenciaFinal: prev.competenciaFinal || value,
-                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(value, prev.competenciaFinal || value)}`,
-                              }))}
+                            <Label htmlFor="mensalidadeAnoReferencia">Ano de referência*</Label>
+                            <Input
+                              id="mensalidadeAnoReferencia"
+                              type="number"
+                              min={2000}
+                              max={2100}
+                              value={mensalidadeAnoReferencia}
+                              onChange={(event) => aplicarTrimestreMensalidade(event.target.value, mensalidadeTrimestreNumero)}
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label>Competência Final*</Label>
-                            <MonthPickerField
-                              value={boletoForm.competenciaFinal}
-                              placeholder="Selecione a competência final"
-                              onChange={(value) => setBoletoForm((prev) => ({
-                                ...prev,
-                                competenciaFinal: value,
-                                mensagemPersonalizada: prev.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(prev.competenciaInicial, value)}`,
-                              }))}
-                            />
+                            <Label htmlFor="mensalidadeTrimestreReferencia">Trimestre de referência*</Label>
+                            <Select
+                              value={String(mensalidadeTrimestreNumero)}
+                              onValueChange={(value) => aplicarTrimestreMensalidade(mensalidadeAnoReferencia, Number(value) as TrimestreNumero)}
+                            >
+                              <SelectTrigger id="mensalidadeTrimestreReferencia"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                                <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                                <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                                <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
+                        </div>
+                        <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                          <p className="font-medium">Competência fixa do trimestre</p>
+                          <p className="text-muted-foreground">
+                            {boletoForm.competenciaInicial && boletoForm.competenciaFinal
+                              ? `${getTrimestreLabel(mensalidadeTrimestreNumero)} de ${mensalidadeAnoReferencia} (${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}).`
+                              : "Informe um ano válido entre 2000 e 2100."}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Se unificar, será criado um boleto para todo o trimestre. Se não unificar, será criado um boleto para cada mês desse trimestre.
+                          </p>
                         </div>
 
                         {((!isBatchMode && mockEmpresas.find((empresa) => empresa.id === boletoForm.empresaId)?.tipoVinculo !== "Associado") || (isBatchMode && batchTipoVinculo !== "Associado")) && (
@@ -3223,11 +4566,99 @@ const Financeiro = () => {
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "contribuicao" && (
-                  <Card className="border-dashed">
-                    <CardContent className="p-6 text-sm text-muted-foreground">
-                      Contribuição Assistencial estará disponível em breve.
-                    </CardContent>
-                  </Card>
+                  <div className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-lg">Contribuição Assistencial em lote</CardTitle>
+                        <p className="text-sm text-muted-foreground">Preencha a folha de agosto de cada empresa. O cálculo e a divisão dos boletos são feitos automaticamente.</p>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="anoContribuicao">Ano da contribuição*</Label>
+                            <Input
+                              id="anoContribuicao"
+                              inputMode="numeric"
+                              maxLength={4}
+                              placeholder="2026"
+                              value={boletoForm.anoContribuicao}
+                              onChange={(event) => {
+                                const ano = event.target.value.replace(/[^0-9]/g, "").slice(0, 4);
+                                setBoletoForm({ ...boletoForm, anoContribuicao: ano });
+                                if (ano.length === 4) setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(ano));
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="percentualContribuicao">Percentual sobre a folha (%)*</Label>
+                            <Input
+                              id="percentualContribuicao"
+                              inputMode="decimal"
+                              placeholder="2"
+                              value={boletoForm.percentual}
+                              onChange={(event) => setBoletoForm({ ...boletoForm, percentual: event.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label>Vencimento do boleto / 1ª parcela*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela1} placeholder="Selecione o vencimento" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela1: value })} />
+                          </div>
+                          {contribuicaoLoteRows.some((row) => row.quantidadeParcelas === 2) && <div className="space-y-2">
+                            <Label>Vencimento da 2ª parcela*</Label>
+                            <DatePickerField value={boletoForm.vencimentoParcela2} placeholder="Selecione o segundo vencimento" onChange={(value) => setBoletoForm({ ...boletoForm, vencimentoParcela2: value })} />
+                          </div>}
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="font-semibold">Empresas contribuintes de {Number(boletoForm.anoContribuicao || new Date().getFullYear()) - 1}</p>
+                              <p className="text-xs text-muted-foreground">“Folha anterior” é a base registrada no ano passado. Marque repetir quando a empresa não enviar a folha atual.</p>
+                            </div>
+                            <Button type="button" variant="outline" size="sm" onClick={() => setContribuicaoLoteRows(buildContribuicaoRowsFromPreviousYear(boletoForm.anoContribuicao))}>Recarregar ano anterior</Button>
+                          </div>
+                          <div className="overflow-x-auto rounded-lg border">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="min-w-44">Nome</TableHead>
+                                  <TableHead className="min-w-32">Folha anterior</TableHead>
+                                  <TableHead className="min-w-36">Folha de agosto</TableHead>
+                                  <TableHead className="min-w-28">Repetir valor</TableHead>
+                                  <TableHead className="min-w-32">Cálculo</TableHead>
+                                  <TableHead className="min-w-28">Boletos</TableHead>
+                                  <TableHead className="w-12"></TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {contribuicaoLoteRows.length === 0 ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma empresa encontrada no ano anterior. Adicione uma empresa abaixo.</TableCell></TableRow> : contribuicaoLoteRows.map((row) => {
+                                  const folhaAtual = parseCurrencyInput(row.folhaAtual);
+                                  const percentual = Number(boletoForm.percentual.replace(",", ".")) || 0;
+                                  return <TableRow key={row.empresaId}>
+                                    <TableCell className="font-medium">{row.empresaNome}</TableCell>
+                                    <TableCell>{row.folhaAnoAnterior > 0 ? formatCurrencyBRL(row.folhaAnoAnterior) : "—"}</TableCell>
+                                    <TableCell><Input inputMode="decimal" placeholder="0,00" value={row.folhaAtual} disabled={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { folhaAtual: event.target.value, repetiuFolhaAnterior: false })} /></TableCell>
+                                    <TableCell><label className="flex items-center gap-2 text-xs"><input type="checkbox" disabled={row.folhaAnoAnterior <= 0} checked={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { repetiuFolhaAnterior: event.target.checked, folhaAtual: event.target.checked ? row.folhaAnoAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "" })} />Ano anterior</label></TableCell>
+                                    <TableCell className="font-semibold text-primary">{folhaAtual > 0 ? formatCurrencyBRL((folhaAtual * percentual) / 100) : "—"}</TableCell>
+                                    <TableCell><Select value={String(row.quantidadeParcelas)} onValueChange={(value) => updateContribuicaoLoteRow(row.empresaId, { quantidadeParcelas: Number(value) as 1 | 2 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">Único</SelectItem><SelectItem value="2">2 parcelas</SelectItem></SelectContent></Select></TableCell>
+                                    <TableCell><Button type="button" variant="ghost" size="sm" aria-label={`Remover ${row.empresaNome}`} onClick={() => setContribuicaoLoteRows((rows) => rows.filter((item) => item.empresaId !== row.empresaId))}>×</Button></TableCell>
+                                  </TableRow>;
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                          <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 sm:flex-row sm:items-end">
+                            <div className="flex-1 space-y-2"><Label>Adicionar empresa da lista</Label><Select value={empresaContribuicaoParaAdicionar} onValueChange={setEmpresaContribuicaoParaAdicionar}><SelectTrigger><SelectValue placeholder="Selecione uma empresa" /></SelectTrigger><SelectContent>{mockEmpresas.filter((empresa) => !contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)).map((empresa) => <SelectItem key={empresa.id} value={empresa.id}>{empresa.nome}</SelectItem>)}</SelectContent></Select></div>
+                            <Button type="button" variant="outline" disabled={!empresaContribuicaoParaAdicionar} onClick={addEmpresaAoLoteContribuicao}>Adicionar</Button>
+                            <Button type="button" variant="outline" onClick={() => { setWizardOpen(false); navigate("/dashboard/empresas"); }}>Novo cadastro</Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
                 )}
 
                 {wizardStep === 2 && boletoForm.tipo === "avulso" && (
@@ -3294,7 +4725,7 @@ const Financeiro = () => {
                         <div className="grid grid-cols-2 gap-3 text-sm">
                           <div>
                             <p className="font-semibold text-muted-foreground">Empresa:</p>
-                            <p className="font-medium">{isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
+                            <p className="font-medium">{boletoForm.tipo === "contribuicao" ? `${contribuicaoLoteRows.length} empresa(s) selecionada(s)` : isBatchMode ? `${batchEmpresaIds.length} empresa(s) selecionada(s)` : boletoForm.empresaNome}</p>
                           </div>
                           <div>
                             <p className="font-semibold text-muted-foreground">Tipo:</p>
@@ -3360,38 +4791,18 @@ const Financeiro = () => {
                                 <p className="font-medium">{boletoForm.anoContribuicao}</p>
                               </div>
                               <div>
-                                <p className="font-semibold text-muted-foreground">Periodicidade:</p>
-                                <p className="font-medium">{boletoForm.periodicidade}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Qtde. Parcelas:</p>
-                                <p className="font-medium">{boletoForm.parcelas}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Data de Vencimento:</p>
-                                <p className="font-medium">{formatDateBR(boletoForm.dataVencimento)}</p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Base de Cálculo (R$):</p>
-                                <p className="font-medium">
-                                  R$ {parseCurrencyInput(boletoForm.baseCalculo).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
-                              </div>
-                              <div>
                                 <p className="font-semibold text-muted-foreground">Percentual (%):</p>
                                 <p className="font-medium">{boletoForm.percentual}</p>
                               </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Descontos/Isenções (R$):</p>
-                                <p className="font-medium">
-                                  R$ {parseCurrencyInput(boletoForm.descontos).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-muted-foreground">Valor Calculado (R$):</p>
-                                <p className="font-medium text-primary">
-                                  R$ {boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                                </p>
+                              <div className="col-span-2 overflow-x-auto rounded-md border">
+                                <Table>
+                                  <TableHeader><TableRow><TableHead>Empresa</TableHead><TableHead>Folha de agosto</TableHead><TableHead>Origem</TableHead><TableHead>Contribuição</TableHead><TableHead>Boletos</TableHead></TableRow></TableHeader>
+                                  <TableBody>{contribuicaoLoteRows.map((row) => {
+                                    const folha = parseCurrencyInput(row.folhaAtual);
+                                    const valor = folha * (Number(boletoForm.percentual.replace(",", ".")) || 0) / 100;
+                                    return <TableRow key={row.empresaId}><TableCell className="font-medium">{row.empresaNome}</TableCell><TableCell>{formatCurrencyBRL(folha)}</TableCell><TableCell>{row.repetiuFolhaAnterior ? <Badge variant="outline">Repetida do ano anterior</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell><TableCell className="font-semibold">{formatCurrencyBRL(valor)}</TableCell><TableCell className="max-w-72 text-xs">{row.quantidadeParcelas === 1 ? getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 1) : <><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 2)}</div><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 2, 2)}</div></>}</TableCell></TableRow>;
+                                  })}</TableBody>
+                                </Table>
                               </div>
                             </>
                           )}
@@ -3400,7 +4811,7 @@ const Financeiro = () => {
                           <p className="text-sm font-semibold text-muted-foreground">Valor estimado:</p>
                           <p className="text-3xl font-bold text-primary">
                             {boletoForm.tipo === "contribuicao"
-                              ? `R$ ${boletoForm.valorCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                              ? formatCurrencyBRL(contribuicaoLoteRows.reduce((total, row) => total + parseCurrencyInput(row.folhaAtual) * (Number(boletoForm.percentual.replace(",", ".")) || 0) / 100, 0))
                               : boletoForm.tipo === "avulso"
                                 ? `R$ ${parseCurrencyInput(boletoForm.valorAvulso).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
                               : `R$ ${getMensalidadePreview().valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`}
@@ -3438,7 +4849,7 @@ const Financeiro = () => {
                       </Button>
                     ) : (
                       <Button onClick={() => void handleEmitirBoleto()} disabled={isEmittingBoletos || createBoletoMutation.isPending} className="bg-[#00A86B] hover:bg-[#00A86B]/90">
-                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : "Emitir"}
+                        {isEmittingBoletos || createBoletoMutation.isPending ? "Emitindo..." : boletoForm.tipo === "contribuicao" ? "Gerar boletos do lote" : "Emitir"}
                       </Button>
                     )}
                   </div>

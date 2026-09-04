@@ -631,8 +631,11 @@ const Empresas = () => {
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const somenteSemDataAssociacao = searchParams.get("semDataAssociacao") === "1";
   const [searchTerm, setSearchTerm] = useState("");
-  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
+  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">(
+    somenteSemDataAssociacao ? "Associadas" : "Todas",
+  );
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
   const [porteFilter, setPorteFilter] = useState<string>("");
   const [faixaFilter, setFaixaFilter] = useState<string>("");
@@ -1234,6 +1237,7 @@ const Empresas = () => {
         associationFilter === "Todas" ||
         (associationFilter === "Associadas" && empresa.associado) ||
         (associationFilter === "Não associadas" && !empresa.associado);
+      const matchesDataAssociacao = !somenteSemDataAssociacao || (empresa.associado && !empresa.dataAssociacao);
 
       const matchesSituacao = situacaoFilter === "Todas" || empresa.situacaoFinanceira === situacaoFilter;
       const matchesPorte = !porteFilter || empresa.porte === porteFilter;
@@ -1257,9 +1261,9 @@ const Empresas = () => {
         return true;
       })();
 
-      return matchesSearch && matchesAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
+      return matchesSearch && matchesAssociacao && matchesDataAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
     });
-  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
+  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter, somenteSemDataAssociacao]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
   const paginatedEmpresas = useMemo(() => {
@@ -2272,6 +2276,9 @@ const Empresas = () => {
                     setPeriodoTipo("fundacao");
                     setPeriodoInicio("");
                     setPeriodoFim("");
+                    const nextParams = new URLSearchParams(searchParams);
+                    nextParams.delete("semDataAssociacao");
+                    setSearchParams(nextParams, { replace: true });
                   }}
                   aria-label="Limpar filtros"
                 >
@@ -2280,6 +2287,24 @@ const Empresas = () => {
               </div>
 
               <div className="mt-4 space-y-3">
+                {somenteSemDataAssociacao && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-medium">Filtro ativo: associadas sem data de associação.</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="self-start text-amber-950 hover:bg-amber-100 sm:self-auto"
+                      onClick={() => {
+                        const nextParams = new URLSearchParams(searchParams);
+                        nextParams.delete("semDataAssociacao");
+                        setSearchParams(nextParams, { replace: true });
+                      }}
+                    >
+                      Mostrar todas
+                    </Button>
+                  </div>
+                )}
                 <div className="relative w-full">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
