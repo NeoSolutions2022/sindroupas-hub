@@ -5,8 +5,10 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -33,7 +35,26 @@ type ContribuicaoRow = {
   valor?: number | null;
   vencimento?: string | null;
   situacao?: string | null;
+  folha_repetida_ano_anterior?: boolean | null;
   empresa?: { id: string; razao_social: string } | null;
+};
+
+type BoletoContribuicaoRow = {
+  ano?: string | null;
+  vencimento?: string | null;
+  efi_status?: string | null;
+  descricao?: string | null;
+  empresa?: { id: string } | null;
+};
+
+type HistoricoContribuicaoView = HistoricoContribuicao & { parcela?: string; folhaRepetidaAnoAnterior: boolean };
+
+const normalizeSituacao = (status?: string | null) => {
+  const normalized = status?.trim().toLowerCase();
+  if (["pago", "paid", "liquidado", "recebido"].includes(normalized ?? "")) return "Pago";
+  if (["cancelado", "canceled", "cancelled"].includes(normalized ?? "")) return "Cancelado";
+  if (["inadimplente", "atrasado", "vencido", "overdue"].includes(normalized ?? "")) return "Inadimplente";
+  return "Aguardando";
 };
 
 const CONTRIBUICAO_QUERY = `
@@ -49,10 +70,18 @@ const CONTRIBUICAO_QUERY = `
       valor
       vencimento
       situacao
+      folha_repetida_ano_anterior
       empresa {
         id
         razao_social
       }
+    }
+    financeiro_boletos(where: { tipo: { _in: ["contribuicao", "Contribuição Assistencial"] } }) {
+      ano
+      vencimento
+      efi_status
+      descricao
+      empresa { id }
     }
   }
 `;
@@ -63,40 +92,58 @@ const FinanceiroContribuicao = () => {
   const { token } = useAuth();
   const [anoFiltro, setAnoFiltro] = useState("");
   const [empresaFiltro, setEmpresaFiltro] = useState("");
+  const [situacaoFiltro, setSituacaoFiltro] = useState("todas");
   const { data, isLoading, error } = useQuery({
     queryKey: ["contribuicoes-assistenciais"],
     queryFn: () =>
-      hasuraRequest<{ contribuicoes_assistenciais: ContribuicaoRow[] }>({
+      hasuraRequest<{ contribuicoes_assistenciais: ContribuicaoRow[]; financeiro_boletos: BoletoContribuicaoRow[] }>({
         query: CONTRIBUICAO_QUERY,
         token,
       }),
   });
 
-  const historico = useMemo<HistoricoContribuicao[]>(() => {
+  const historico = useMemo<HistoricoContribuicaoView[]>(() => {
     return (
-      data?.contribuicoes_assistenciais.map((item) => ({
-        id: item.id,
-        ano: item.ano ?? "",
-        empresa: item.empresa?.razao_social ?? "Empresa não informada",
-        periodicidade: item.periodicidade ?? "",
-        parcelas: item.parcelas ?? 0,
-        base: item.base ?? 0,
-        percentual: item.percentual ?? 0,
-        descontos: item.descontos ?? 0,
-        valor: item.valor ?? 0,
-        vencimento: item.vencimento ?? "",
-        situacao: item.situacao ?? "Emitida",
-      })) ?? []
+      data?.contribuicoes_assistenciais.map((item) => {
+        const boleto = data.financeiro_boletos.find((registro) =>
+          registro.empresa?.id === item.empresa?.id &&
+          registro.ano === item.ano &&
+          registro.vencimento === item.vencimento,
+        );
+        return {
+          id: item.id,
+          ano: item.ano ?? "",
+          empresa: item.empresa?.razao_social ?? "Empresa não informada",
+          periodicidade: item.periodicidade ?? "",
+          parcelas: item.parcelas ?? 0,
+          parcela: boleto?.descricao?.match(/\((boleto único|[12]ª parcela de 2)\)/i)?.[1],
+          folhaRepetidaAnoAnterior: item.folha_repetida_ano_anterior ?? false,
+          base: item.base ?? 0,
+          percentual: item.percentual ?? 0,
+          descontos: item.descontos ?? 0,
+          valor: item.valor ?? 0,
+          vencimento: item.vencimento ?? "",
+          situacao: boleto ? normalizeSituacao(boleto.efi_status) : item.situacao ?? "Emitida",
+        };
+      }) ?? []
     );
-  }, [data?.contribuicoes_assistenciais]);
+  }, [data]);
 
   const historicoFiltrado = useMemo(() => {
     return historico.filter((item) => {
       const matchAno = !anoFiltro || item.ano.includes(anoFiltro);
       const matchEmpresa = !empresaFiltro || item.empresa.toLowerCase().includes(empresaFiltro.toLowerCase());
-      return matchAno && matchEmpresa;
+      const matchSituacao = situacaoFiltro === "todas" || item.situacao.toLowerCase() === situacaoFiltro;
+      return matchAno && matchEmpresa && matchSituacao;
     });
-  }, [anoFiltro, empresaFiltro, historico]);
+  }, [anoFiltro, empresaFiltro, historico, situacaoFiltro]);
+
+  const situacaoBadge = (situacao: string) => {
+    if (situacao === "Pago") return <Badge className="bg-emerald-600">Pago</Badge>;
+    if (situacao === "Inadimplente") return <Badge variant="destructive">Inadimplente</Badge>;
+    if (situacao === "Cancelado") return <Badge variant="secondary">Cancelado</Badge>;
+    return <Badge variant="outline">{situacao}</Badge>;
+  };
 
   const handleExport = (formato: "CSV" | "PDF") => {
     toast({
@@ -145,7 +192,7 @@ const FinanceiroContribuicao = () => {
                 <CardTitle className="text-lg">Filtros</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="anoFiltro">Ano</Label>
                     <Input
@@ -164,13 +211,26 @@ const FinanceiroContribuicao = () => {
                       onChange={(e) => setEmpresaFiltro(e.target.value)}
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label>Situação</Label>
+                    <Select value={situacaoFiltro} onValueChange={setSituacaoFiltro}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="todas">Todas</SelectItem>
+                        <SelectItem value="pago">Pagas</SelectItem>
+                        <SelectItem value="aguardando">Aguardando</SelectItem>
+                        <SelectItem value="inadimplente">Inadimplentes</SelectItem>
+                        <SelectItem value="cancelado">Canceladas</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="flex gap-2 mt-4">
                   <Button className="bg-[#00A86B] hover:bg-[#00A86B]/90">
                     <Search className="h-4 w-4 mr-2" />
                     Pesquisar
                   </Button>
-                  <Button variant="outline" onClick={() => { setAnoFiltro(""); setEmpresaFiltro(""); }}>
+                  <Button variant="outline" onClick={() => { setAnoFiltro(""); setEmpresaFiltro(""); setSituacaoFiltro("todas"); }}>
                     Limpar
                   </Button>
                 </div>
@@ -200,6 +260,8 @@ const FinanceiroContribuicao = () => {
                         <TableHead>Empresa</TableHead>
                         <TableHead>Periodicidade</TableHead>
                         <TableHead>Parcelas</TableHead>
+                        <TableHead>Referência</TableHead>
+                        <TableHead>Origem da folha</TableHead>
                         <TableHead>Base (R$)</TableHead>
                         <TableHead>Percentual (%)</TableHead>
                         <TableHead>Descontos (R$)</TableHead>
@@ -211,7 +273,7 @@ const FinanceiroContribuicao = () => {
                     <TableBody>
                       {historicoFiltrado.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={10} className="text-center text-muted-foreground">
+                          <TableCell colSpan={12} className="text-center text-muted-foreground">
                             Nenhum registro encontrado para os filtros selecionados.
                           </TableCell>
                         </TableRow>
@@ -222,12 +284,14 @@ const FinanceiroContribuicao = () => {
                             <TableCell className="font-medium">{item.empresa}</TableCell>
                             <TableCell>{item.periodicidade}</TableCell>
                             <TableCell>{item.parcelas}</TableCell>
+                            <TableCell>{item.parcela ?? "—"}</TableCell>
+                            <TableCell>{item.folhaRepetidaAnoAnterior ? <Badge variant="outline">Repetida</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell>
                             <TableCell>R$ {item.base.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                             <TableCell>{item.percentual}%</TableCell>
                             <TableCell>R$ {item.descontos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                             <TableCell>R$ {item.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                             <TableCell>{item.vencimento}</TableCell>
-                            <TableCell>{item.situacao}</TableCell>
+                            <TableCell>{situacaoBadge(item.situacao)}</TableCell>
                           </TableRow>
                         ))
                       )}

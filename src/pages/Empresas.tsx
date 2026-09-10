@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { TablePagination } from "@/components/ui/table-pagination";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
@@ -69,6 +69,8 @@ const normalizeSearchText = (value?: string | null) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+
+const nullableDate = (value?: string | null) => value?.trim() || null;
 
 type Responsavel = {
   nome?: string;
@@ -628,11 +630,15 @@ const EMPRESAS_QUERY = `
 
 const Empresas = () => {
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const somenteSemDataAssociacao = searchParams.get("semDataAssociacao") === "1";
   const [searchTerm, setSearchTerm] = useState("");
-  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">("Todas");
+  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">(
+    somenteSemDataAssociacao ? "Associadas" : "Todas",
+  );
   const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
   const [porteFilter, setPorteFilter] = useState<string>("");
   const [faixaFilter, setFaixaFilter] = useState<string>("");
@@ -752,8 +758,8 @@ const Empresas = () => {
         whatsapp: empresa.whatsapp ?? undefined,
         endereco: empresa.endereco ?? undefined,
         ...enderecoParts,
-        associado: Boolean(empresa.associada),
-        tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : undefined),
+        associado: Boolean(empresa.data_associacao) && !empresa.data_desassociacao,
+        tipoVinculo: empresa.tipo_vinculo ?? undefined,
         categoriaMantenedor: empresa.categoria_mantenedor ?? undefined,
         valorMensalidadeVinculo: empresa.valor_mensalidade_vinculo ?? undefined,
         situacaoFinanceira: empresa.situacao_financeira === "Inadimplente" ? "Inadimplente" : "Regular",
@@ -817,12 +823,14 @@ const Empresas = () => {
   const saveEmpresaMutation = useMutation({
     mutationFn: async (payload: { values: Partial<Empresa>; id?: string | null }) => {
       const enderecoConsolidado = buildEmpresaEndereco(payload.values);
+      const dataAssociacao = nullableDate(payload.values.dataAssociacao);
+      const dataDesassociacao = nullableDate(payload.values.dataDesassociacao);
       const input = {
         razao_social: payload.values.razaoSocial ?? "",
         nome_fantasia: payload.values.nomeFantasia ?? "",
         cnpj: payload.values.cnpj ?? "",
-        associada: payload.values.dataDesassociacao ? false : (payload.values.associado ?? false),
-        tipo_vinculo: payload.values.tipoVinculo ?? (payload.values.associado ? "Associado" : null),
+        associada: Boolean(dataAssociacao) && !dataDesassociacao,
+        tipo_vinculo: payload.values.tipoVinculo ?? null,
         categoria_mantenedor: payload.values.tipoVinculo === "Mantenedor" ? payload.values.categoriaMantenedor ?? null : null,
         valor_mensalidade_vinculo:
           payload.values.tipoVinculo === "Mantenedor" || payload.values.tipoVinculo === "Parceiro"
@@ -836,9 +844,9 @@ const Empresas = () => {
         email: payload.values.email ?? null,
         whatsapp: payload.values.whatsapp ?? null,
         endereco: enderecoConsolidado || payload.values.endereco || null,
-        data_fundacao: payload.values.dataFundacao ?? null,
-        data_associacao: payload.values.dataAssociacao ?? null,
-        data_desassociacao: payload.values.dataDesassociacao ?? null,
+        data_fundacao: nullableDate(payload.values.dataFundacao),
+        data_associacao: dataAssociacao,
+        data_desassociacao: dataDesassociacao,
       };
 
       const responsaveisBase =
@@ -1234,6 +1242,7 @@ const Empresas = () => {
         associationFilter === "Todas" ||
         (associationFilter === "Associadas" && empresa.associado) ||
         (associationFilter === "Não associadas" && !empresa.associado);
+      const matchesDataAssociacao = !somenteSemDataAssociacao || (empresa.associado && !empresa.dataAssociacao);
 
       const matchesSituacao = situacaoFilter === "Todas" || empresa.situacaoFinanceira === situacaoFilter;
       const matchesPorte = !porteFilter || empresa.porte === porteFilter;
@@ -1257,9 +1266,9 @@ const Empresas = () => {
         return true;
       })();
 
-      return matchesSearch && matchesAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
+      return matchesSearch && matchesAssociacao && matchesDataAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
     });
-  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter]);
+  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter, somenteSemDataAssociacao]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
   const paginatedEmpresas = useMemo(() => {
@@ -1332,8 +1341,8 @@ const Empresas = () => {
     } else {
       setEditingEmpresa(null);
       setFormData({
-        associado: true,
-        tipoVinculo: "Associado",
+        associado: false,
+        tipoVinculo: undefined,
         situacaoFinanceira: "Regular",
         porte: "ME",
         descontoMensalidadePercentual: 0,
@@ -1422,6 +1431,15 @@ const Empresas = () => {
       logoInputRef.current.value = "";
     }
   };
+
+  useEffect(() => {
+    if (searchParams.get("novo") !== "1") return;
+
+    handleOpenDialog();
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("novo");
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     const empresaId = searchParams.get("editar");
@@ -1837,7 +1855,6 @@ const Empresas = () => {
     const requiredChecks = [
       { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
       { key: "cnpj", label: "CNPJ", value: formData.cnpj },
-      { key: "tipoVinculo", label: "Tipo de vínculo", value: formData.tipoVinculo },
       ...(formData.tipoVinculo === "Mantenedor"
         ? [{ key: "categoriaMantenedor", label: "Categoria do mantenedor", value: formData.categoriaMantenedor }]
         : []),
@@ -1890,12 +1907,16 @@ const Empresas = () => {
     saveEmpresaMutation.mutate(
       { values: formData, id: editingEmpresa?.id ?? null },
       {
-        onSuccess: () => {
+        onSuccess: (empresaId) => {
           toast({
-            title: "Empresa atualizada com sucesso",
+            title: editingEmpresa ? "Empresa atualizada com sucesso" : "Empresa cadastrada com sucesso",
             description: "As informações foram registradas corretamente.",
           });
+          const retornarParaContribuicao = searchParams.get("retorno") === "contribuicao";
           handleCloseDialog();
+          if (retornarParaContribuicao) {
+            navigate(`/dashboard/financeiro?retomarContribuicao=1&novaEmpresaContribuicao=${empresaId}`);
+          }
         },
         onError: (err) => {
           toast({
@@ -2272,6 +2293,9 @@ const Empresas = () => {
                     setPeriodoTipo("fundacao");
                     setPeriodoInicio("");
                     setPeriodoFim("");
+                    const nextParams = new URLSearchParams(searchParams);
+                    nextParams.delete("semDataAssociacao");
+                    setSearchParams(nextParams, { replace: true });
                   }}
                   aria-label="Limpar filtros"
                 >
@@ -2280,6 +2304,24 @@ const Empresas = () => {
               </div>
 
               <div className="mt-4 space-y-3">
+                {somenteSemDataAssociacao && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-medium">Filtro ativo: associadas sem data de associação.</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="self-start text-amber-950 hover:bg-amber-100 sm:self-auto"
+                      onClick={() => {
+                        const nextParams = new URLSearchParams(searchParams);
+                        nextParams.delete("semDataAssociacao");
+                        setSearchParams(nextParams, { replace: true });
+                      }}
+                    >
+                      Mostrar todas
+                    </Button>
+                  </div>
+                )}
                 <div className="relative w-full">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -2771,29 +2813,33 @@ const Empresas = () => {
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <Label>Tipo de vínculo*</Label>
+                      <Label>Tipo de vínculo</Label>
                       <Select
-                        value={formData.tipoVinculo || (formData.associado ? "Associado" : undefined)}
-                        onValueChange={(value: TipoVinculo) => setFormData((prev) => ({
-                          ...prev,
-                          tipoVinculo: value,
-                          associado: value === "Associado",
-                          faixaId: value === "Associado" ? prev.faixaId : undefined,
-                          categoriaMantenedor: value === "Mantenedor" ? prev.categoriaMantenedor : undefined,
-                          valorMensalidadeVinculo:
-                            value === "Mantenedor" || value === "Parceiro" ? prev.valorMensalidadeVinculo : undefined,
-                        }))}
+                        value={formData.tipoVinculo || "sem-vinculo"}
+                        onValueChange={(value) => {
+                          const tipoVinculo = value === "sem-vinculo" ? undefined : value as TipoVinculo;
+                          setFormData((prev) => ({
+                            ...prev,
+                            tipoVinculo,
+                            associado: Boolean(prev.dataAssociacao) && !prev.dataDesassociacao,
+                            faixaId: tipoVinculo === "Associado" ? prev.faixaId : undefined,
+                            categoriaMantenedor: tipoVinculo === "Mantenedor" ? prev.categoriaMantenedor : undefined,
+                            valorMensalidadeVinculo:
+                              tipoVinculo === "Mantenedor" || tipoVinculo === "Parceiro" ? prev.valorMensalidadeVinculo : undefined,
+                          }));
+                        }}
                         disabled={isViewMode}
                       >
                         <SelectTrigger><SelectValue placeholder="Selecione o vínculo" /></SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="sem-vinculo">Sem vínculo</SelectItem>
                           <SelectItem value="Associado">Associado</SelectItem>
                           <SelectItem value="Mantenedor">Mantenedor</SelectItem>
                           <SelectItem value="Parceiro">Parceiro</SelectItem>
                           <SelectItem value="Fornecedor">Fornecedor</SelectItem>
                         </SelectContent>
                       </Select>
-                      <p className="text-xs text-muted-foreground">Cada empresa possui somente um tipo de vínculo.</p>
+                      <p className="text-xs text-muted-foreground">A empresa só será considerada associada depois que a data de associação for preenchida.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="razaoSocial">Razão Social*</Label>
@@ -3110,7 +3156,17 @@ const Empresas = () => {
                         id="associacao"
                         type="date"
                         value={formData.dataAssociacao || ""}
-                        onChange={(e) => setFormData((prev) => ({ ...prev, dataAssociacao: e.target.value }))}
+                        onChange={(e) => {
+                          const dataAssociacao = e.target.value || null;
+                          setFormData((prev) => ({
+                            ...prev,
+                            dataAssociacao,
+                            associado: Boolean(dataAssociacao) && !prev.dataDesassociacao,
+                            tipoVinculo: dataAssociacao
+                              ? prev.tipoVinculo ?? "Associado"
+                              : prev.tipoVinculo === "Associado" ? undefined : prev.tipoVinculo,
+                          }));
+                        }}
                         disabled={isViewMode}
                       />
                     </div>
@@ -3121,11 +3177,11 @@ const Empresas = () => {
                         type="date"
                         value={formData.dataDesassociacao || ""}
                         onChange={(e) => {
-                          const dataDesassociacao = e.target.value;
+                          const dataDesassociacao = e.target.value || null;
                           setFormData((prev) => ({
                             ...prev,
                             dataDesassociacao,
-                            ...(dataDesassociacao ? { associado: false } : {}),
+                            associado: Boolean(prev.dataAssociacao) && !dataDesassociacao,
                           }));
                         }}
                         disabled={isViewMode}
