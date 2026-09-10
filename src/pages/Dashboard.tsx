@@ -10,9 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MessageCircle, Phone, BellRing } from "lucide-react";
+import { MessageCircle, Phone, BellRing, Eye, FileText } from "lucide-react";
 import { toast } from "sonner";
-import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfMonth, subMonths } from "date-fns";
+import { addMonths, differenceInCalendarMonths, differenceInDays, endOfMonth, format, isAfter, isBefore, parseISO, startOfDay, startOfMonth, subMonths } from "date-fns";
 import { hasuraRequest } from "@/lib/api/hasura";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -41,10 +41,39 @@ type DashboardEmpresaRow = {
 type DashboardBoletoRow = {
   id: string;
   empresa_id?: string | null;
+  efi_charge_id?: string | null;
   valor?: number | string | null;
   vencimento?: string | null;
   efi_status?: string | null;
+  descricao?: string | null;
+  competencia_inicial?: string | null;
+  competencia_final?: string | null;
+  pdf_url?: string | null;
 };
+
+type DashboardEmpresaView = {
+  id: number;
+  idOriginal: string;
+  nome: string;
+  razaoSocial: string;
+  nomeFantasia: string;
+  cnpj: string;
+  endereco: string;
+  municipio: string | null;
+  associada: boolean;
+  situacao: string;
+  valorEmAberto: number;
+  diasInadimplente: number;
+  historico: string[];
+  whatsapp: string;
+  responsavelNome: string;
+  dataFundacao: string;
+  proximoBoleto?: { data: string; status: string; descricao: string };
+};
+
+type DashboardDrilldown =
+  | { kind: "boletos"; title: string; description: string; rows: DashboardBoletoRow[] }
+  | { kind: "empresas"; title: string; description: string; rows: DashboardEmpresaView[] };
 
 const DASHBOARD_QUERY = `
   query DashboardPage {
@@ -71,9 +100,14 @@ const DASHBOARD_QUERY = `
     financeiro_boletos(order_by: { vencimento: desc }) {
       id
       empresa_id
+      efi_charge_id
       valor
       vencimento
       efi_status
+      descricao
+      competencia_inicial
+      competencia_final
+      pdf_url
     }
   }
 `;
@@ -116,6 +150,7 @@ const Dashboard = () => {
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [aniversarioNoticeOpen, setAniversarioNoticeOpen] = useState(false);
   const [visibleAniversarios, setVisibleAniversarios] = useState(5);
+  const [dashboardDrilldown, setDashboardDrilldown] = useState<DashboardDrilldown | null>(null);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaIncompleta | null>(null);
   const [focusField, setFocusField] = useState<string | undefined>();
   const [formData, setFormData] = useState({
@@ -148,8 +183,10 @@ const Dashboard = () => {
     calendarEvents,
     proximosAniversariosEmpresas,
     dashboardInsights,
+    dashboardDetails,
   } = useMemo(() => {
     const today = new Date();
+    const todayStart = startOfDay(today);
     const rows = data?.empresas ?? [];
     const boletos = data?.financeiro_boletos ?? [];
     const inicioPeriodo = periodoInicio ? parseISO(periodoInicio) : null;
@@ -161,14 +198,14 @@ const Dashboard = () => {
       if (fimPeriodo && isAfter(vencimento, fimPeriodo)) return false;
       return true;
     });
-    const empresasMapeadas = rows.map((empresa, index) => {
+    const empresasMapeadas: DashboardEmpresaView[] = rows.map((empresa, index) => {
       const id = index + 1;
       const nome = empresa.nome_fantasia?.trim() || empresa.razao_social?.trim() || "Empresa sem nome";
       const boletosEmpresa = boletosNoPeriodo.filter((b) => b.empresa_id === empresa.id);
       const emAberto = boletosEmpresa.filter((b) => normalizeStatus(b.efi_status) !== "Pago" && normalizeStatus(b.efi_status) !== "Cancelado");
       const valorEmAberto = emAberto.reduce((acc, b) => acc + (b.valor ? Number(b.valor) : 0), 0);
       const vencidos = emAberto
-        .filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today))
+        .filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), todayStart))
         .sort((a, b) => parseISO(a.vencimento as string).getTime() - parseISO(b.vencimento as string).getTime());
       const diasInadimplente = vencidos.length ? Math.max(0, differenceInDays(today, parseISO(vencidos[0].vencimento as string))) : 0;
       const proximoBoleto = emAberto
@@ -179,6 +216,12 @@ const Dashboard = () => {
         id,
         idOriginal: empresa.id,
         nome,
+        razaoSocial: empresa.razao_social?.trim() || "",
+        nomeFantasia: empresa.nome_fantasia?.trim() || "",
+        cnpj: empresa.cnpj?.trim() || "",
+        endereco: empresa.endereco?.trim() || "",
+        municipio: normalizeMunicipio(empresa.endereco),
+        associada: empresa.associada === true,
         situacao: diasInadimplente > 0 ? "Inadimplente" : "Regular",
         valorEmAberto,
         diasInadimplente,
@@ -241,7 +284,10 @@ const Dashboard = () => {
 
     const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
-    const boletosVencidos = boletosNoPeriodo.filter((b) => b.vencimento && isBefore(parseISO(b.vencimento), today) && normalizeStatus(b.efi_status) !== "Pago");
+    const boletosVencidos = boletosNoPeriodo.filter((b) => {
+      const status = normalizeStatus(b.efi_status);
+      return b.vencimento && isBefore(parseISO(b.vencimento), todayStart) && status !== "Pago" && status !== "Cancelado";
+    });
     const boletosInadimplentesCount = boletosNoPeriodo.filter(
       (b) => (b.efi_status || "").trim().toLowerCase() === "inadimplente",
     ).length;
@@ -263,6 +309,16 @@ const Dashboard = () => {
       return acc + Number(b.valor || 0);
     }, 0);
 
+    const empresasCriticas = empresasMapeadas.filter((e) => e.diasInadimplente > 60);
+    const empresasInadimplentes = empresasMapeadas.filter((e) => e.situacao === "Inadimplente");
+    const empresasEmDia = empresasMapeadas.filter((e) => e.situacao !== "Inadimplente");
+    const proximosVencimentos = boletosNoPeriodo.filter((b) => {
+      const status = normalizeStatus(b.efi_status);
+      if (!b.vencimento || status === "Pago" || status === "Cancelado") return false;
+      const d = parseISO(b.vencimento);
+      return isAfter(d, today) && differenceInDays(d, today) <= 15;
+    });
+
     const kpis = {
       inadimplencia: boletosNoPeriodo.length ? (boletosInadimplentesCount / boletosNoPeriodo.length) * 100 : 0,
       inadimplenciaVariacao: 0,
@@ -270,12 +326,8 @@ const Dashboard = () => {
       totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
       valorEmAtraso: boletosVencidos.reduce((acc, b) => acc + Number(b.valor || 0), 0),
       qtdBoletosVencidos: boletosVencidos.length,
-      empresasCriticas: empresasMapeadas.filter((e) => e.diasInadimplente > 60).length,
-      proximosVencimentos15d: boletosNoPeriodo.filter((b) => {
-        if (!b.vencimento || normalizeStatus(b.efi_status) === "Pago") return false;
-        const d = parseISO(b.vencimento);
-        return isAfter(d, today) && differenceInDays(d, today) <= 15;
-      }).length,
+      empresasCriticas: empresasCriticas.length,
+      proximosVencimentos15d: proximosVencimentos.length,
     };
 
     const incompletas: EmpresaIncompleta[] = empresasMapeadas
@@ -317,8 +369,8 @@ const Dashboard = () => {
         .slice(0, 20)
         .map((b) => ({
           date: b.vencimento as string,
-          type: isBefore(parseISO(b.vencimento as string), today) ? ("atrasado" as const) : ("vencimento" as const),
-          label: isBefore(parseISO(b.vencimento as string), today) ? "Atrasado" : "Vencimento",
+          type: isBefore(parseISO(b.vencimento as string), todayStart) ? ("atrasado" as const) : ("vencimento" as const),
+          label: isBefore(parseISO(b.vencimento as string), todayStart) ? "Atrasado" : "Vencimento",
           detail: `Boleto ${formatCurrency(Number(b.valor || 0))}`,
         })),
       ...proximosTresMeses.map((item) => ({
@@ -329,29 +381,30 @@ const Dashboard = () => {
       })),
     ];
 
-    const quantidadeAssociados = rows.filter((empresa) => empresa.associada === true).length;
+    const empresasAssociadas = empresasMapeadas.filter((empresa) => empresa.associada);
+    const quantidadeAssociados = empresasAssociadas.length;
 
     const maturidadeDistribuicao = MATURIDADE_BUCKETS.map((bucket) => {
-      const quantidade = rows.filter((empresa) => {
-        if (!empresa.data_fundacao) return false;
-        const fundacao = parseISO(empresa.data_fundacao);
+      const empresasNaFaixa = empresasMapeadas.filter((empresa) => {
+        if (!empresa.dataFundacao) return false;
+        const fundacao = parseISO(empresa.dataFundacao);
         if (Number.isNaN(fundacao.getTime())) return false;
         const anos = Math.max(0, differenceInDays(today, fundacao) / 365.25);
         return anos >= bucket.min && anos <= bucket.max;
-      }).length;
+      });
 
-      return { label: bucket.key, quantidade };
+      return { label: bucket.key, quantidade: empresasNaFaixa.length, empresas: empresasNaFaixa };
     });
 
-    const municipioRanking = rows.reduce<Record<string, number>>((acc, empresa) => {
-      const municipio = normalizeMunicipio(empresa.endereco);
+    const municipioRanking = empresasMapeadas.reduce<Record<string, DashboardEmpresaView[]>>((acc, empresa) => {
+      const municipio = empresa.municipio;
       if (!municipio) return acc;
-      acc[municipio] = (acc[municipio] || 0) + 1;
+      acc[municipio] = [...(acc[municipio] || []), empresa];
       return acc;
     }, {});
 
     const municipiosTop = Object.entries(municipioRanking)
-      .map(([municipio, total]) => ({ municipio, total }))
+      .map(([municipio, empresasDoMunicipio]) => ({ municipio, total: empresasDoMunicipio.length, empresas: empresasDoMunicipio }))
       .sort((a, b) => b.total - a.total || a.municipio.localeCompare(b.municipio))
       .slice(0, 9);
 
@@ -371,6 +424,14 @@ const Dashboard = () => {
         quantidadeAssociados,
         maturidadeDistribuicao,
         municipiosTop,
+      },
+      dashboardDetails: {
+        boletosVencidos,
+        proximosVencimentos,
+        empresasCriticas,
+        empresasInadimplentes,
+        empresasEmDia,
+        empresasAssociadas,
       },
     };
   }, [data, periodoFim, periodoInicio]);
@@ -413,7 +474,18 @@ const Dashboard = () => {
   const selectedEmpresa = useMemo(() => {
     if (!selectedEmpresaId) return null;
     return empresas.find((e) => e.id === selectedEmpresaId) || null;
-  }, [selectedEmpresaId]);
+  }, [empresas, selectedEmpresaId]);
+
+  const openBoletosDrilldown = (title: string, description: string, rows: DashboardBoletoRow[]) => {
+    setDashboardDrilldown({ kind: "boletos", title, description, rows });
+  };
+
+  const openEmpresasDrilldown = (title: string, description: string, rows: DashboardEmpresaView[]) => {
+    setDashboardDrilldown({ kind: "empresas", title, description, rows });
+  };
+
+  const findEmpresaByOriginalId = (empresaId?: string | null) =>
+    empresas.find((empresa) => empresa.idOriginal === empresaId);
 
   const handleCorrigirCadastro = (empresa: EmpresaIncompleta, field?: string) => {
     setEditingEmpresa(empresa);
@@ -522,23 +594,53 @@ const Dashboard = () => {
               qtdBoletosVencidos={dashboardKPIs.qtdBoletosVencidos}
               empresasCriticas={dashboardKPIs.empresasCriticas}
               proximosVencimentos={dashboardKPIs.proximosVencimentos15d}
+              onInadimplenciaClick={() => openEmpresasDrilldown(
+                "Empresas inadimplentes",
+                "Empresas com pelo menos um boleto vencido no período selecionado.",
+                dashboardDetails.empresasInadimplentes,
+              )}
+              onValorEmAtrasoClick={() => openBoletosDrilldown(
+                "Boletos em atraso",
+                "Boletos vencidos, não pagos e não cancelados que formam o valor em atraso.",
+                dashboardDetails.boletosVencidos,
+              )}
+              onEmpresasCriticasClick={() => openEmpresasDrilldown(
+                "Empresas críticas",
+                "Empresas cuja cobrança mais antiga está vencida há mais de 60 dias.",
+                dashboardDetails.empresasCriticas,
+              )}
+              onProximosVencimentosClick={() => openBoletosDrilldown(
+                "Próximos vencimentos",
+                "Boletos em aberto com vencimento nos próximos 15 dias.",
+                dashboardDetails.proximosVencimentos,
+              )}
             />
 
             {/* KPIs consultivos */}
             <div className="grid gap-6 lg:grid-cols-2">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-                    Quantidade de associados
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-3xl font-bold">{dashboardInsights.quantidadeAssociados}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Total de empresas associadas na base atual.
-                  </p>
-                </CardContent>
-              </Card>
+              <button
+                type="button"
+                className="rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => openEmpresasDrilldown(
+                  "Empresas associadas",
+                  "Empresas que formam a quantidade total de associados da base atual.",
+                  dashboardDetails.empresasAssociadas,
+                )}
+              >
+                <Card className="h-full transition-colors hover:border-primary/40">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+                      Quantidade de associados
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-3xl font-bold">{dashboardInsights.quantidadeAssociados}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Total de empresas associadas na base atual. Clique para ver.
+                    </p>
+                  </CardContent>
+                </Card>
+              </button>
 
               <Card>
                 <CardHeader className="pb-2">
@@ -552,11 +654,20 @@ const Dashboard = () => {
                       const max = Math.max(...dashboardInsights.maturidadeDistribuicao.map((entry) => entry.quantidade), 1);
                       const height = Math.max(10, Math.round((item.quantidade / max) * 100));
                       return (
-                        <div key={item.label} className="flex flex-col items-center gap-2">
+                        <button
+                          type="button"
+                          key={item.label}
+                          className="flex flex-col items-center gap-2 rounded-md p-1 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          onClick={() => openEmpresasDrilldown(
+                            `Empresas com ${item.label}`,
+                            `Empresas classificadas na faixa de maturidade de ${item.label}.`,
+                            item.empresas,
+                          )}
+                        >
                           <span className="text-xs font-semibold">{item.quantidade}</span>
                           <div className="w-16 rounded-t-md bg-primary" style={{ height: `${height}px` }} />
                           <span className="text-[11px] text-center text-muted-foreground leading-tight">{item.label}</span>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -597,10 +708,22 @@ const Dashboard = () => {
                           </TableRow>
                         ) : (
                           dashboardInsights.municipiosTop.slice(0, 6).map((item, index) => (
-                            <TableRow key={item.municipio}>
+                            <TableRow key={item.municipio} className="hover:bg-muted/60">
                               <TableCell className="text-xs">{index + 1}</TableCell>
-                              <TableCell className="text-xs">{item.municipio}</TableCell>
-                              <TableCell className="text-right text-xs">{item.total}</TableCell>
+                              <TableCell className="p-0 text-xs" colSpan={2}>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center justify-between px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                  onClick={() => openEmpresasDrilldown(
+                                    `Empresas de ${item.municipio}`,
+                                    `Empresas cujo endereço está classificado no município ${item.municipio}.`,
+                                    item.empresas,
+                                  )}
+                                >
+                                  <span>{item.municipio}</span>
+                                  <span className="font-medium">{item.total}</span>
+                                </button>
+                              </TableCell>
                             </TableRow>
                           ))
                         )}
@@ -620,12 +743,147 @@ const Dashboard = () => {
                 boletosEmAtraso={carteiraResumo.boletosEmAtraso}
                 empresasInadimplentes={carteiraResumo.empresasInadimplentes}
                 empresasEmDia={carteiraResumo.empresasEmDia}
+                onBoletosEmAtrasoClick={() => openBoletosDrilldown(
+                  "Boletos em atraso",
+                  "Boletos vencidos, não pagos e não cancelados no período selecionado.",
+                  dashboardDetails.boletosVencidos,
+                )}
+                onEmpresasInadimplentesClick={() => openEmpresasDrilldown(
+                  "Empresas inadimplentes",
+                  "Empresas com pelo menos um boleto vencido no período selecionado.",
+                  dashboardDetails.empresasInadimplentes,
+                )}
+                onEmpresasEmDiaClick={() => openEmpresasDrilldown(
+                  "Empresas em dia",
+                  "Empresas sem boleto vencido no período selecionado.",
+                  dashboardDetails.empresasEmDia,
+                )}
               />
               <EmpresasIncompletas
                 empresas={empresasIncompletas}
                 onCorrigir={handleCorrigirCadastro}
               />
             </div>
+
+            <Dialog open={!!dashboardDrilldown} onOpenChange={(open) => !open && setDashboardDrilldown(null)}>
+              <DialogContent className="max-h-[90vh] max-w-6xl overflow-hidden">
+                {dashboardDrilldown && (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>{dashboardDrilldown.title}</DialogTitle>
+                      <DialogDescription>
+                        {dashboardDrilldown.description} Total encontrado: {dashboardDrilldown.rows.length}.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-[65vh] overflow-auto rounded-md border">
+                      {dashboardDrilldown.kind === "boletos" ? (
+                        <Table>
+                          <TableHeader className="sticky top-0 z-10 bg-background">
+                            <TableRow>
+                              <TableHead>Empresa</TableHead>
+                              <TableHead>Descrição / competência</TableHead>
+                              <TableHead>Vencimento</TableHead>
+                              <TableHead>Dias</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead className="text-right">Valor</TableHead>
+                              <TableHead className="w-14"><span className="sr-only">Ações</span></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {dashboardDrilldown.rows.length === 0 ? (
+                              <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhum boleto encontrado.</TableCell></TableRow>
+                            ) : dashboardDrilldown.rows.map((boleto) => {
+                              const empresa = findEmpresaByOriginalId(boleto.empresa_id);
+                              const competenciaInicial = boleto.competencia_inicial ? format(parseISO(boleto.competencia_inicial), "MM/yyyy") : "";
+                              const competenciaFinal = boleto.competencia_final ? format(parseISO(boleto.competencia_final), "MM/yyyy") : "";
+                              const competencia = competenciaInicial
+                                ? competenciaFinal && competenciaFinal !== competenciaInicial
+                                  ? `${competenciaInicial} a ${competenciaFinal}`
+                                  : competenciaInicial
+                                : "Não informada";
+                              const dias = boleto.vencimento ? differenceInDays(new Date(), parseISO(boleto.vencimento)) : 0;
+                              return (
+                                <TableRow key={boleto.id}>
+                                  <TableCell>
+                                    <p className="font-medium">{empresa?.nome || "Empresa não encontrada"}</p>
+                                    {boleto.efi_charge_id && <p className="text-xs text-muted-foreground">EFI {boleto.efi_charge_id}</p>}
+                                  </TableCell>
+                                  <TableCell>
+                                    <p className="max-w-72 truncate">{boleto.descricao || "Boleto"}</p>
+                                    <p className="text-xs text-muted-foreground">{competencia}</p>
+                                  </TableCell>
+                                  <TableCell>{boleto.vencimento ? format(parseISO(boleto.vencimento), "dd/MM/yyyy") : "—"}</TableCell>
+                                  <TableCell>{dias > 0 ? `${dias} dia(s)` : "—"}</TableCell>
+                                  <TableCell><Badge variant={normalizeStatus(boleto.efi_status) === "Inadimplente" ? "destructive" : "secondary"}>{normalizeStatus(boleto.efi_status)}</Badge></TableCell>
+                                  <TableCell className="text-right font-medium">{formatCurrency(Number(boleto.valor || 0))}</TableCell>
+                                  <TableCell>
+                                    {boleto.pdf_url && (
+                                      <Button type="button" variant="ghost" size="icon" title="Abrir boleto" onClick={() => window.open(boleto.pdf_url as string, "_blank", "noopener,noreferrer")}>
+                                        <FileText className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      ) : (
+                        <Table>
+                          <TableHeader className="sticky top-0 z-10 bg-background">
+                            <TableRow>
+                              <TableHead>Empresa</TableHead>
+                              <TableHead>CNPJ</TableHead>
+                              <TableHead>Município</TableHead>
+                              <TableHead>Situação</TableHead>
+                              <TableHead>Dias em atraso</TableHead>
+                              <TableHead className="text-right">Em aberto</TableHead>
+                              <TableHead className="w-14"><span className="sr-only">Ações</span></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {dashboardDrilldown.rows.length === 0 ? (
+                              <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma empresa encontrada.</TableCell></TableRow>
+                            ) : dashboardDrilldown.rows.map((empresa) => (
+                              <TableRow key={empresa.idOriginal}>
+                                <TableCell>
+                                  <p className="font-medium">{empresa.nome}</p>
+                                  {empresa.nomeFantasia && empresa.razaoSocial && empresa.nomeFantasia !== empresa.razaoSocial && (
+                                    <p className="text-xs text-muted-foreground">{empresa.razaoSocial}</p>
+                                  )}
+                                </TableCell>
+                                <TableCell>{empresa.cnpj || "—"}</TableCell>
+                                <TableCell>{empresa.municipio || "—"}</TableCell>
+                                <TableCell><Badge variant={empresa.situacao === "Inadimplente" ? "destructive" : "secondary"}>{empresa.situacao}</Badge></TableCell>
+                                <TableCell>{empresa.diasInadimplente > 0 ? `${empresa.diasInadimplente} dia(s)` : "—"}</TableCell>
+                                <TableCell className="text-right font-medium">{formatCurrency(empresa.valorEmAberto)}</TableCell>
+                                <TableCell>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    title="Ver detalhes da empresa"
+                                    onClick={() => {
+                                      setDashboardDrilldown(null);
+                                      setSelectedEmpresaId(empresa.id);
+                                    }}
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDashboardDrilldown(null)}>Fechar</Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
 
             {/* Dialog Detalhes */}
             <Dialog open={!!selectedEmpresa} onOpenChange={(open) => !open && setSelectedEmpresaId(null)}>
