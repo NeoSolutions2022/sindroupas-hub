@@ -24,6 +24,7 @@ import { PrioridadesOperacional, PrioridadeOperacional } from "@/components/dash
 import { CalendarioMensal } from "@/components/dashboard/CalendarioMensal";
 import { ResumoCarteira } from "@/components/dashboard/ResumoCarteira";
 import { EmpresasIncompletas, EmpresaIncompleta } from "@/components/dashboard/EmpresasIncompletas";
+import { ReceitasMensais } from "@/components/dashboard/ReceitasMensais";
 
 type DashboardEmpresaRow = {
   id: string;
@@ -147,6 +148,7 @@ const Dashboard = () => {
   // State
   const [periodoInicio, setPeriodoInicio] = useState(format(startOfMonth(subMonths(hoje, 11)), "yyyy-MM-dd"));
   const [periodoFim, setPeriodoFim] = useState(format(hoje, "yyyy-MM-dd"));
+  const [anoReceitas, setAnoReceitas] = useState(hoje.getFullYear());
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [aniversarioNoticeOpen, setAniversarioNoticeOpen] = useState(false);
   const [visibleAniversarios, setVisibleAniversarios] = useState(5);
@@ -184,6 +186,7 @@ const Dashboard = () => {
     proximosAniversariosEmpresas,
     dashboardInsights,
     dashboardDetails,
+    receitasMensais,
   } = useMemo(() => {
     const today = new Date();
     const todayStart = startOfDay(today);
@@ -408,6 +411,47 @@ const Dashboard = () => {
       .sort((a, b) => b.total - a.total || a.municipio.localeCompare(b.municipio))
       .slice(0, 9);
 
+    const nomesMeses = [
+      "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+      "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+    ];
+    const receitasPorMes = nomesMeses.map((mes, index) => ({
+      chave: `${anoReceitas}-${String(index + 1).padStart(2, "0")}`,
+      mes,
+      recebido: 0,
+      previsto: 0,
+      inadimplente: 0,
+      boletosRecebidos: [] as DashboardBoletoRow[],
+      boletosPrevistos: [] as DashboardBoletoRow[],
+      boletosInadimplentes: [] as DashboardBoletoRow[],
+    }));
+
+    boletos.forEach((boleto) => {
+      if (!boleto.vencimento) return;
+      const vencimento = parseISO(boleto.vencimento);
+      if (Number.isNaN(vencimento.getTime()) || vencimento.getFullYear() !== anoReceitas) return;
+
+      const status = normalizeStatus(boleto.efi_status);
+      if (status === "Cancelado") return;
+
+      const item = receitasPorMes[vencimento.getMonth()];
+      const valor = Number(boleto.valor || 0);
+      if (status === "Pago") {
+        item.recebido += valor;
+        item.boletosRecebidos.push(boleto);
+        return;
+      }
+
+      if (status === "Inadimplente" || isBefore(vencimento, todayStart)) {
+        item.inadimplente += valor;
+        item.boletosInadimplentes.push(boleto);
+        return;
+      }
+
+      item.previsto += valor;
+      item.boletosPrevistos.push(boleto);
+    });
+
     return {
       empresas: empresasMapeadas,
       prioridadesOperacionais: prioridades,
@@ -433,8 +477,9 @@ const Dashboard = () => {
         empresasEmDia,
         empresasAssociadas,
       },
+      receitasMensais: receitasPorMes,
     };
-  }, [data, periodoFim, periodoInicio]);
+  }, [anoReceitas, data, periodoFim, periodoInicio]);
 
   const aniversarioNotificacao = useMemo(() => {
     const proximo = proximosAniversariosEmpresas[0];
@@ -614,6 +659,13 @@ const Dashboard = () => {
                 "Boletos em aberto com vencimento nos próximos 15 dias.",
                 dashboardDetails.proximosVencimentos,
               )}
+            />
+
+            <ReceitasMensais
+              ano={anoReceitas}
+              itens={receitasMensais}
+              onAnoChange={setAnoReceitas}
+              onDetalhar={openBoletosDrilldown}
             />
 
             {/* KPIs consultivos */}
