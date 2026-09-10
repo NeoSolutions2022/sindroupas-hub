@@ -33,6 +33,9 @@ type DashboardEmpresaRow = {
   cnpj?: string | null;
   endereco?: string | null;
   associada?: boolean | null;
+  tipo_vinculo?: string | null;
+  data_associacao?: string | null;
+  data_desassociacao?: string | null;
   whatsapp?: string | null;
   data_fundacao?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null }[];
@@ -85,6 +88,9 @@ const DASHBOARD_QUERY = `
       cnpj
       endereco
       associada
+      tipo_vinculo
+      data_associacao
+      data_desassociacao
       whatsapp
       data_fundacao
       responsaveis {
@@ -201,10 +207,26 @@ const Dashboard = () => {
       if (fimPeriodo && isAfter(vencimento, fimPeriodo)) return false;
       return true;
     });
+    const empresaIdsAssociadasAtuais = new Set(
+      rows
+        .filter((empresa) => (
+          empresa.associada === true
+          && empresa.tipo_vinculo === "Associado"
+          && Boolean(empresa.data_associacao)
+          && !empresa.data_desassociacao
+        ))
+        .map((empresa) => empresa.id),
+    );
+    const boletosAssociadasNoPeriodo = boletosNoPeriodo.filter(
+      (boleto) => Boolean(boleto.empresa_id) && empresaIdsAssociadasAtuais.has(boleto.empresa_id as string),
+    );
     const empresasMapeadas: DashboardEmpresaView[] = rows.map((empresa, index) => {
       const id = index + 1;
       const nome = empresa.nome_fantasia?.trim() || empresa.razao_social?.trim() || "Empresa sem nome";
-      const boletosEmpresa = boletosNoPeriodo.filter((b) => b.empresa_id === empresa.id);
+      const associadaAtual = empresaIdsAssociadasAtuais.has(empresa.id);
+      const boletosEmpresa = associadaAtual
+        ? boletosNoPeriodo.filter((b) => b.empresa_id === empresa.id)
+        : [];
       const emAberto = boletosEmpresa.filter((b) => normalizeStatus(b.efi_status) !== "Pago" && normalizeStatus(b.efi_status) !== "Cancelado");
       const valorEmAberto = emAberto.reduce((acc, b) => acc + (b.valor ? Number(b.valor) : 0), 0);
       const vencidos = emAberto
@@ -224,7 +246,7 @@ const Dashboard = () => {
         cnpj: empresa.cnpj?.trim() || "",
         endereco: empresa.endereco?.trim() || "",
         municipio: normalizeMunicipio(empresa.endereco),
-        associada: empresa.associada === true,
+        associada: associadaAtual,
         situacao: diasInadimplente > 0 ? "Inadimplente" : "Regular",
         valorEmAberto,
         diasInadimplente,
@@ -287,11 +309,11 @@ const Dashboard = () => {
 
     const prioridades = [...prioridadeBoletos, ...prioridadeAniversarios, ...prioridadeSemFundacao];
 
-    const boletosVencidos = boletosNoPeriodo.filter((b) => {
+    const boletosVencidos = boletosAssociadasNoPeriodo.filter((b) => {
       const status = normalizeStatus(b.efi_status);
       return b.vencimento && isBefore(parseISO(b.vencimento), todayStart) && status !== "Pago" && status !== "Cancelado";
     });
-    const boletosInadimplentesCount = boletosNoPeriodo.filter(
+    const boletosInadimplentesCount = boletosAssociadasNoPeriodo.filter(
       (b) => (b.efi_status || "").trim().toLowerCase() === "inadimplente",
     ).length;
     const empresasInadimplentesCount = empresasMapeadas.filter((e) => e.situacao === "Inadimplente").length;
@@ -323,7 +345,7 @@ const Dashboard = () => {
     });
 
     const kpis = {
-      inadimplencia: boletosNoPeriodo.length ? (boletosInadimplentesCount / boletosNoPeriodo.length) * 100 : 0,
+      inadimplencia: boletosAssociadasNoPeriodo.length ? (boletosInadimplentesCount / boletosAssociadasNoPeriodo.length) * 100 : 0,
       inadimplenciaVariacao: 0,
       totalFaturadoMes: faturadoPeriodo,
       totalFaturadoVariacao: faturadoComparativo ? ((faturadoPeriodo - faturadoComparativo) / faturadoComparativo) * 100 : 0,
@@ -459,7 +481,7 @@ const Dashboard = () => {
       carteiraResumo: {
         boletosEmAtraso: boletosVencidos.length,
         empresasInadimplentes: empresasInadimplentesCount,
-        empresasEmDia: Math.max(0, rows.length - empresasInadimplentesCount),
+        empresasEmDia: Math.max(0, empresasMapeadas.filter((empresa) => empresa.associada).length - empresasInadimplentesCount),
       },
       empresasIncompletas: incompletas,
       calendarEvents: events,
