@@ -389,6 +389,8 @@ type ContribuicaoLoteRow = {
   quantidadeParcelas: 1 | 2;
 };
 
+const CONTRIBUICAO_DRAFT_KEY = "financeiro:contribuicao-rascunho";
+
 type TrimestreNumero = 1 | 2 | 3 | 4;
 type MesNoTrimestre = 0 | 1 | 2;
 
@@ -664,6 +666,7 @@ const Financeiro = () => {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
+  const [financeiroTab, setFinanceiroTab] = useState("boletos");
 
   // Advanced filters state
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
@@ -697,6 +700,7 @@ const Financeiro = () => {
   const [regeneratedFromCancel, setRegeneratedFromCancel] = useState<string[]>([]);
   const [isEmittingBoletos, setIsEmittingBoletos] = useState(false);
   const [batchEmissionProgress, setBatchEmissionProgress] = useState({ done: 0, total: 0 });
+  const [emissionSuccess, setEmissionSuccess] = useState<{ title: string; description: string } | null>(null);
   const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
   const [trimestreAutomaticoOpen, setTrimestreAutomaticoOpen] = useState(false);
   const [trimestreAutomaticoConfirmOpen, setTrimestreAutomaticoConfirmOpen] = useState(false);
@@ -808,10 +812,10 @@ const Financeiro = () => {
           nome: empresa.nome_fantasia?.trim() || empresa.razao_social,
           razaoSocial: empresa.razao_social,
           nomeFantasia: empresa.nome_fantasia ?? "",
-          associada: Boolean(empresa.associada),
+          associada: Boolean(empresa.associada) && Boolean(empresa.data_associacao),
           dataAssociacao: empresa.data_associacao ?? "",
           faixaId: empresa.faixa_id ?? "",
-          tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada ? "Associado" : "Fornecedor"),
+          tipoVinculo: empresa.tipo_vinculo ?? (empresa.associada && empresa.data_associacao ? "Associado" : "Fornecedor"),
           categoriaMantenedor: empresa.categoria_mantenedor ?? "",
           valorMensalidadeVinculo: Number(empresa.valor_mensalidade_vinculo ?? 0),
           descontoMensalidadePercentual: Number(empresa.desconto_mensalidade_percentual ?? 0),
@@ -826,6 +830,60 @@ const Financeiro = () => {
       }) ?? [],
     [data?.empresas],
   );
+
+  useEffect(() => {
+    if (searchParams.get("retomarContribuicao") !== "1" || !data?.empresas) return;
+
+    const savedDraft = sessionStorage.getItem(CONTRIBUICAO_DRAFT_KEY);
+    if (!savedDraft) {
+      toast({
+        title: "Rascunho não encontrado",
+        description: "Não foi possível recuperar os dados da contribuição. Inicie o lote novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const draft = JSON.parse(savedDraft) as { boletoForm: BoletoForm; rows: ContribuicaoLoteRow[] };
+      const novaEmpresaId = searchParams.get("novaEmpresaContribuicao");
+      const novaEmpresa = novaEmpresaId ? mockEmpresas.find((empresa) => empresa.id === novaEmpresaId) : null;
+      const rows = Array.isArray(draft.rows) ? [...draft.rows] : [];
+      if (novaEmpresa && !rows.some((row) => row.empresaId === novaEmpresa.id)) {
+        rows.push({
+          empresaId: novaEmpresa.id,
+          empresaNome: novaEmpresa.nome,
+          folhaAnoAnterior: 0,
+          folhaAtual: "",
+          repetiuFolhaAnterior: false,
+          quantidadeParcelas: 2,
+        });
+      }
+
+      setBoletoForm(draft.boletoForm);
+      setContribuicaoLoteRows(rows.sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR")));
+      setFinanceiroTab("contribuicao");
+      setWizardStep(2);
+      setWizardOpen(true);
+      sessionStorage.removeItem(CONTRIBUICAO_DRAFT_KEY);
+
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("retomarContribuicao");
+      nextParams.delete("novaEmpresaContribuicao");
+      setSearchParams(nextParams, { replace: true });
+      toast({
+        title: "Rascunho recuperado",
+        description: novaEmpresa ? `${novaEmpresa.nome} foi adicionada ao lote sem perder os dados preenchidos.` : "Os dados preenchidos da contribuição foram restaurados.",
+      });
+    } catch {
+      sessionStorage.removeItem(CONTRIBUICAO_DRAFT_KEY);
+      toast({
+        title: "Rascunho inválido",
+        description: "Os dados salvos não puderam ser recuperados com segurança.",
+        variant: "destructive",
+      });
+    }
+  }, [data?.empresas, mockEmpresas, searchParams, setSearchParams, toast]);
 
   const createBoletoMutation = useMutation({
     mutationFn: async (payload: BoletoForm) => {
@@ -2298,6 +2356,15 @@ const Financeiro = () => {
     setContribuicaoLoteRows((rows) => rows.map((row) => row.empresaId === empresaId ? { ...row, ...patch } : row));
   };
 
+  const handleNovoCadastroContribuicao = () => {
+    sessionStorage.setItem(CONTRIBUICAO_DRAFT_KEY, JSON.stringify({
+      boletoForm,
+      rows: contribuicaoLoteRows,
+    }));
+    setWizardOpen(false);
+    navigate("/dashboard/empresas?novo=1&retorno=contribuicao");
+  };
+
   const addEmpresaAoLoteContribuicao = () => {
     const empresa = mockEmpresas.find((item) => item.id === empresaContribuicaoParaAdicionar);
     if (!empresa || contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)) return;
@@ -2519,7 +2586,7 @@ const Financeiro = () => {
           setBatchEmissionProgress((prev) => ({ ...prev, done: prev.done + 1 }));
         }
       }
-      toast({
+      const successFeedback = {
         title: boletoForm.tipo === "contribuicao"
           ? "Boletos de Contribuição Assistencial emitidos com sucesso"
           : isBatchMode
@@ -2530,7 +2597,9 @@ const Financeiro = () => {
           : isBatchMode
             ? `${targetEmpresas.length} empresa(s) processada(s).`
             : `Boleto para ${boletoForm.empresaNome} criado.`,
-      });
+      };
+      toast(successFeedback);
+      setEmissionSuccess(successFeedback);
       resetWizard();
     } catch (err) {
       toast({
@@ -2863,7 +2932,7 @@ const Financeiro = () => {
                 </div>
               )}
 
-              <Tabs defaultValue="boletos" className="w-full">
+              <Tabs value={financeiroTab} onValueChange={setFinanceiroTab} className="w-full">
                 <TabsList className="h-10 p-1 bg-muted/50 rounded-lg w-full sm:w-auto grid grid-cols-3 sm:inline-grid">
                   <TabsTrigger value="boletos" className="text-xs sm:text-sm rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">
                     Boletos
@@ -4134,6 +4203,22 @@ const Financeiro = () => {
               </AlertDialogContent>
             </AlertDialog>
 
+            <Dialog open={Boolean(emissionSuccess)} onOpenChange={(open) => !open && setEmissionSuccess(null)}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>{emissionSuccess?.title}</DialogTitle>
+                  <DialogDescription>{emissionSuccess?.description}</DialogDescription>
+                </DialogHeader>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  A emissão foi concluída. A lista financeira já foi atualizada para evitar uma nova geração acidental.
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setEmissionSuccess(null)}>Fechar</Button>
+                  <Button onClick={() => { setFinanceiroTab("boletos"); setEmissionSuccess(null); }}>Ver boletos gerados</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             {/* Wizard de Criação de Boletos */}
             <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
               <DialogContent className={cn("max-h-[90vh] overflow-y-auto", boletoForm.tipo === "contribuicao" ? "max-w-6xl" : "max-w-3xl")}>
@@ -4653,7 +4738,7 @@ const Financeiro = () => {
                           <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 sm:flex-row sm:items-end">
                             <div className="flex-1 space-y-2"><Label>Adicionar empresa da lista</Label><Select value={empresaContribuicaoParaAdicionar} onValueChange={setEmpresaContribuicaoParaAdicionar}><SelectTrigger><SelectValue placeholder="Selecione uma empresa" /></SelectTrigger><SelectContent>{mockEmpresas.filter((empresa) => !contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)).map((empresa) => <SelectItem key={empresa.id} value={empresa.id}>{empresa.nome}</SelectItem>)}</SelectContent></Select></div>
                             <Button type="button" variant="outline" disabled={!empresaContribuicaoParaAdicionar} onClick={addEmpresaAoLoteContribuicao}>Adicionar</Button>
-                            <Button type="button" variant="outline" onClick={() => { setWizardOpen(false); navigate("/dashboard/empresas"); }}>Novo cadastro</Button>
+                            <Button type="button" variant="outline" onClick={handleNovoCadastroContribuicao}>Novo cadastro</Button>
                           </div>
                         </div>
                       </CardContent>
