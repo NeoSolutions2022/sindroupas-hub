@@ -393,6 +393,8 @@ const CONTRIBUICAO_DRAFT_KEY = "financeiro:contribuicao-rascunho";
 
 type TrimestreNumero = 1 | 2 | 3 | 4;
 type MesNoTrimestre = 0 | 1 | 2;
+type PeriodicidadeAutomatica = "Mensal" | "Trimestral";
+type MesNumero = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 type TrimestreAutomaticoRow = {
   empresaId: string;
@@ -531,6 +533,11 @@ const getMesAnoLabel = (date: Date) => {
   ];
   return `${meses[date.getMonth()]} de ${date.getFullYear()}`;
 };
+
+const getMesLabel = (mes: MesNumero) => [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+][mes - 1];
 
 const isBoletoMensalidade = (boleto: Pick<BoletoRegistro, "tipo">) =>
   boleto.tipo === "Mensalidade (por Faixa)";
@@ -704,8 +711,12 @@ const Financeiro = () => {
   const [sendingBoletoCommunication, setSendingBoletoCommunication] = useState<string | null>(null);
   const [trimestreAutomaticoOpen, setTrimestreAutomaticoOpen] = useState(false);
   const [trimestreAutomaticoConfirmOpen, setTrimestreAutomaticoConfirmOpen] = useState(false);
+  const [periodicidadeAutomatica, setPeriodicidadeAutomatica] = useState<PeriodicidadeAutomatica>("Trimestral");
   const [trimestreAutomaticoNumero, setTrimestreAutomaticoNumero] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
+  );
+  const [mesAutomaticoNumero, setMesAutomaticoNumero] = useState<MesNumero>(
+    () => (new Date().getMonth() + 1) as MesNumero,
   );
   const [trimestreAutomaticoAno, setTrimestreAutomaticoAno] = useState(() => String(new Date().getFullYear()));
   const [trimestreAutomaticoVencimento, setTrimestreAutomaticoVencimento] = useState("");
@@ -1037,9 +1048,14 @@ const Financeiro = () => {
     const ano = Number(trimestreAutomaticoAno);
     if (!Number.isInteger(ano) || ano < 2000 || ano > 2100) return [];
 
-    const trimestre = getTrimestre(ano, trimestreAutomaticoNumero);
-    const janelaInicio = startOfMonth(addMonths(trimestre.inicio, -1));
-    const janelaFimExclusivo = startOfMonth(addMonths(trimestre.fim, 1));
+    const referencia = periodicidadeAutomatica === "Mensal"
+      ? (() => {
+          const mes = startOfMonth(new Date(ano, mesAutomaticoNumero - 1, 1));
+          return { inicio: mes, fim: mes, meses: [mes] };
+        })()
+      : getTrimestre(ano, trimestreAutomaticoNumero);
+    const janelaInicio = startOfMonth(addMonths(referencia.inicio, -1));
+    const janelaFimExclusivo = startOfMonth(addMonths(referencia.fim, 1));
 
     return mockEmpresas
       .filter((empresa) => {
@@ -1050,14 +1066,14 @@ const Financeiro = () => {
       .map((empresa) => {
         const dataAssociacao = parseISO(empresa.dataAssociacao);
         const entradaRecente = !isBefore(dataAssociacao, janelaInicio);
-        let primeiraCompetencia = trimestre.inicio;
+        let primeiraCompetencia = referencia.inicio;
         if (entradaRecente) {
           primeiraCompetencia = startOfMonth(dataAssociacao);
           if (dataAssociacao.getDate() >= 28) primeiraCompetencia = startOfMonth(addMonths(primeiraCompetencia, 1));
-          if (isBefore(primeiraCompetencia, trimestre.inicio)) primeiraCompetencia = trimestre.inicio;
+          if (isBefore(primeiraCompetencia, referencia.inicio)) primeiraCompetencia = referencia.inicio;
         }
 
-        const competenciasEmitidas = trimestre.meses
+        const competenciasEmitidas = referencia.meses
           .filter((mes) => boletos.some((boleto) =>
             boleto.empresaId === empresa.id &&
             boleto.tipo === "Mensalidade (por Faixa)" &&
@@ -1066,13 +1082,13 @@ const Financeiro = () => {
           ))
           .map((mes) => format(mes, "yyyy-MM-dd"));
 
-        const primeiroIndiceElegivel = trimestre.meses.findIndex((mes) => !isBefore(mes, primeiraCompetencia));
-        const ultimoIndiceEmitido = trimestre.meses.reduce((ultimo, mes, index) =>
+        const primeiroIndiceElegivel = referencia.meses.findIndex((mes) => !isBefore(mes, primeiraCompetencia));
+        const ultimoIndiceEmitido = referencia.meses.reduce((ultimo, mes, index) =>
           competenciasEmitidas.includes(format(mes, "yyyy-MM-dd")) ? index : ultimo, -1);
         const primeiroIndicePendente = primeiroIndiceElegivel < 0
-          ? trimestre.meses.length
+          ? referencia.meses.length
           : Math.max(primeiroIndiceElegivel, ultimoIndiceEmitido + 1);
-        const competenciasPendentes = trimestre.meses
+        const competenciasPendentes = referencia.meses
           .slice(primeiroIndicePendente)
           .map((mes) => format(mes, "yyyy-MM-dd"));
 
@@ -1109,7 +1125,7 @@ const Financeiro = () => {
         }
         return a.empresaNome.localeCompare(b.empresaNome, "pt-BR");
       });
-  }, [boletos, faixas, mockEmpresas, trimestreAutomaticoAno, trimestreAutomaticoNumero]);
+  }, [boletos, faixas, mesAutomaticoNumero, mockEmpresas, periodicidadeAutomatica, trimestreAutomaticoAno, trimestreAutomaticoNumero]);
 
   const empresasAssociadasSemData = useMemo(
     () => mockEmpresas.filter((empresa) => empresa.associada && empresa.tipoVinculo === "Associado" && !empresa.dataAssociacao),
@@ -1119,7 +1135,8 @@ const Financeiro = () => {
   const trimestreAutomaticoPendentes = planoTrimestreAutomatico.filter((row) => row.competenciasPendentes.length > 0);
   const trimestreAutomaticoImpedidas = trimestreAutomaticoPendentes.filter((row) => row.impedimentos.length > 0);
   const trimestreAutomaticoValorTotal = trimestreAutomaticoPendentes.reduce((total, row) => total + row.valorTotal, 0);
-  const trimestreAutomaticoQuantidadeBoletos = trimestreAutomaticoUnificarCompetencias === "Sim"
+  const unificarCompetenciasAutomaticas = periodicidadeAutomatica === "Mensal" ? "Sim" : trimestreAutomaticoUnificarCompetencias;
+  const trimestreAutomaticoQuantidadeBoletos = unificarCompetenciasAutomaticas === "Sim"
     ? trimestreAutomaticoPendentes.length
     : trimestreAutomaticoPendentes.reduce((total, row) => total + row.competenciasPendentes.length, 0);
   const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
@@ -2621,7 +2638,12 @@ const Financeiro = () => {
       return;
     }
     if (trimestreAutomaticoPendentes.length === 0) {
-      toast({ title: "Nenhum boleto necessário", description: "Todas as competências elegíveis desse trimestre já foram emitidas." });
+      toast({
+        title: "Nenhum boleto necessário",
+        description: periodicidadeAutomatica === "Mensal"
+          ? "A competência desse mês já foi emitida para todas as associadas elegíveis."
+          : "Todas as competências elegíveis desse trimestre já foram emitidas.",
+      });
       return;
     }
     if (trimestreAutomaticoImpedidas.length > 0) {
@@ -2640,7 +2662,8 @@ const Financeiro = () => {
       impedimentos: [...row.impedimentos],
     }));
     const vencimento = trimestreAutomaticoVencimento;
-    const unificarCompetencias = trimestreAutomaticoUnificarCompetencias;
+    const unificarCompetencias = unificarCompetenciasAutomaticas;
+    const periodicidade = periodicidadeAutomatica;
     const trimestreNumero = trimestreAutomaticoNumero;
     const trimestreAno = trimestreAutomaticoAno;
     const totalOperacoes = unificarCompetencias === "Sim"
@@ -2687,7 +2710,7 @@ const Financeiro = () => {
               ? `Mensalidade de ${formatCompetenciaBR(primeiraCompetencia)}.`
               : `Mensalidades do ${trimestreNumero}º trimestre de ${trimestreAno}, referentes às competências ${competencia}.`,
             anoContribuicao: "",
-            periodicidade: "Trimestral",
+            periodicidade,
             parcelas: "1",
             baseCalculo: "",
             percentual: "",
@@ -2752,7 +2775,7 @@ const Financeiro = () => {
       }
 
       toast({
-        title: "Trimestre processado com sucesso",
+        title: periodicidade === "Mensal" ? "Mês processado com sucesso" : "Trimestre processado com sucesso",
         description: `${emitidos} boleto(s) gerado(s). ${planoTrimestreAutomatico.length - trimestreAutomaticoPendentes.length} empresa(s) não precisavam de nova emissão.`,
       });
       setTrimestreAutomaticoOpen(false);
@@ -2764,7 +2787,9 @@ const Financeiro = () => {
         currentCompetencia: "",
       }));
       toast({
-        title: emitidos > 0 ? "Lote emitido parcialmente" : "Falha ao emitir o lote trimestral",
+        title: emitidos > 0
+          ? "Lote emitido parcialmente"
+          : `Falha ao emitir o lote ${periodicidadeAutomatica === "Mensal" ? "mensal" : "trimestral"}`,
         description: `${emitidos} de ${totalOperacoes} boleto(s) foram gerados. ${err instanceof Error ? err.message : "Tente novamente em instantes."}`,
         variant: "destructive",
       });
@@ -3963,13 +3988,30 @@ const Financeiro = () => {
             >
               <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>Gerar mensalidades do trimestre automaticamente</DialogTitle>
+                  <DialogTitle>Gerar mensalidades automaticamente</DialogTitle>
                   <DialogDescription>
-                    O sistema analisa todas as associadas de todas as faixas. Para novas associadas, aplica a cobrança proporcional ao mês de entrada.
+                    O sistema analisa todas as associadas de todas as faixas e identifica quais empresas ainda precisam de boleto no período escolhido.
                   </DialogDescription>
                 </DialogHeader>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="periodicidadeAutomatica">Periodicidade</Label>
+                    <Select
+                      value={periodicidadeAutomatica}
+                      onValueChange={(value) => {
+                        setPeriodicidadeAutomatica(value as PeriodicidadeAutomatica);
+                        setTrimestreAutomaticoProgress(INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS);
+                      }}
+                      disabled={isEmittingBoletos}
+                    >
+                      <SelectTrigger id="periodicidadeAutomatica"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Trimestral">Trimestral</SelectItem>
+                        <SelectItem value="Mensal">Mensal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="trimestreAutomaticoAno">Ano de referência</Label>
                     <Input
@@ -3983,20 +4025,35 @@ const Financeiro = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Trimestre de referência</Label>
-                    <Select
-                      value={String(trimestreAutomaticoNumero)}
-                      onValueChange={(value) => setTrimestreAutomaticoNumero(Number(value) as TrimestreNumero)}
-                      disabled={isEmittingBoletos}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
-                        <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
-                        <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
-                        <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>{periodicidadeAutomatica === "Mensal" ? "Mês de referência" : "Trimestre de referência"}</Label>
+                    {periodicidadeAutomatica === "Mensal" ? (
+                      <Select
+                        value={String(mesAutomaticoNumero)}
+                        onValueChange={(value) => setMesAutomaticoNumero(Number(value) as MesNumero)}
+                        disabled={isEmittingBoletos}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Array.from({ length: 12 }, (_, index) => (index + 1) as MesNumero).map((mes) => (
+                            <SelectItem key={mes} value={String(mes)}>{getMesLabel(mes)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Select
+                        value={String(trimestreAutomaticoNumero)}
+                        onValueChange={(value) => setTrimestreAutomaticoNumero(Number(value) as TrimestreNumero)}
+                        disabled={isEmittingBoletos}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">1º trimestre — janeiro a março</SelectItem>
+                          <SelectItem value="2">2º trimestre — abril a junho</SelectItem>
+                          <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
+                          <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label>Vencimento dos novos boletos</Label>
@@ -4008,23 +4065,31 @@ const Financeiro = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="trimestreAutomaticoUnificar">Unificar competências*</Label>
-                    <Select
-                      value={trimestreAutomaticoUnificarCompetencias}
-                      onValueChange={(value) => setTrimestreAutomaticoUnificarCompetencias(value as "Sim" | "Não")}
-                      disabled={isEmittingBoletos}
-                    >
-                      <SelectTrigger id="trimestreAutomaticoUnificar"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Sim">Sim — um boleto por empresa</SelectItem>
-                        <SelectItem value="Não">Não — um boleto por mensalidade</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="trimestreAutomaticoUnificar">Formato dos boletos</Label>
+                    {periodicidadeAutomatica === "Mensal" ? (
+                      <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-sm">
+                        Um boleto por empresa
+                      </div>
+                    ) : (
+                      <Select
+                        value={trimestreAutomaticoUnificarCompetencias}
+                        onValueChange={(value) => setTrimestreAutomaticoUnificarCompetencias(value as "Sim" | "Não")}
+                        disabled={isEmittingBoletos}
+                      >
+                        <SelectTrigger id="trimestreAutomaticoUnificar"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Sim">Um boleto por empresa</SelectItem>
+                          <SelectItem value="Não">Um boleto por mensalidade</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                 </div>
 
                 <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-                  Associadas antigas recebem a cobrança normal do trimestre. Entradas entre o mês anterior e o último mês do trimestre seguem a regra proporcional; do dia 28 em diante, passam a valer no mês seguinte. Competências já emitidas não são cobradas novamente e boletos cancelados não contam.
+                  {periodicidadeAutomatica === "Mensal"
+                    ? "A análise considera somente o mês escolhido. Associadas que entram até o dia 27 passam a ser elegíveis no próprio mês; do dia 28 em diante, no mês seguinte. Uma competência já emitida não será cobrada novamente e boletos cancelados não contam."
+                    : "Associadas antigas recebem a cobrança normal do trimestre. Entradas entre o mês anterior e o último mês do trimestre seguem a regra proporcional; do dia 28 em diante, passam a valer no mês seguinte. Competências já emitidas não são cobradas novamente e boletos cancelados não contam."}
                 </div>
 
                 {empresasAssociadasSemData.length > 0 && (
@@ -4071,7 +4136,7 @@ const Financeiro = () => {
                       {planoTrimestreAutomatico.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                            Nenhuma associada elegível encontrada para esse trimestre.
+                            Nenhuma associada elegível encontrada para esse {periodicidadeAutomatica === "Mensal" ? "mês" : "trimestre"}.
                           </TableCell>
                         </TableRow>
                       ) : planoTrimestreAutomatico.map((row) => (
@@ -4084,7 +4149,9 @@ const Financeiro = () => {
                               <div>
                                 <p>{getCompetenciaRangeLabel(row.competenciasPendentes[0], row.competenciasPendentes[row.competenciasPendentes.length - 1])}</p>
                                 <p className="text-xs text-muted-foreground">
-                                  {trimestreAutomaticoUnificarCompetencias === "Sim"
+                                  {periodicidadeAutomatica === "Mensal"
+                                    ? "1 boleto mensal"
+                                    : unificarCompetenciasAutomaticas === "Sim"
                                     ? "1 boleto unificado"
                                     : `${row.competenciasPendentes.length} boleto(s), um por mensalidade`}
                                 </p>
@@ -4168,7 +4235,9 @@ const Financeiro = () => {
                     disabled={isEmittingBoletos || !trimestreAutomaticoVencimento || trimestreAutomaticoPendentes.length === 0 || trimestreAutomaticoImpedidas.length > 0}
                     onClick={() => setTrimestreAutomaticoConfirmOpen(true)}
                   >
-                    {isEmittingBoletos ? "Gerando boletos..." : "Gerar boletos do trimestre"}
+                    {isEmittingBoletos
+                      ? "Gerando boletos..."
+                      : `Gerar boletos do ${periodicidadeAutomatica === "Mensal" ? "mês" : "trimestre"}`}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -4184,7 +4253,7 @@ const Financeiro = () => {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar emissão automática?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Serão gerados {trimestreAutomaticoQuantidadeBoletos} boleto(s) para {trimestreAutomaticoPendentes.length} empresa(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. {trimestreAutomaticoUnificarCompetencias === "Sim" ? "As mensalidades serão reunidas em um boleto por empresa." : "Será criado um boleto separado para cada mensalidade."} Competências já emitidas não serão cobradas novamente.
+                    Serão gerados {trimestreAutomaticoQuantidadeBoletos} boleto(s) para {trimestreAutomaticoPendentes.length} empresa(s), no total de {formatCurrencyBRL(trimestreAutomaticoValorTotal)}, com vencimento em {formatDateBR(trimestreAutomaticoVencimento)}. {periodicidadeAutomatica === "Mensal" ? `A competência será ${getMesLabel(mesAutomaticoNumero)} de ${trimestreAutomaticoAno}.` : `${getTrimestreLabel(trimestreAutomaticoNumero)} de ${trimestreAutomaticoAno}.`} {unificarCompetenciasAutomaticas === "Sim" ? "Será criado um boleto por empresa." : "Será criado um boleto separado para cada mensalidade."} Competências já emitidas não serão cobradas novamente.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -4314,8 +4383,8 @@ const Financeiro = () => {
                         <div className="space-y-2 rounded-md border p-3">
                           <div className="flex flex-col gap-3 rounded-md border border-primary/20 bg-primary/5 p-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                              <p className="font-medium">Mensalidades trimestrais automáticas</p>
-                              <p className="text-xs text-muted-foreground">Analisa todas as faixas e gera somente as competências que ainda faltam.</p>
+                              <p className="font-medium">Mensalidades automáticas</p>
+                              <p className="text-xs text-muted-foreground">Escolha mensal ou trimestral; o sistema analisa todas as faixas e gera somente as competências que faltam.</p>
                             </div>
                             <Button
                               type="button"
@@ -4323,8 +4392,10 @@ const Financeiro = () => {
                               disabled={isEmittingBoletos}
                               onClick={() => {
                                 const agora = new Date();
+                                setPeriodicidadeAutomatica("Trimestral");
                                 setTrimestreAutomaticoAno(String(agora.getFullYear()));
                                 setTrimestreAutomaticoNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
+                                setMesAutomaticoNumero((agora.getMonth() + 1) as MesNumero);
                                 setTrimestreAutomaticoVencimento("");
                                 setTrimestreAutomaticoProgress(INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS);
                                 setWizardOpen(false);
@@ -4333,7 +4404,7 @@ const Financeiro = () => {
                               }}
                             >
                               <Calculator className="h-4 w-4 mr-2" />
-                              Gerar boletos do trimestre automático
+                              Gerar mensalidades automaticamente
                             </Button>
                           </div>
                           <Label>Tipo de vínculo para o lote</Label>
