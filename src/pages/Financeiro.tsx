@@ -726,6 +726,8 @@ const Financeiro = () => {
   );
   const trimestreAutomaticoEmissionLockRef = useRef(false);
   const [mensalidadeAnoReferencia, setMensalidadeAnoReferencia] = useState(() => String(new Date().getFullYear()));
+  const [mensalidadePeriodicidade, setMensalidadePeriodicidade] = useState<PeriodicidadeAutomatica>("Trimestral");
+  const [mensalidadeMesNumero, setMensalidadeMesNumero] = useState<MesNumero>(() => (new Date().getMonth() + 1) as MesNumero);
   const [mensalidadeTrimestreNumero, setMensalidadeTrimestreNumero] = useState<TrimestreNumero>(
     () => (Math.floor(new Date().getMonth() / 3) + 1) as TrimestreNumero,
   );
@@ -1628,12 +1630,16 @@ const Financeiro = () => {
     setCompetenciaBoletoIds((ids) => ids.filter((id) => boletos.some((boleto) => boleto.id === id && isBoletoMensalidade(boleto))));
   }, [boletos]);
 
-  const aplicarTrimestreMensalidade = (ano: string, trimestreNumero: TrimestreNumero) => {
+  const aplicarPeriodoMensalidade = (ano: string, trimestreNumero: TrimestreNumero, periodicidade: PeriodicidadeAutomatica, mesNumero: MesNumero) => {
     setMensalidadeAnoReferencia(ano);
     setMensalidadeTrimestreNumero(trimestreNumero);
+    setMensalidadePeriodicidade(periodicidade);
+    setMensalidadeMesNumero(mesNumero);
     const anoNumero = Number(ano);
     const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
-      ? getTrimestre(anoNumero, trimestreNumero)
+      ? periodicidade === "Mensal"
+        ? { inicioIso: format(new Date(anoNumero, mesNumero - 1, 1), "yyyy-MM-dd"), fimIso: format(new Date(anoNumero, mesNumero - 1, 1), "yyyy-MM-dd") }
+        : getTrimestre(anoNumero, trimestreNumero)
       : null;
 
     setBoletoForm((prev) => {
@@ -1644,6 +1650,7 @@ const Financeiro = () => {
         ...prev,
         competenciaInicial,
         competenciaFinal,
+        periodicidade,
         mensagemPersonalizada: !prev.mensagemPersonalizada || mensagemAutomaticaAnterior
           ? competenciaInicial
             ? `Boleto referente à competência ${getCompetenciaRangeLabel(competenciaInicial, competenciaFinal)}`
@@ -2052,6 +2059,8 @@ const Financeiro = () => {
     setEmailFallbackEmpresaIds([]);
     setEmailFallbackDraft("");
     setMensalidadeAnoReferencia(String(agora.getFullYear()));
+    setMensalidadePeriodicidade("Trimestral");
+    setMensalidadeMesNumero((agora.getMonth() + 1) as MesNumero);
     setMensalidadeTrimestreNumero((Math.floor(agora.getMonth() / 3) + 1) as TrimestreNumero);
   };
 
@@ -2285,7 +2294,9 @@ const Financeiro = () => {
   const handleLimparEtapa2 = () => {
     const anoNumero = Number(mensalidadeAnoReferencia);
     const faixa = Number.isInteger(anoNumero) && anoNumero >= 2000 && anoNumero <= 2100
-      ? getTrimestre(anoNumero, mensalidadeTrimestreNumero)
+      ? mensalidadePeriodicidade === "Mensal"
+        ? { inicioIso: format(new Date(anoNumero, mensalidadeMesNumero - 1, 1), "yyyy-MM-dd"), fimIso: format(new Date(anoNumero, mensalidadeMesNumero - 1, 1), "yyyy-MM-dd") }
+        : getTrimestre(anoNumero, mensalidadeTrimestreNumero)
       : null;
     setBoletoForm({
       ...boletoForm,
@@ -4320,7 +4331,9 @@ const Financeiro = () => {
                           const anoAtual = String(new Date().getFullYear());
                           const anoMensalidadeNumero = Number(mensalidadeAnoReferencia);
                           const trimestreMensalidade = Number.isInteger(anoMensalidadeNumero) && anoMensalidadeNumero >= 2000 && anoMensalidadeNumero <= 2100
-                            ? getTrimestre(anoMensalidadeNumero, mensalidadeTrimestreNumero)
+                            ? mensalidadePeriodicidade === "Mensal"
+                              ? { inicioIso: format(new Date(anoMensalidadeNumero, mensalidadeMesNumero - 1, 1), "yyyy-MM-dd"), fimIso: format(new Date(anoMensalidadeNumero, mensalidadeMesNumero - 1, 1), "yyyy-MM-dd") }
+                              : getTrimestre(anoMensalidadeNumero, mensalidadeTrimestreNumero)
                             : null;
                           if (tipoSelecionado === "contribuicao") {
                             setIsBatchMode(false);
@@ -4336,7 +4349,7 @@ const Financeiro = () => {
                               ? `Boleto referente à competência ${getCompetenciaRangeLabel(trimestreMensalidade.inicioIso, trimestreMensalidade.fimIso)}`
                               : boletoForm.mensagemPersonalizada,
                             anoContribuicao: tipoSelecionado === "contribuicao" ? anoAtual : boletoForm.anoContribuicao,
-                            periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : boletoForm.periodicidade,
+                            periodicidade: tipoSelecionado === "contribuicao" ? "Mensal" : tipoSelecionado === "mensalidade" ? mensalidadePeriodicidade : boletoForm.periodicidade,
                             parcelas: tipoSelecionado === "contribuicao" ? "2" : boletoForm.parcelas,
                             percentual: tipoSelecionado === "contribuicao" ? boletoForm.percentual || "2" : boletoForm.percentual,
                             pesquisaContribuicaoFeita: false,
@@ -4584,6 +4597,16 @@ const Financeiro = () => {
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div className="space-y-2">
+                            <Label htmlFor="mensalidadePeriodicidade">Periodicidade*</Label>
+                            <Select value={mensalidadePeriodicidade} onValueChange={(value) => aplicarPeriodoMensalidade(mensalidadeAnoReferencia, mensalidadeTrimestreNumero, value as PeriodicidadeAutomatica, mensalidadeMesNumero)}>
+                              <SelectTrigger id="mensalidadePeriodicidade"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="Trimestral">Trimestral</SelectItem>
+                                <SelectItem value="Mensal">Mensal</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
                             <Label htmlFor="mensalidadeAnoReferencia">Ano de referência*</Label>
                             <Input
                               id="mensalidadeAnoReferencia"
@@ -4591,14 +4614,17 @@ const Financeiro = () => {
                               min={2000}
                               max={2100}
                               value={mensalidadeAnoReferencia}
-                              onChange={(event) => aplicarTrimestreMensalidade(event.target.value, mensalidadeTrimestreNumero)}
+                              onChange={(event) => aplicarPeriodoMensalidade(event.target.value, mensalidadeTrimestreNumero, mensalidadePeriodicidade, mensalidadeMesNumero)}
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="mensalidadeTrimestreReferencia">Trimestre de referência*</Label>
-                            <Select
+                            <Label htmlFor="mensalidadeTrimestreReferencia">{mensalidadePeriodicidade === "Mensal" ? "Mês de referência*" : "Trimestre de referência*"}</Label>
+                            {mensalidadePeriodicidade === "Mensal" ? <Select value={String(mensalidadeMesNumero)} onValueChange={(value) => aplicarPeriodoMensalidade(mensalidadeAnoReferencia, mensalidadeTrimestreNumero, "Mensal", Number(value) as MesNumero)}>
+                              <SelectTrigger id="mensalidadeMesReferencia"><SelectValue /></SelectTrigger>
+                              <SelectContent>{Array.from({ length: 12 }, (_, index) => (index + 1) as MesNumero).map((mes) => <SelectItem key={mes} value={String(mes)}>{getMesLabel(mes)}</SelectItem>)}</SelectContent>
+                            </Select> : <Select
                               value={String(mensalidadeTrimestreNumero)}
-                              onValueChange={(value) => aplicarTrimestreMensalidade(mensalidadeAnoReferencia, Number(value) as TrimestreNumero)}
+                              onValueChange={(value) => aplicarPeriodoMensalidade(mensalidadeAnoReferencia, Number(value) as TrimestreNumero, "Trimestral", mensalidadeMesNumero)}
                             >
                               <SelectTrigger id="mensalidadeTrimestreReferencia"><SelectValue /></SelectTrigger>
                               <SelectContent>
@@ -4607,18 +4633,18 @@ const Financeiro = () => {
                                 <SelectItem value="3">3º trimestre — julho a setembro</SelectItem>
                                 <SelectItem value="4">4º trimestre — outubro a dezembro</SelectItem>
                               </SelectContent>
-                            </Select>
+                            </Select>}
                           </div>
                         </div>
                         <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                          <p className="font-medium">Competência fixa do trimestre</p>
+                          <p className="font-medium">Competência {mensalidadePeriodicidade === "Mensal" ? "do mês" : "do trimestre"}</p>
                           <p className="text-muted-foreground">
                             {boletoForm.competenciaInicial && boletoForm.competenciaFinal
-                              ? `${getTrimestreLabel(mensalidadeTrimestreNumero)} de ${mensalidadeAnoReferencia} (${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}).`
+                              ? `${mensalidadePeriodicidade === "Mensal" ? getMesLabel(mensalidadeMesNumero) : getTrimestreLabel(mensalidadeTrimestreNumero)} de ${mensalidadeAnoReferencia} (${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}).`
                               : "Informe um ano válido entre 2000 e 2100."}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Se unificar, será criado um boleto para todo o trimestre. Se não unificar, será criado um boleto para cada mês desse trimestre.
+                            {mensalidadePeriodicidade === "Mensal" ? "Será criado um boleto para a competência selecionada." : "Se unificar, será criado um boleto para todo o trimestre. Se não unificar, será criado um boleto para cada mês desse trimestre."}
                           </p>
                         </div>
 
@@ -4663,7 +4689,7 @@ const Financeiro = () => {
                           </div>}
                         </div>
 
-                        <div className="space-y-2">
+                        {mensalidadePeriodicidade === "Trimestral" && <div className="space-y-2">
                           <Label htmlFor="unificar">Unificar Competências*</Label>
                           <Select
                             value={boletoForm.unificarCompetencias}
@@ -4677,7 +4703,7 @@ const Financeiro = () => {
                               <SelectItem value="Não">Não</SelectItem>
                             </SelectContent>
                           </Select>
-                        </div>
+                        </div>}
 
                         <div className="space-y-2">
                           <Label htmlFor="mensagem">Mensagem Personalizada</Label>

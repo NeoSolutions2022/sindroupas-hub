@@ -26,6 +26,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,7 +43,6 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import ExcelJS from "exceljs";
 import {
-  Calendar,
   CheckCircle2,
   ChevronDown,
   Download,
@@ -51,6 +53,8 @@ import {
   MessageCircle,
   Plus,
   Search,
+  SlidersHorizontal,
+  X,
   Trash2,
   Upload,
   UserCheck,
@@ -165,6 +169,42 @@ type Empresa = {
   atividadesEconomicas: AtividadeEconomica[];
   qtdFuncionarios?: number;
   observacoesSolicitacao?: string;
+};
+
+type VinculoFiltro = "Associada" | "Não associada" | "Mantenedora" | "Parceira" | "Fornecedora" | "Sem vínculo";
+type PresencaFiltro = "Todos" | "Com" | "Sem";
+type EmpresaFilters = {
+  vinculos: VinculoFiltro[];
+  situacaoFinanceira: "Todas" | "Regular" | "Inadimplente";
+  porte: string;
+  faixa: string;
+  uf: string;
+  municipio: string;
+  bairro: string;
+  capitalMin: string;
+  capitalMax: string;
+  cnae: string;
+  representante: PresencaFiltro;
+  telefone: PresencaFiltro;
+  email: PresencaFiltro;
+  periodoTipo: typeof periodoOptions[number]["value"];
+  periodoInicio: string;
+  periodoFim: string;
+};
+
+const defaultEmpresaFilters = (): EmpresaFilters => ({
+  vinculos: [], situacaoFinanceira: "Todas", porte: "", faixa: "", uf: "", municipio: "", bairro: "",
+  capitalMin: "", capitalMax: "", cnae: "", representante: "Todos", telefone: "Todos", email: "Todos",
+  periodoTipo: "fundacao", periodoInicio: "", periodoFim: "",
+});
+const vinculoOptions: VinculoFiltro[] = ["Associada", "Não associada", "Mantenedora", "Parceira", "Fornecedora", "Sem vínculo"];
+const getEmpresaVinculo = (empresa: Empresa): VinculoFiltro => {
+  if (empresa.tipoVinculo === "Mantenedor") return "Mantenedora";
+  if (empresa.tipoVinculo === "Parceiro") return "Parceira";
+  if (empresa.tipoVinculo === "Fornecedor") return "Fornecedora";
+  if (empresa.associado) return "Associada";
+  if (empresa.tipoVinculo === "Associado" || empresa.dataAssociacao) return "Não associada";
+  return "Sem vínculo";
 };
 
 type SolicitacaoAssociacaoPayload = {
@@ -636,15 +676,16 @@ const Empresas = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const somenteSemDataAssociacao = searchParams.get("semDataAssociacao") === "1";
   const [searchTerm, setSearchTerm] = useState("");
-  const [associationFilter, setAssociationFilter] = useState<"Todas" | "Associadas" | "Não associadas">(
-    somenteSemDataAssociacao ? "Associadas" : "Todas",
-  );
-  const [situacaoFilter, setSituacaoFilter] = useState<"Todas" | "Regular" | "Inadimplente">("Todas");
-  const [porteFilter, setPorteFilter] = useState<string>("");
-  const [faixaFilter, setFaixaFilter] = useState<string>("");
-  const [periodoTipo, setPeriodoTipo] = useState<typeof periodoOptions[number]["value"]>("fundacao");
-  const [periodoInicio, setPeriodoInicio] = useState("");
-  const [periodoFim, setPeriodoFim] = useState("");
+  const [filters, setFilters] = useState<EmpresaFilters>(defaultEmpresaFilters);
+  const [draftFilters, setDraftFilters] = useState<EmpresaFilters>(defaultEmpresaFilters);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [savedFilters, setSavedFilters] = useState<{ name: string; filters: EmpresaFilters }[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("sindroupas:empresa-filtros") || "[]");
+      return Array.isArray(stored) ? stored.filter((item) => item && typeof item.name === "string" && item.filters && typeof item.filters === "object") : [];
+    } catch { return []; }
+  });
+  const [savedFilterName, setSavedFilterName] = useState("");
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(50);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -1220,6 +1261,83 @@ const Empresas = () => {
     return null;
   }, [empresas, searchTerm]);
 
+  const locationOptions = useMemo(() => {
+    return {
+      ufs: [...new Set(empresas.map((empresa) => empresa.uf).filter(Boolean))].sort() as string[],
+    };
+  }, [empresas]);
+
+  const activeFilterLabels = [
+    ...filters.vinculos,
+    filters.situacaoFinanceira !== "Todas" ? filters.situacaoFinanceira : "",
+    filters.uf, filters.municipio, filters.bairro, filters.porte,
+    filters.faixa ? filters.faixa === "sem-faixa" ? "Sem faixa" : faixas.find((faixa) => faixa.id === filters.faixa)?.label || "Faixa" : "",
+    filters.capitalMin ? `Capital ≥ R$ ${filters.capitalMin}` : "",
+    filters.capitalMax ? `Capital ≤ R$ ${filters.capitalMax}` : "",
+    filters.cnae ? `CNAE: ${filters.cnae}` : "",
+    filters.representante !== "Todos" ? `${filters.representante} representante` : "",
+    filters.telefone !== "Todos" ? `${filters.telefone} telefone` : "",
+    filters.email !== "Todos" ? `${filters.email} e-mail` : "",
+    filters.periodoInicio || filters.periodoFim ? "Período" : "",
+    somenteSemDataAssociacao ? "Sem data de associação" : "",
+  ].filter(Boolean) as string[];
+
+  const clearFilters = () => {
+    setFilters(defaultEmpresaFilters());
+    setDraftFilters(defaultEmpresaFilters());
+    setSearchTerm("");
+    setTablePage(1);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("semDataAssociacao");
+    setSearchParams(nextParams, { replace: true });
+  };
+
+  const removeActiveFilter = (label: string) => {
+    if (somenteSemDataAssociacao && label === "Sem data de associação") {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("semDataAssociacao");
+      setSearchParams(nextParams, { replace: true });
+      return;
+    }
+    if (filters.vinculos.includes(label as VinculoFiltro)) setFilters((prev) => ({ ...prev, vinculos: prev.vinculos.filter((item) => item !== label) }));
+    else if (label === filters.situacaoFinanceira) setFilters((prev) => ({ ...prev, situacaoFinanceira: "Todas" }));
+    else if (label === filters.uf) setFilters((prev) => ({ ...prev, uf: "", municipio: "", bairro: "" }));
+    else if (label === filters.municipio) setFilters((prev) => ({ ...prev, municipio: "", bairro: "" }));
+    else if (label === filters.bairro) setFilters((prev) => ({ ...prev, bairro: "" }));
+    else if (label === filters.porte) setFilters((prev) => ({ ...prev, porte: "" }));
+    else if (label.startsWith("Capital ≥")) setFilters((prev) => ({ ...prev, capitalMin: "" }));
+    else if (label.startsWith("Capital ≤")) setFilters((prev) => ({ ...prev, capitalMax: "" }));
+    else if (label.startsWith("CNAE:")) setFilters((prev) => ({ ...prev, cnae: "" }));
+    else if (label.endsWith("representante")) setFilters((prev) => ({ ...prev, representante: "Todos" }));
+    else if (label.endsWith("telefone")) setFilters((prev) => ({ ...prev, telefone: "Todos" }));
+    else if (label.endsWith("e-mail")) setFilters((prev) => ({ ...prev, email: "Todos" }));
+    else if (label === "Período") setFilters((prev) => ({ ...prev, periodoInicio: "", periodoFim: "" }));
+    else setFilters((prev) => ({ ...prev, faixa: "" }));
+    setTablePage(1);
+  };
+
+  const applyFilters = (next: EmpresaFilters) => {
+    setFilters(next);
+    setTablePage(1);
+    setFilterSheetOpen(false);
+  };
+
+  const saveCurrentFilter = () => {
+    const name = savedFilterName.trim();
+    if (!name) return;
+    const next = [...savedFilters.filter((item) => item.name !== name), { name, filters: draftFilters }];
+    localStorage.setItem("sindroupas:empresa-filtros", JSON.stringify(next));
+    setSavedFilters(next);
+    setSavedFilterName("");
+    toast({ title: "Filtro salvo", description: `“${name}” está disponível neste navegador.` });
+  };
+
+  const removeSavedFilter = (name: string) => {
+    const next = savedFilters.filter((item) => item.name !== name);
+    localStorage.setItem("sindroupas:empresa-filtros", JSON.stringify(next));
+    setSavedFilters(next);
+  };
+
   const filteredEmpresas = useMemo(() => {
     return empresas.filter((empresa) => {
       const search = normalizeSearchText(searchTerm.trim());
@@ -1238,37 +1356,43 @@ const Empresas = () => {
         searchTokens.every((token) => empresaSearchBlob.includes(token)) ||
         (!!searchDigits && cnpjDigits.includes(searchDigits));
 
-      const matchesAssociacao =
-        associationFilter === "Todas" ||
-        (associationFilter === "Associadas" && empresa.associado) ||
-        (associationFilter === "Não associadas" && !empresa.associado);
-      const matchesDataAssociacao = !somenteSemDataAssociacao || (empresa.associado && !empresa.dataAssociacao);
-
-      const matchesSituacao = situacaoFilter === "Todas" || empresa.situacaoFinanceira === situacaoFilter;
-      const matchesPorte = !porteFilter || empresa.porte === porteFilter;
-      const matchesFaixa = !faixaFilter || (faixaFilter === "sem-faixa" ? !empresa.faixaId : empresa.faixaId === faixaFilter);
+      const matchesAssociacao = filters.vinculos.length === 0 || filters.vinculos.includes(getEmpresaVinculo(empresa));
+      const matchesDataAssociacao = !somenteSemDataAssociacao || (empresa.tipoVinculo === "Associado" && !empresa.dataAssociacao);
+      const matchesSituacao = filters.situacaoFinanceira === "Todas" || empresa.situacaoFinanceira === filters.situacaoFinanceira;
+      const matchesPorte = !filters.porte || empresa.porte === filters.porte;
+      const matchesFaixa = !filters.faixa || (filters.faixa === "sem-faixa" ? !empresa.faixaId : empresa.faixaId === filters.faixa);
+      const matchesLocation = (!filters.uf || empresa.uf === filters.uf) && (!filters.municipio || empresa.municipio === filters.municipio) && (!filters.bairro || empresa.bairro === filters.bairro);
+      const capitalMin = Number(filters.capitalMin.replace(/\./g, "").replace(",", "."));
+      const capitalMax = Number(filters.capitalMax.replace(/\./g, "").replace(",", "."));
+      const matchesCapital = (!filters.capitalMin || (empresa.capitalSocial !== undefined && empresa.capitalSocial >= capitalMin)) && (!filters.capitalMax || (empresa.capitalSocial !== undefined && empresa.capitalSocial <= capitalMax));
+      const matchesCnae = !filters.cnae || empresa.atividadesEconomicas.some((atividade) => normalizeSearchText(`${atividade.codigo} ${atividade.descricao}`).includes(normalizeSearchText(filters.cnae)));
+      const hasRepresentative = empresa.responsaveis.some((item) => Boolean(item.nome?.trim()));
+      const hasPhone = Boolean(empresa.whatsapp?.trim() || empresa.responsaveis.some((item) => item.whatsapp?.trim()) || empresa.colaboradores.some((item) => item.whatsapp?.trim()));
+      const hasEmail = Boolean(empresa.email?.trim() || empresa.responsaveis.some((item) => item.email?.trim()) || empresa.colaboradores.some((item) => item.email?.trim()));
+      const matchesPresence = (filter: PresencaFiltro, exists: boolean) => filter === "Todos" || (filter === "Com" ? exists : !exists);
+      const matchesContacts = matchesPresence(filters.representante, hasRepresentative) && matchesPresence(filters.telefone, hasPhone) && matchesPresence(filters.email, hasEmail);
 
       const dateField =
-        periodoTipo === "fundacao"
+        filters.periodoTipo === "fundacao"
           ? empresa.dataFundacao
-          : periodoTipo === "associacao"
+          : filters.periodoTipo === "associacao"
             ? empresa.dataAssociacao
             : empresa.dataDesassociacao;
 
       const matchesPeriodo = (() => {
-        if (!periodoInicio && !periodoFim) return true;
+        if (!filters.periodoInicio && !filters.periodoFim) return true;
         if (!dateField) return false;
         const value = new Date(dateField).getTime();
-        const inicioTime = periodoInicio ? new Date(periodoInicio).getTime() : undefined;
-        const fimTime = periodoFim ? new Date(periodoFim).getTime() : undefined;
+        const inicioTime = filters.periodoInicio ? new Date(filters.periodoInicio).getTime() : undefined;
+        const fimTime = filters.periodoFim ? new Date(filters.periodoFim).getTime() : undefined;
         if (inicioTime && value < inicioTime) return false;
         if (fimTime && value > fimTime) return false;
         return true;
       })();
 
-      return matchesSearch && matchesAssociacao && matchesDataAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesPeriodo;
+      return matchesSearch && matchesAssociacao && matchesDataAssociacao && matchesSituacao && matchesPorte && matchesFaixa && matchesLocation && matchesCapital && matchesCnae && matchesContacts && matchesPeriodo;
     });
-  }, [associationFilter, empresas, faixaFilter, periodoFim, periodoInicio, periodoTipo, porteFilter, searchTerm, situacaoFilter, somenteSemDataAssociacao]);
+  }, [empresas, filters, searchTerm, somenteSemDataAssociacao]);
 
   const highlightedEmpresaId = colaboradorMatch?.empresaId ?? null;
   const paginatedEmpresas = useMemo(() => {
@@ -1280,11 +1404,11 @@ const Empresas = () => {
     if (type === "PDF") {
       const doc = new jsPDF();
       autoTable(doc, {
-        head: [["Empresa", "CNPJ", "Associada", "Situação"]],
+        head: [["Empresa", "CNPJ", "Vínculo", "Situação"]],
         body: filteredEmpresas.map((empresa) => [
           empresa.nomeFantasia,
           empresa.cnpj,
-          empresa.associado ? "Sim" : "Não",
+          getEmpresaVinculo(empresa),
           empresa.situacaoFinanceira,
         ]),
       });
@@ -1294,12 +1418,12 @@ const Empresas = () => {
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Empresas");
-    worksheet.addRow(["Empresa", "CNPJ", "Associada", "Situação"]);
+    worksheet.addRow(["Empresa", "CNPJ", "Vínculo", "Situação"]);
     filteredEmpresas.forEach((empresa) => {
       worksheet.addRow([
         empresa.nomeFantasia,
         empresa.cnpj,
-        empresa.associado ? "Sim" : "Não",
+        getEmpresaVinculo(empresa),
         empresa.situacaoFinanceira,
       ]);
     });
@@ -2276,190 +2400,80 @@ const Empresas = () => {
             )}
 
             <div className="rounded-xl border border-[#DCE7CB] bg-[#F7F8F4] p-4 shadow-sm">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-semibold text-[#1C1C1C]">Filtros</span>
-                  <span className="text-xs text-muted-foreground">Refine a visualização das empresas com os filtros abaixo.</span>
-                </div>
-                <Button
-                  variant="ghost"
-                  className="self-start shrink-0 p-0 text-sm font-semibold text-[#1C1C1C] hover:bg-transparent hover:underline"
-                  onClick={() => {
-                    setSearchTerm("");
-                    setAssociationFilter("Todas");
-                    setSituacaoFilter("Todas");
-                    setPorteFilter("");
-                    setFaixaFilter("");
-                    setPeriodoTipo("fundacao");
-                    setPeriodoInicio("");
-                    setPeriodoFim("");
-                    const nextParams = new URLSearchParams(searchParams);
-                    nextParams.delete("semDataAssociacao");
-                    setSearchParams(nextParams, { replace: true });
-                  }}
-                  aria-label="Limpar filtros"
-                >
-                  Limpar filtros
-                </Button>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                {somenteSemDataAssociacao && (
-                  <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="font-medium">Filtro ativo: associadas sem data de associação.</span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="self-start text-amber-950 hover:bg-amber-100 sm:self-auto"
-                      onClick={() => {
-                        const nextParams = new URLSearchParams(searchParams);
-                        nextParams.delete("semDataAssociacao");
-                        setSearchParams(nextParams, { replace: true });
-                      }}
-                    >
-                      Mostrar todas
-                    </Button>
-                  </div>
-                )}
-                <div className="relative w-full">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    aria-label="Buscar empresa ou colaborador"
-                    placeholder="Buscar por nome, CNPJ ou palavra-chave…"
+                    aria-label="Pesquisar empresa, CNPJ ou representante"
+                    placeholder="Pesquisar empresa, CNPJ, representante..."
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="h-11 rounded-full border-[#CBD5B1] bg-white pl-10 text-sm"
+                    onChange={(event) => { setSearchTerm(event.target.value); setTablePage(1); }}
+                    className="h-11 border-[#CBD5B1] bg-white pl-10"
                   />
-                  {colaboradorMatch && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {colaboradorMatch.colaboradorNome} • Colaborador — {colaboradorMatch.empresaNome}
-                    </p>
-                  )}
                 </div>
-
-                <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="flex gap-1 rounded-full bg-white p-1 shadow-sm">
-                    {["Todas", "Associadas", "Não associadas"].map((status) => (
-                      <Button
-                        key={status}
-                        type="button"
-                        variant={associationFilter === status ? "default" : "ghost"}
-                        size="sm"
-                        className={cn(
-                          "flex-1 rounded-full text-xs",
-                          associationFilter === status
-                            ? "bg-[#1C1C1C] text-white hover:bg-[#1C1C1C]/90"
-                            : "bg-transparent text-[#1C1C1C] hover:bg-[#DCE7CB]/50"
-                        )}
-                        onClick={() => setAssociationFilter(status as typeof associationFilter)}
-                        aria-label={`Filtrar por ${status}`}
-                      >
-                        {status}
-                      </Button>
-                    ))}
-                  </div>
-
-                  <Select value={situacaoFilter} onValueChange={(value) => setSituacaoFilter(value as typeof situacaoFilter)}>
-                    <SelectTrigger
-                      aria-label="Filtrar por situação financeira"
-                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
-                    >
-                      <SelectValue placeholder="Situação Financeira" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Todas">Situação Financeira: Todas</SelectItem>
-                      <SelectItem value="Regular">Regular</SelectItem>
-                      <SelectItem value="Inadimplente">Inadimplente</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  <Select
-                    value={porteFilter || "all"}
-                    onValueChange={(value) => setPorteFilter(value === "all" ? "" : value)}
-                  >
-                    <SelectTrigger
-                      aria-label="Filtrar por porte"
-                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
-                    >
-                      <SelectValue placeholder="Porte" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos os portes</SelectItem>
-                      {portes.map((porte) => (
-                        <SelectItem key={porte} value={porte}>
-                          {porte}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Select
-                    value={faixaFilter || "all"}
-                    onValueChange={(value) => setFaixaFilter(value === "all" ? "" : value)}
-                  >
-                    <SelectTrigger
-                      aria-label="Filtrar por faixa"
-                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
-                    >
-                      <SelectValue placeholder="Faixa" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todas as faixas</SelectItem>
-                      <SelectItem value="sem-faixa">Sem faixa</SelectItem>
-                      {faixas.map((faixa) => (
-                        <SelectItem key={faixa.id} value={faixa.id}>
-                          {faixa.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Select
-                    value={periodoTipo}
-                    onValueChange={(value) =>
-                      setPeriodoTipo(value as (typeof periodoOptions)[number]["value"])
-                    }
-                  >
-                    <SelectTrigger
-                      aria-label="Selecionar período para filtro"
-                      className="h-11 rounded-full border-[#CBD5B1] bg-white text-sm"
-                    >
-                      <SelectValue placeholder="Período" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {periodoOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
-                    <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <Input
-                      type="date"
-                      value={periodoInicio}
-                      onChange={(e) => setPeriodoInicio(e.target.value)}
-                      aria-label="Data inicial do período"
-                      className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-2 rounded-full border border-[#CBD5B1] bg-white px-3 py-2 text-sm">
-                    <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <Input
-                      type="date"
-                      value={periodoFim}
-                      onChange={(e) => setPeriodoFim(e.target.value)}
-                      aria-label="Data final do período"
-                      className="border-none p-0 text-sm shadow-none focus-visible:ring-0"
-                    />
-                  </div>
-                </div>
+                <Button type="button" variant="outline" className="h-11 gap-2 bg-white" onClick={() => { setDraftFilters({ ...filters, vinculos: [...filters.vinculos] }); setFilterSheetOpen(true); }}>
+                  <SlidersHorizontal className="h-4 w-4" /> Filtros{activeFilterLabels.length ? ` (${activeFilterLabels.length})` : ""}
+                </Button>
               </div>
+              {colaboradorMatch && <p className="mt-2 text-xs text-muted-foreground">{colaboradorMatch.colaboradorNome} • Colaborador — {colaboradorMatch.empresaNome}</p>}
+              {activeFilterLabels.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium">Filtros ativos:</span>
+                  {activeFilterLabels.map((label, index) => <Button key={`${label}-${index}`} type="button" size="sm" variant="secondary" className="h-7 gap-1 text-xs" onClick={() => removeActiveFilter(label)} aria-label={`Remover filtro ${label}`}>{label}<X className="h-3 w-3" /></Button>)}
+                  <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>Limpar todos</Button>
+                </div>
+              )}
+              {savedFilters.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Filtros salvos:</span>
+                  {savedFilters.map((item) => <span key={item.name} className="inline-flex items-center rounded-md border bg-white"><Button type="button" size="sm" variant="ghost" className="rounded-r-none" onClick={() => applyFilters({ ...defaultEmpresaFilters(), ...item.filters, vinculos: Array.isArray(item.filters.vinculos) ? item.filters.vinculos : [] })}>{item.name}</Button><Button type="button" size="icon" variant="ghost" className="h-8 w-8 rounded-l-none" aria-label={`Excluir filtro salvo ${item.name}`} onClick={() => removeSavedFilter(item.name)}><X className="h-3 w-3" /></Button></span>)}
+                </div>
+              )}
             </div>
+
+            <Sheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen}>
+              <SheetContent side="right" className="flex w-full flex-col p-0 sm:max-w-lg">
+                <SheetHeader className="border-b px-6 py-5 text-left">
+                  <SheetTitle>Filtros de empresas</SheetTitle>
+                  <SheetDescription>Escolha os critérios e aplique para atualizar a lista.</SheetDescription>
+                </SheetHeader>
+                <div className="flex-1 overflow-y-auto px-6">
+                  <Accordion type="multiple" defaultValue={["vinculo", "localizacao"]}>
+                    <AccordionItem value="vinculo"><AccordionTrigger>Vínculo</AccordionTrigger><AccordionContent>
+                      <div className="grid grid-cols-2 gap-3">
+                        {vinculoOptions.map((vinculo) => <label key={vinculo} className="flex items-center gap-2 text-sm">
+                          <Checkbox checked={draftFilters.vinculos.includes(vinculo)} onCheckedChange={(checked) => setDraftFilters((prev) => ({ ...prev, vinculos: checked ? [...prev.vinculos, vinculo] : prev.vinculos.filter((item) => item !== vinculo) }))} />
+                          {vinculo}
+                        </label>)}
+                      </div>
+                    </AccordionContent></AccordionItem>
+                    <AccordionItem value="localizacao"><AccordionTrigger>Localização</AccordionTrigger><AccordionContent className="space-y-3">
+                      <div className="space-y-1"><Label>Estado</Label><Select value={draftFilters.uf || "all"} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, uf: value === "all" ? "" : value, municipio: "", bairro: "" }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem>{locationOptions.ufs.map((uf) => <SelectItem key={uf} value={uf}>{uf}</SelectItem>)}</SelectContent></Select></div>
+                      <div className="space-y-1"><Label>Município</Label><Select value={draftFilters.municipio || "all"} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, municipio: value === "all" ? "" : value, bairro: "" }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem>{[...new Set(empresas.filter((empresa) => !draftFilters.uf || empresa.uf === draftFilters.uf).map((empresa) => empresa.municipio).filter(Boolean))].sort().map((municipio) => <SelectItem key={municipio} value={municipio!}>{municipio}</SelectItem>)}</SelectContent></Select></div>
+                      <div className="space-y-1"><Label>Bairro</Label><Select value={draftFilters.bairro || "all"} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, bairro: value === "all" ? "" : value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem>{[...new Set(empresas.filter((empresa) => (!draftFilters.uf || empresa.uf === draftFilters.uf) && (!draftFilters.municipio || empresa.municipio === draftFilters.municipio)).map((empresa) => empresa.bairro).filter(Boolean))].sort().map((bairro) => <SelectItem key={bairro} value={bairro!}>{bairro}</SelectItem>)}</SelectContent></Select></div>
+                    </AccordionContent></AccordionItem>
+                    <AccordionItem value="dados"><AccordionTrigger>Dados empresariais</AccordionTrigger><AccordionContent className="space-y-3">
+                      <div className="space-y-1"><Label>Porte</Label><Select value={draftFilters.porte || "all"} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, porte: value === "all" ? "" : value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos</SelectItem>{portes.map((porte) => <SelectItem key={porte} value={porte}>{porte}</SelectItem>)}</SelectContent></Select></div>
+                      <div className="space-y-1"><Label>Faixa</Label><Select value={draftFilters.faixa || "all"} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, faixa: value === "all" ? "" : value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas</SelectItem><SelectItem value="sem-faixa">Sem faixa</SelectItem>{faixas.map((faixa) => <SelectItem key={faixa.id} value={faixa.id}>{faixa.label}</SelectItem>)}</SelectContent></Select></div>
+                      <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><Label>Capital social de (R$)</Label><Input inputMode="decimal" value={draftFilters.capitalMin} onChange={(event) => setDraftFilters((prev) => ({ ...prev, capitalMin: event.target.value }))} /></div><div className="space-y-1"><Label>Até (R$)</Label><Input inputMode="decimal" value={draftFilters.capitalMax} onChange={(event) => setDraftFilters((prev) => ({ ...prev, capitalMax: event.target.value }))} /></div></div>
+                    </AccordionContent></AccordionItem>
+                    <AccordionItem value="cnae"><AccordionTrigger>CNAE</AccordionTrigger><AccordionContent><Label htmlFor="cnaeFiltro">Código ou descrição, principal ou secundário</Label><Input id="cnaeFiltro" placeholder="Pesquisar CNAE..." value={draftFilters.cnae} onChange={(event) => setDraftFilters((prev) => ({ ...prev, cnae: event.target.value }))} /></AccordionContent></AccordionItem>
+                    <AccordionItem value="contatos"><AccordionTrigger>Contatos e representantes</AccordionTrigger><AccordionContent className="space-y-3">
+                      {([{ key: "representante", label: "Representante" }, { key: "telefone", label: "Telefone / WhatsApp" }, { key: "email", label: "E-mail" }] as const).map(({ key, label }) => <div key={key} className="space-y-1"><Label>{label}</Label><Select value={draftFilters[key]} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, [key]: value as PresencaFiltro }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Todos">Todos</SelectItem><SelectItem value="Com">Com</SelectItem><SelectItem value="Sem">Sem</SelectItem></SelectContent></Select></div>)}
+                    </AccordionContent></AccordionItem>
+                    <AccordionItem value="financeiro"><AccordionTrigger>Associação e financeiro</AccordionTrigger><AccordionContent className="space-y-3">
+                      <div className="space-y-1"><Label>Situação financeira cadastrada</Label><Select value={draftFilters.situacaoFinanceira} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, situacaoFinanceira: value as EmpresaFilters["situacaoFinanceira"] }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Todas">Todas</SelectItem><SelectItem value="Regular">Regular</SelectItem><SelectItem value="Inadimplente">Inadimplente</SelectItem></SelectContent></Select></div>
+                    </AccordionContent></AccordionItem>
+                    <AccordionItem value="datas"><AccordionTrigger>Datas</AccordionTrigger><AccordionContent className="space-y-3">
+                      <Select value={draftFilters.periodoTipo} onValueChange={(value) => setDraftFilters((prev) => ({ ...prev, periodoTipo: value as EmpresaFilters["periodoTipo"] }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{periodoOptions.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select>
+                      <div className="grid grid-cols-2 gap-3"><div><Label>De</Label><Input type="date" value={draftFilters.periodoInicio} onChange={(event) => setDraftFilters((prev) => ({ ...prev, periodoInicio: event.target.value }))} /></div><div><Label>Até</Label><Input type="date" value={draftFilters.periodoFim} onChange={(event) => setDraftFilters((prev) => ({ ...prev, periodoFim: event.target.value }))} /></div></div>
+                    </AccordionContent></AccordionItem>
+                  </Accordion>
+                  <div className="my-4 space-y-2 border-t pt-4"><Label htmlFor="savedFilterName">Salvar filtro atual</Label><div className="flex gap-2"><Input id="savedFilterName" placeholder="Ex.: Prospectar Fortaleza" value={savedFilterName} onChange={(event) => setSavedFilterName(event.target.value)} /><Button type="button" variant="outline" onClick={saveCurrentFilter} disabled={!savedFilterName.trim()}>Salvar</Button></div><p className="text-xs text-muted-foreground">Filtros salvos ficam neste navegador.</p></div>
+                </div>
+                <SheetFooter className="border-t px-6 py-4"><Button type="button" variant="outline" onClick={() => setDraftFilters(defaultEmpresaFilters())}>Limpar filtros</Button><Button type="button" onClick={() => applyFilters(draftFilters)}>Aplicar filtros</Button></SheetFooter>
+              </SheetContent>
+            </Sheet>
 
             {/* Mobile Card View */}
             {isMobile ? (
@@ -2498,7 +2512,7 @@ const Empresas = () => {
                         {/* Status badges */}
                         <div className="flex flex-wrap gap-1.5">
                           <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white text-xs" : "bg-secondary text-[#1C1C1C] text-xs"}>
-                            {empresa.associado ? "Associada" : "Não associada"}
+                            {getEmpresaVinculo(empresa)}
                           </Badge>
                           <Badge className={empresa.situacaoFinanceira === "Regular" ? "bg-[#DCE7CB] text-[#1C1C1C] text-xs" : "bg-red-500 text-white text-xs"}>
                             {empresa.situacaoFinanceira}
@@ -2609,7 +2623,7 @@ const Empresas = () => {
                           <TableHead scope="col">Logo</TableHead>
                           <TableHead scope="col">Empresa</TableHead>
                           <TableHead scope="col">CNPJ</TableHead>
-                          <TableHead scope="col">Associado</TableHead>
+                          <TableHead scope="col">Vínculo</TableHead>
                           <TableHead scope="col">Situação Financeira</TableHead>
                           <TableHead scope="col">Porte</TableHead>
                           <TableHead scope="col">Capital Social</TableHead>
@@ -2642,7 +2656,7 @@ const Empresas = () => {
                               <TableCell>{empresa.cnpj}</TableCell>
                               <TableCell>
                                 <Badge className={empresa.associado ? "bg-[#7E8C5E] text-white" : "bg-secondary text-[#1C1C1C]"}>
-                                  {empresa.associado ? "Sim" : "Não"}
+                                  {getEmpresaVinculo(empresa)}
                                 </Badge>
                               </TableCell>
                               <TableCell>
