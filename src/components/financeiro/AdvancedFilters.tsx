@@ -38,7 +38,7 @@ interface AdvancedFiltersProps {
   onFiltersChange: (filters: FilterState) => void;
   onFilter: () => void;
   onClear: () => void;
-  empresas: { id: string; nome: string }[];
+  empresas: { id: string; razaoSocial: string; nomeFantasia?: string }[];
 }
 
 const statusOptions = [
@@ -64,9 +64,10 @@ export function AdvancedFilters({
     onFiltersChange({ ...filters, status: newStatus });
   };
 
-  const filteredEmpresas = empresas.filter((emp) =>
-    emp.nome.toLowerCase().includes(filters.empresaSearch.toLowerCase())
-  );
+  const filteredEmpresas = empresas.filter((empresa) => {
+    const termo = filters.empresaSearch.toLowerCase();
+    return empresa.razaoSocial.toLowerCase().includes(termo) || empresa.nomeFantasia?.toLowerCase().includes(termo);
+  });
 
   const hasActiveFilters = 
     filters.empresaSearch ||
@@ -125,12 +126,15 @@ export function AdvancedFilters({
                     onMouseDown={() => {
                       onFiltersChange({
                         ...filters,
-                        empresaSearch: empresa.nome,
+                        empresaSearch: empresa.nomeFantasia || empresa.razaoSocial,
                       });
                       setEmpresaSuggestions(false);
                     }}
                   >
-                    {empresa.nome}
+                    <p className="font-medium">{empresa.razaoSocial}</p>
+                    {empresa.nomeFantasia && empresa.nomeFantasia !== empresa.razaoSocial && (
+                      <p className="text-xs text-muted-foreground">{empresa.nomeFantasia}</p>
+                    )}
                   </div>
                 ))}
               </div>

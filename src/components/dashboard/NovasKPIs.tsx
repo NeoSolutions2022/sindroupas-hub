@@ -14,20 +14,22 @@ interface KPICardProps {
   helperTipo?: "positivo" | "negativo" | "neutro";
   icone: React.ReactNode;
   destaque?: boolean;
+  onClick?: () => void;
 }
 
-const KPICard = ({ label, valor, helper, helperTipo = "neutro", icone, destaque }: KPICardProps) => {
+const KPICard = ({ label, valor, helper, helperTipo = "neutro", icone, destaque, onClick }: KPICardProps) => {
   const helperColor = {
     positivo: "text-green-600",
     negativo: "text-destructive",
     neutro: "text-muted-foreground",
   };
 
-  return (
-    <div 
+  const content = (
+    <div
       className={`
-        rounded-xl border bg-card p-3 sm:p-4 shadow-card transition-card hover:shadow-card-hover
+        h-full rounded-xl border bg-card p-3 text-left sm:p-4 shadow-card transition-card hover:shadow-card-hover
         ${destaque ? "ring-2 ring-destructive/20 border-destructive/30" : "border-border"}
+        ${onClick ? "cursor-pointer group-hover:border-primary/40" : ""}
       `}
     >
       <div className="flex items-start justify-between gap-2 sm:gap-3">
@@ -52,6 +54,14 @@ const KPICard = ({ label, valor, helper, helperTipo = "neutro", icone, destaque 
       </div>
     </div>
   );
+
+  if (!onClick) return content;
+
+  return (
+    <button type="button" className="group w-full rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onClick}>
+      {content}
+    </button>
+  );
 };
 
 interface NovasKPIsProps {
@@ -61,6 +71,10 @@ interface NovasKPIsProps {
   qtdBoletosVencidos: number;
   empresasCriticas: number;
   proximosVencimentos: number;
+  onInadimplenciaClick?: () => void;
+  onValorEmAtrasoClick?: () => void;
+  onEmpresasCriticasClick?: () => void;
+  onProximosVencimentosClick?: () => void;
 }
 
 export const NovasKPIs = ({
@@ -70,6 +84,10 @@ export const NovasKPIs = ({
   qtdBoletosVencidos,
   empresasCriticas,
   proximosVencimentos,
+  onInadimplenciaClick,
+  onValorEmAtrasoClick,
+  onEmpresasCriticasClick,
+  onProximosVencimentosClick,
 }: NovasKPIsProps) => {
   const formatCurrency = (value: number) => {
     return value.toLocaleString("pt-BR", {
@@ -94,6 +112,7 @@ export const NovasKPIs = ({
           helper={formatVariacao(inadimplenciaVariacao)}
           helperTipo={inadimplenciaVariacao <= 0 ? "positivo" : "negativo"}
           icone={<CheckCircle2 className="h-5 w-5 text-accent" />}
+          onClick={onInadimplenciaClick}
         />
         
         <KPICard
@@ -103,6 +122,7 @@ export const NovasKPIs = ({
           helperTipo="neutro"
           icone={<Clock className="h-5 w-5 text-destructive" />}
           destaque={valorEmAtraso > 30000}
+          onClick={onValorEmAtrasoClick}
         />
         
         <KPICard
@@ -112,6 +132,7 @@ export const NovasKPIs = ({
           helperTipo="neutro"
           icone={<AlertTriangle className="h-5 w-5 text-amber-600" />}
           destaque={empresasCriticas > 3}
+          onClick={onEmpresasCriticasClick}
         />
         
         <KPICard
@@ -120,6 +141,7 @@ export const NovasKPIs = ({
           helper="nos próximos 15 dias"
           helperTipo="neutro"
           icone={<CalendarClock className="h-5 w-5 text-accent" />}
+          onClick={onProximosVencimentosClick}
         />
       </div>
     </section>
