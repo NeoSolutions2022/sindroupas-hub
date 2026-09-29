@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
+import { EmpresaContribuicaoLabel, EmpresaContribuicaoSelect } from "@/components/EmpresaContribuicaoSelect";
+import { filterEmpresasContribuicao } from "@/lib/contribuicaoEmpresaSearch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1288,6 +1290,11 @@ const Financeiro = () => {
   const [batchTipoVinculo, setBatchTipoVinculo] = useState<"Associado" | "Mantenedor" | "Parceiro" | "Fornecedor">("Associado");
   const [contribuicaoLoteRows, setContribuicaoLoteRows] = useState<ContribuicaoLoteRow[]>([]);
   const [empresaContribuicaoParaAdicionar, setEmpresaContribuicaoParaAdicionar] = useState("");
+  const contribuicaoEmpresasById = useMemo(() => new Map(mockEmpresas.map((empresa) => [empresa.id, empresa])), [mockEmpresas]);
+  const contribuicaoRowsOrdenadas = useMemo(() => [...contribuicaoLoteRows].sort((a, b) =>
+    (contribuicaoEmpresasById.get(a.empresaId)?.razaoSocial || a.empresaNome).localeCompare(
+      contribuicaoEmpresasById.get(b.empresaId)?.razaoSocial || b.empresaNome, "pt-BR", { sensitivity: "base" }),
+  ), [contribuicaoLoteRows, contribuicaoEmpresasById]);
   const [showEmpresaSuggestions, setShowEmpresaSuggestions] = useState(false);
   const [previaBoleto, setPreviaBoleto] = useState<number | null>(null);
   const [contribuicaoPreview, setContribuicaoPreview] = useState("");
@@ -2083,7 +2090,7 @@ const Financeiro = () => {
     }
   };
 
-  const empresasFiltradas = mockEmpresas.filter((emp) => {
+  const empresasFiltradas = boletoForm.tipo === "contribuicao" ? filterEmpresasContribuicao(mockEmpresas, empresaSearch) : mockEmpresas.filter((emp) => {
     const term = empresaSearch.toLowerCase();
     const matchesSearch =
       emp.nome.toLowerCase().includes(term) ||
@@ -4556,8 +4563,10 @@ const Financeiro = () => {
                                   handleSelectEmpresa(empresa);
                                 }}
                               >
-                                <div className="font-medium">{empresa.nome}</div>
-                                <div className="text-sm text-muted-foreground">{empresa.cnpj} • {empresa.qtdFuncionarios} funcionário(s)</div>
+                                {boletoForm.tipo === "contribuicao" ? <EmpresaContribuicaoLabel empresa={empresa} /> : <>
+                                  <div className="font-medium">{empresa.nome}</div>
+                                  <div className="text-sm text-muted-foreground">{empresa.cnpj} • {empresa.qtdFuncionarios} funcionário(s)</div>
+                                </>}
                               </div>
                             ))}
                           </div>
@@ -4816,11 +4825,11 @@ const Financeiro = () => {
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {contribuicaoLoteRows.length === 0 ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma empresa encontrada no ano anterior. Adicione uma empresa abaixo.</TableCell></TableRow> : contribuicaoLoteRows.map((row) => {
+                                {contribuicaoLoteRows.length === 0 ? <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma empresa encontrada no ano anterior. Adicione uma empresa abaixo.</TableCell></TableRow> : contribuicaoRowsOrdenadas.map((row) => {
                                   const folhaAtual = parseCurrencyInput(row.folhaAtual);
                                   const percentual = Number(boletoForm.percentual.replace(",", ".")) || 0;
                                   return <TableRow key={row.empresaId}>
-                                    <TableCell className="font-medium">{row.empresaNome}</TableCell>
+                                    <TableCell className="font-medium"><EmpresaContribuicaoLabel empresa={contribuicaoEmpresasById.get(row.empresaId) ?? { id: row.empresaId, razaoSocial: row.empresaNome, nomeFantasia: "", cnpj: "" }} /></TableCell>
                                     <TableCell>{row.folhaAnoAnterior > 0 ? formatCurrencyBRL(row.folhaAnoAnterior) : "—"}</TableCell>
                                     <TableCell><Input inputMode="decimal" placeholder="0,00" value={row.folhaAtual} disabled={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { folhaAtual: event.target.value, repetiuFolhaAnterior: false })} /></TableCell>
                                     <TableCell><label className="flex items-center gap-2 text-xs"><input type="checkbox" disabled={row.folhaAnoAnterior <= 0} checked={row.repetiuFolhaAnterior} onChange={(event) => updateContribuicaoLoteRow(row.empresaId, { repetiuFolhaAnterior: event.target.checked, folhaAtual: event.target.checked ? row.folhaAnoAnterior.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "" })} />Ano anterior</label></TableCell>
@@ -4833,7 +4842,11 @@ const Financeiro = () => {
                             </Table>
                           </div>
                           <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 sm:flex-row sm:items-end">
-                            <div className="flex-1 space-y-2"><Label>Adicionar empresa da lista</Label><Select value={empresaContribuicaoParaAdicionar} onValueChange={setEmpresaContribuicaoParaAdicionar}><SelectTrigger><SelectValue placeholder="Selecione uma empresa" /></SelectTrigger><SelectContent>{mockEmpresas.filter((empresa) => !contribuicaoLoteRows.some((row) => row.empresaId === empresa.id)).map((empresa) => <SelectItem key={empresa.id} value={empresa.id}>{empresa.nome}</SelectItem>)}</SelectContent></Select></div>
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <Label>Adicionar empresa da lista</Label>
+                              <EmpresaContribuicaoSelect empresas={mockEmpresas.filter((empresa) => !contribuicaoLoteRows.some((row) => row.empresaId === empresa.id))} value={empresaContribuicaoParaAdicionar} onChange={setEmpresaContribuicaoParaAdicionar} />
+                              <p className="text-xs text-muted-foreground">Empresas associadas e não associadas, em ordem de razão social.</p>
+                            </div>
                             <Button type="button" variant="outline" disabled={!empresaContribuicaoParaAdicionar} onClick={addEmpresaAoLoteContribuicao}>Adicionar</Button>
                             <Button type="button" variant="outline" onClick={handleNovoCadastroContribuicao}>Novo cadastro</Button>
                           </div>
@@ -4979,10 +4992,10 @@ const Financeiro = () => {
                               <div className="col-span-2 overflow-x-auto rounded-md border">
                                 <Table>
                                   <TableHeader><TableRow><TableHead>Empresa</TableHead><TableHead>Folha de agosto</TableHead><TableHead>Origem</TableHead><TableHead>Contribuição</TableHead><TableHead>Boletos</TableHead></TableRow></TableHeader>
-                                  <TableBody>{contribuicaoLoteRows.map((row) => {
+                                  <TableBody>{contribuicaoRowsOrdenadas.map((row) => {
                                     const folha = parseCurrencyInput(row.folhaAtual);
                                     const valor = folha * (Number(boletoForm.percentual.replace(",", ".")) || 0) / 100;
-                                    return <TableRow key={row.empresaId}><TableCell className="font-medium">{row.empresaNome}</TableCell><TableCell>{formatCurrencyBRL(folha)}</TableCell><TableCell>{row.repetiuFolhaAnterior ? <Badge variant="outline">Repetida do ano anterior</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell><TableCell className="font-semibold">{formatCurrencyBRL(valor)}</TableCell><TableCell className="max-w-72 text-xs">{row.quantidadeParcelas === 1 ? getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 1) : <><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 2)}</div><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 2, 2)}</div></>}</TableCell></TableRow>;
+                                    return <TableRow key={row.empresaId}><TableCell className="font-medium"><EmpresaContribuicaoLabel empresa={contribuicaoEmpresasById.get(row.empresaId) ?? { id: row.empresaId, razaoSocial: row.empresaNome, nomeFantasia: "", cnpj: "" }} /></TableCell><TableCell>{formatCurrencyBRL(folha)}</TableCell><TableCell>{row.repetiuFolhaAnterior ? <Badge variant="outline">Repetida do ano anterior</Badge> : <Badge variant="secondary">Informada</Badge>}</TableCell><TableCell className="font-semibold">{formatCurrencyBRL(valor)}</TableCell><TableCell className="max-w-72 text-xs">{row.quantidadeParcelas === 1 ? getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 1) : <><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 1, 2)}</div><div>{getDescricaoContribuicao(boletoForm.anoContribuicao, 2, 2)}</div></>}</TableCell></TableRow>;
                                   })}</TableBody>
                                 </Table>
                               </div>
