@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { EmpresaContribuicaoLabel, EmpresaContribuicaoSelect } from "@/components/EmpresaContribuicaoSelect";
 import { filterEmpresasContribuicao } from "@/lib/contribuicaoEmpresaSearch";
+import { calcularValoresMensalidade } from "@/lib/mensalidadeValores";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1143,7 +1144,6 @@ const Financeiro = () => {
   const trimestreAutomaticoQuantidadeBoletos = unificarCompetenciasAutomaticas === "Sim"
     ? trimestreAutomaticoPendentes.length
     : trimestreAutomaticoPendentes.reduce((total, row) => total + row.competenciasPendentes.length, 0);
-  const getEmpresaMensalidade = (empresaId?: string) => mockEmpresas.find((empresa) => empresa.id === empresaId);
   const getCompetenciasCount = (inicio?: string, fim?: string) => {
     if (!inicio || !fim) return 0;
     const start = startOfMonth(parseISO(inicio));
@@ -1160,18 +1160,23 @@ const Financeiro = () => {
 
   const getMensalidadePreview = () => {
     const meses = getCompetenciasCount(boletoForm.competenciaInicial, boletoForm.competenciaFinal);
-    const empresaSelecionada = !isBatchMode ? getEmpresaMensalidade(boletoForm.empresaId) : undefined;
-    const valorBase = empresaSelecionada && empresaSelecionada.tipoVinculo !== "Associado"
-      ? empresaSelecionada.valorMensalidadeVinculo
-      : getValorFaixa(boletoForm.faixaId);
-    const desconto = calcularMensalidadeComDesconto(valorBase, empresaSelecionada?.descontoMensalidadePercentual);
+    const selecionadas = mockEmpresas.filter((empresa) => isBatchMode ? batchEmpresaIds.includes(empresa.id) : empresa.id === boletoForm.empresaId);
+    const empresas = selecionadas.map((empresa) => ({
+      empresa,
+      ...calcularValoresMensalidade(
+        empresa.tipoVinculo === "Associado" ? getValorFaixa(boletoForm.faixaId) : empresa.valorMensalidadeVinculo,
+        empresa.descontoMensalidadePercentual, meses, boletoForm.unificarCompetencias === "Sim",
+      ),
+    }));
     return {
       meses,
-      valorMensal: valorBase,
-      descontoPercentual: desconto.descontoPercentual,
-      descontoValorMensal: desconto.descontoValor,
-      valorMensalComDesconto: desconto.valorFinal,
-      valorTotal: desconto.valorFinal * Math.max(meses, 1),
+      empresas,
+      valorMensal: empresas.reduce((total, empresa) => total + empresa.valorMensal, 0),
+      descontoPercentual: empresas.length === 1 ? empresas[0].descontoPercentual : 0,
+      descontoValorMensal: empresas.reduce((total, empresa) => total + empresa.descontoValorMensal, 0),
+      valorMensalComDesconto: empresas.reduce((total, empresa) => total + empresa.valorMensalComDesconto, 0),
+      valorTotal: empresas.reduce((total, empresa) => total + empresa.valorTotal, 0),
+      quantidadeBoletos: empresas.reduce((total, empresa) => total + empresa.quantidadeBoletos, 0),
     };
   };
 
@@ -2081,7 +2086,7 @@ const Financeiro = () => {
     setEmpresaSearch(`${empresa.nome} - ${empresa.cnpj}`);
     setShowEmpresaSuggestions(false);
 
-    if (!empresa.faixaId) {
+    if (empresa.tipoVinculo === "Associado" && !empresa.faixaId) {
       toast({
         title: "Empresa sem faixa cadastrada",
         description: "Selecione uma faixa na próxima etapa ou edite o cadastro completo da empresa antes de emitir.",
@@ -2538,13 +2543,13 @@ const Financeiro = () => {
             const valorBase = empresa.tipoVinculo === "Associado"
               ? getValorFaixa(boletoForm.faixaId)
               : empresa.valorMensalidadeVinculo;
-            const mensalidade = calcularMensalidadeComDesconto(valorBase, empresa.descontoMensalidadePercentual);
+            const mensalidade = calcularValoresMensalidade(valorBase, empresa.descontoMensalidadePercentual, competencias.length, true);
             await emitir({
               ...boletoForm,
               empresaId: empresa.id,
               empresaNome: empresa.nome,
-              valorOverride: mensalidade.valorFinal * competencias.length,
-              descontoValorOverride: mensalidade.descontoValor * competencias.length,
+              valorOverride: mensalidade.valorBoleto,
+              descontoValorOverride: mensalidade.descontoBoleto,
               emailOverride: emailOverrides[empresa.id],
               mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}`,
             });
@@ -2554,7 +2559,7 @@ const Financeiro = () => {
             const valorBase = empresa.tipoVinculo === "Associado"
               ? getValorFaixa(boletoForm.faixaId)
               : empresa.valorMensalidadeVinculo;
-            const mensalidade = calcularMensalidadeComDesconto(valorBase, empresa.descontoMensalidadePercentual);
+            const mensalidade = calcularValoresMensalidade(valorBase, empresa.descontoMensalidadePercentual, competencias.length, false);
             for (const competencia of competencias) {
               await emitir({
                 ...boletoForm,
@@ -2562,8 +2567,8 @@ const Financeiro = () => {
                 empresaNome: empresa.nome,
                 competenciaInicial: competencia,
                 competenciaFinal: competencia,
-                valorOverride: mensalidade.valorFinal,
-                descontoValorOverride: mensalidade.descontoValor,
+                valorOverride: mensalidade.valorBoleto,
+                descontoValorOverride: mensalidade.descontoBoleto,
                 emailOverride: emailOverrides[empresa.id],
                 mensagemPersonalizada: boletoForm.mensagemPersonalizada || `Boleto referente à competência ${getCompetenciaRangeLabel(competencia, competencia)}`,
               });
@@ -3027,7 +3032,14 @@ const Financeiro = () => {
                         </Button>
                         <Button
                           variant="secondary"
-                          onClick={() => { setIsBatchMode(true); setWizardOpen(true); }}
+                          onClick={() => {
+                            setIsBatchMode(true);
+                            setWizardOpen(true);
+                            if (!boletoForm.tipo) {
+                              setBoletoForm((prev) => ({ ...prev, tipo: "mensalidade" }));
+                              aplicarPeriodoMensalidade(mensalidadeAnoReferencia, mensalidadeTrimestreNumero, batchTipoVinculo === "Associado" ? "Trimestral" : "Mensal", mensalidadeMesNumero);
+                            }
+                          }}
                         >
                           <Plus className="h-4 w-4 mr-2" />
                           Criar boleto em lote
@@ -4434,7 +4446,10 @@ const Financeiro = () => {
                               setBatchTipoVinculo(value);
                               setBatchFaixaId("");
                               setBatchEmpresaIds([]);
-                              setBoletoForm((prev) => ({ ...prev, faixaId: "" }));
+                              setBoletoForm((prev) => ({ ...prev, faixaId: "", tipo: !prev.tipo && value !== "Fornecedor" ? "mensalidade" : prev.tipo }));
+                              if (value !== "Fornecedor" && (!boletoForm.tipo || boletoForm.tipo === "mensalidade")) {
+                                aplicarPeriodoMensalidade(mensalidadeAnoReferencia, mensalidadeTrimestreNumero, value === "Associado" ? "Trimestral" : "Mensal", mensalidadeMesNumero);
+                              }
                             }}
                           >
                             <SelectTrigger><SelectValue /></SelectTrigger>
@@ -4734,8 +4749,8 @@ const Financeiro = () => {
                               </p>
                               <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
                                 <span>{preview.meses || 0} competência(s)</span>
-                                <span>R$ {preview.valorMensalComDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês</span>
-                                <span>{boletoForm.unificarCompetencias === "Sim" ? "1 boleto unificado" : `${preview.meses || 0} boleto(s)`}</span>
+                                <span>R$ {preview.valorMensalComDesconto.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}/mês{isBatchMode ? " no lote" : ""}</span>
+                                <span>{preview.quantidadeBoletos} boleto(s){isBatchMode ? ` para ${preview.empresas.length} empresa(s)` : ""}</span>
                               </div>
                               {!isBatchMode && preview.descontoPercentual > 0 && (
                                 <p className="mt-2 text-xs text-[#7E8C5E]">
@@ -4745,7 +4760,7 @@ const Financeiro = () => {
                               )}
                               {isBatchMode && (
                                 <p className="mt-2 text-xs text-muted-foreground">
-                                  Em lote, descontos individuais cadastrados em cada empresa serão aplicados no momento da emissão.
+                                  Total do lote com os valores mensais e descontos individuais cadastrados de todas as empresas selecionadas.
                                 </p>
                               )}
                             </div>
@@ -4929,20 +4944,20 @@ const Financeiro = () => {
                                 ? "Contribuição Assistencial"
                                 : boletoForm.tipo === "avulso"
                                   ? "Boleto avulso"
-                                  : "Mensalidade (por Faixa)"}
+                                  : "Mensalidade de vínculo"}
                             </p>
                           </div>
 
                           {boletoForm.tipo === "mensalidade" ? (
                             <>
-                              <div>
+                              {getMensalidadePreview().empresas.some((item) => item.empresa.tipoVinculo === "Associado") && <div>
                                 <p className="font-semibold text-muted-foreground">Faixa selecionada:</p>
                                 <p className="font-medium">
                                   {faixas.find((f) => f.id === boletoForm.faixaId)
                                     ? `${faixas.find((f) => f.id === boletoForm.faixaId)!.min}–${faixas.find((f) => f.id === boletoForm.faixaId)!.max} • R$ ${faixas.find((f) => f.id === boletoForm.faixaId)!.valor.toFixed(2)}`
                                     : "-"}
                                 </p>
-                              </div>
+                              </div>}
                               <div>
                                 <p className="font-semibold text-muted-foreground">Competências:</p>
                                 <p className="font-medium">{getCompetenciaRangeLabel(boletoForm.competenciaInicial, boletoForm.competenciaFinal)}</p>
@@ -4961,6 +4976,17 @@ const Financeiro = () => {
                                   <p className="font-medium">{boletoForm.mensagemPersonalizada}</p>
                                 </div>
                               )}
+                              <div className="col-span-2 overflow-x-auto rounded-md border">
+                                <Table>
+                                  <TableHeader><TableRow><TableHead>Empresa</TableHead><TableHead>Valor mensal com desconto</TableHead><TableHead>Boletos</TableHead><TableHead>Total</TableHead></TableRow></TableHeader>
+                                  <TableBody>{getMensalidadePreview().empresas.map((item) => <TableRow key={item.empresa.id}>
+                                    <TableCell><EmpresaContribuicaoLabel empresa={item.empresa} /></TableCell>
+                                    <TableCell>{formatCurrencyBRL(item.valorMensalComDesconto)}</TableCell>
+                                    <TableCell>{item.quantidadeBoletos}</TableCell>
+                                    <TableCell className="font-semibold">{formatCurrencyBRL(item.valorTotal)}</TableCell>
+                                  </TableRow>)}</TableBody>
+                                </Table>
+                              </div>
                             </>
                           ) : boletoForm.tipo === "avulso" ? (
                             <>
