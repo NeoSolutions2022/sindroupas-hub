@@ -65,6 +65,13 @@ type CreateBoletoErrorResponse = {
   };
   hasura?: {
     errors?: { message?: string }[];
+    message?: string;
+  };
+  compensation?: {
+    attempted?: boolean;
+    canceled?: boolean;
+    charge_id?: number | string;
+    error?: unknown;
   };
 };
 
@@ -75,11 +82,13 @@ const extractErrorMessage = (payload: CreateBoletoErrorResponse) => {
     return `Falha na criação do boleto na EFI: ${payload.efi.error}`;
   }
 
-  if (payload.stage === "hasura" && payload.hasura?.errors?.length) {
-    const firstError = payload.hasura.errors[0]?.message;
-    if (firstError) {
-      return `Boleto criado na EFI, mas falhou ao persistir no Hasura: ${firstError}`;
+  if (payload.stage === "hasura") {
+    const hasuraError = payload.hasura?.errors?.[0]?.message ?? payload.hasura?.message ?? "erro não detalhado";
+    const chargeId = payload.compensation?.charge_id ?? payload.efi?.data?.charge_id;
+    if (payload.compensation?.canceled) {
+      return `Falhou ao persistir no Hasura, mas o boleto${chargeId ? ` ${chargeId}` : ""} foi cancelado automaticamente na EFI: ${hasuraError}`;
     }
+    return `Boleto criado na EFI, mas falhou ao persistir no Hasura${chargeId ? ` (charge ID ${chargeId})` : ""}. Não repita esta cobrança até conferir ou cancelar o boleto na EFI: ${hasuraError}`;
   }
 
   return "Falha ao criar boleto na nova API.";
@@ -92,7 +101,12 @@ export const createBoletoRequest = async (payload: CreateBoletoPayload) => {
     body: JSON.stringify(payload),
   });
 
-  const body = (await response.json()) as CreateBoletoResponse;
+  let body: CreateBoletoResponse;
+  try {
+    body = (await response.json()) as CreateBoletoResponse;
+  } catch {
+    throw new Error(`A API de boletos retornou uma resposta inválida (HTTP ${response.status}). Confira na EFI antes de tentar novamente.`);
+  }
 
   if (!response.ok || !body.ok) {
     throw new Error(extractErrorMessage(body as CreateBoletoErrorResponse));

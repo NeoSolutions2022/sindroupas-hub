@@ -21,6 +21,7 @@ interface BoletoActionsCellProps {
   onDownload: () => void;
   onGenerateNew: () => void;
   onChangeDueDate?: () => void;
+  onChangeCompetencia?: () => void;
   onCancel?: () => void;
   onDescription?: () => void;
   onWhatsApp?: () => void;
@@ -37,6 +38,7 @@ export function BoletoActionsCell({
   onDownload,
   onGenerateNew,
   onChangeDueDate,
+  onChangeCompetencia,
   onCancel,
   onDescription,
   onWhatsApp,
@@ -110,6 +112,11 @@ export function BoletoActionsCell({
                 Alterar vencimento
               </DropdownMenuItem>
             )}
+            {onChangeCompetencia && (
+              <DropdownMenuItem onClick={onChangeCompetencia}>
+                Alterar competência
+              </DropdownMenuItem>
+            )}
             {onCancel && (
               <DropdownMenuItem onClick={onCancel} className="text-destructive focus:text-destructive">
                 Cancelar boleto
@@ -175,6 +182,11 @@ export function BoletoActionsCell({
           {onChangeDueDate && (
             <DropdownMenuItem onClick={onChangeDueDate}>
               Alterar vencimento
+            </DropdownMenuItem>
+          )}
+          {onChangeCompetencia && (
+            <DropdownMenuItem onClick={onChangeCompetencia}>
+              Alterar competência
             </DropdownMenuItem>
           )}
           {onCancel && (

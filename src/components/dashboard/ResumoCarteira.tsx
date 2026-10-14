@@ -5,12 +5,18 @@ interface ResumoCarteiraProps {
   boletosEmAtraso: number;
   empresasInadimplentes: number;
   empresasEmDia: number;
+  onBoletosEmAtrasoClick?: () => void;
+  onEmpresasInadimplentesClick?: () => void;
+  onEmpresasEmDiaClick?: () => void;
 }
 
 export const ResumoCarteira = ({
   boletosEmAtraso,
   empresasInadimplentes,
   empresasEmDia,
+  onBoletosEmAtrasoClick,
+  onEmpresasInadimplentesClick,
+  onEmpresasEmDiaClick,
 }: ResumoCarteiraProps) => {
   const items = [
     {
@@ -19,6 +25,7 @@ export const ResumoCarteira = ({
       icon: Clock,
       color: "text-destructive",
       bgColor: "bg-destructive/10",
+      onClick: onBoletosEmAtrasoClick,
     },
     {
       label: "Empresas inadimplentes",
@@ -26,6 +33,7 @@ export const ResumoCarteira = ({
       icon: AlertTriangle,
       color: "text-amber-600",
       bgColor: "bg-amber-50",
+      onClick: onEmpresasInadimplentesClick,
     },
     {
       label: "Empresas em dia",
@@ -33,6 +41,7 @@ export const ResumoCarteira = ({
       icon: CheckCircle2,
       color: "text-green-600",
       bgColor: "bg-green-50",
+      onClick: onEmpresasEmDiaClick,
     },
   ];
 
@@ -48,9 +57,11 @@ export const ResumoCarteira = ({
       </CardHeader>
       <CardContent className="pt-0 space-y-2">
         {items.map((item) => (
-          <div
+          <button
+            type="button"
             key={item.label}
-            className="flex items-center justify-between rounded-lg border border-border bg-background p-3 transition-card hover:shadow-card"
+            className="flex w-full items-center justify-between rounded-lg border border-border bg-background p-3 text-left transition-card hover:border-primary/40 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={item.onClick}
           >
             <div className="flex items-center gap-3">
               <div className={`rounded-lg p-2 ${item.bgColor}`}>
@@ -59,7 +70,7 @@ export const ResumoCarteira = ({
               <span className="text-sm text-foreground">{item.label}</span>
             </div>
             <span className="text-xl font-bold text-foreground tabular-nums">{item.value}</span>
-          </div>
+          </button>
         ))}
       </CardContent>
     </Card>
