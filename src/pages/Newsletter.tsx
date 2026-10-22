@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, A
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import { getIntelligenceApiUrl } from "@/lib/env";
-import { intelligenceRequest, NewsletterEdition, NewsletterSettings, NewsletterState } from "@/lib/api/intelligence";
+import { intelligenceRequest, isIntelligenceAccessError, NewsletterEdition, NewsletterSettings, NewsletterState } from "@/lib/api/intelligence";
 import { useToast } from "@/hooks/use-toast";
 import { NewsletterCardPreview } from "@/components/NewsletterCardPreview";
 
@@ -29,7 +29,11 @@ export default function Newsletter() {
   const [confirmation, setConfirmation] = useState<{ action: "generate" | "send" | "retry"; edition?: NewsletterEdition } | null>(null);
   const lock = useRef(false);
   const configured = !!getIntelligenceApiUrl();
-  const state = useQuery({ queryKey: ["newsletter", token], enabled: !!token && configured, queryFn: () => intelligenceRequest<NewsletterState>("/newsletter", token!), refetchInterval: 10000 });
+  const state = useQuery({ queryKey: ["newsletter", token], enabled: !!token && configured, queryFn: () => intelligenceRequest<NewsletterState>("/newsletter", token!),
+    retry: (count, err) => !isIntelligenceAccessError(err) && count < 2,
+    refetchInterval: (query) => isIntelligenceAccessError(query.state.error) ? false : 10000,
+    refetchOnWindowFocus: (query) => !isIntelligenceAccessError(query.state.error),
+    refetchOnReconnect: (query) => !isIntelligenceAccessError(query.state.error) });
   useEffect(() => { if (state.data && !draft) setDraft({ ...initialSettings, ...state.data.settings }); }, [state.data, draft]);
   useEffect(() => { setDraft(null); setError(""); setGroups([]); }, [token]);
   const form = draft ?? initialSettings;

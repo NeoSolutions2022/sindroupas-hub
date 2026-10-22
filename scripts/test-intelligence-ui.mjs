@@ -22,7 +22,7 @@ try {
     if (url.origin !== new URL(baseUrl).origin) return route.abort();
     const path = url.pathname;
     if (!path.startsWith("/mock/")) return route.continue();
-    if (path.startsWith("/mock/auth")) return route.fulfill({ json: { id: "test", role: "admin", email: "teste@example.com" } });
+    if (path.startsWith("/mock/auth")) return route.fulfill({ json: { user: { id: "test", role: "admin", email: "teste@example.com", name: "Administrador QA", status: "active" } } });
     if (path === "/mock/intelligence/newsletter" && request.method() === "GET") return route.fulfill({ json: { settings, editions } });
     if (path === "/mock/intelligence/newsletter/settings") {
       settings = request.postDataJSON();
@@ -46,6 +46,7 @@ try {
   });
   await page.goto(`${baseUrl}/dashboard/newsletter`);
   await expect(page.getByRole("heading", { name: "Radar Moda • Newsletter" })).toBeVisible();
+  await expect(page.getByText("Administrador QA", { exact: true })).toBeVisible();
   await page.getByLabel("Links de fontes adicionais").fill("https://www.fiec.org.br\nhttps://www.ibge.gov.br");
   await page.getByRole("radio", { name: "Grupo", exact: true }).check();
   await page.getByRole("button", { name: "Carregar grupos da Evolution" }).click();
@@ -74,6 +75,16 @@ try {
   await expect(chat.getByText("Alteração concluída", { exact: true })).toBeVisible();
   await expect(chat.getByText("2 de 3 solicitações disponíveis hoje")).toBeVisible();
   assert.equal(decisions, 1);
+  let unauthorizedRequests = 0;
+  await page.route("**/mock/intelligence/newsletter", async (route) => {
+    unauthorizedRequests += 1;
+    return route.fulfill({ status: 401, json: { detail: "Sessão inválida ou expirada." } });
+  });
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText("Sessão inválida ou expirada.");
+  await expect(page.getByRole("button", { name: "Gerar edição da semana" })).toBeDisabled();
+  await page.waitForTimeout(11500); // Ultrapassa o intervalo de polling: não repetir 401.
+  assert.equal(unauthorizedRequests, 1, "Sem retries nem polling após erro de autorização");
   assert.deepEqual(errors, []);
   console.log("Newsletter e chat: fontes, grupo, CTA, confirmação de geração e aprovação de edição passaram.");
 } finally {

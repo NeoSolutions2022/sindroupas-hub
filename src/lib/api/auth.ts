@@ -13,6 +13,7 @@ export type AuthUser = {
   name?: string | null;
   role?: string | null;
   status?: string | null;
+  is_active?: boolean;
 };
 
 export type AppUserAdminItem = {
@@ -63,6 +64,18 @@ export const loginRequest = async (email: string, password: string) => {
   return token;
 };
 
+export const normalizeAuthUser = (payload: unknown): AuthUser => {
+  const user = payload && typeof payload === "object" && "user" in payload ? payload.user : payload;
+  if (!user || typeof user !== "object" || !("id" in user) || typeof user.id !== "string" || !user.id.trim() || !("email" in user) || typeof user.email !== "string") {
+    throw new Error("Resposta inválida do serviço de autenticação.");
+  }
+  const normalized = user as AuthUser;
+  if (normalized.is_active === false || ["inactive", "inativo", "disabled", "blocked", "bloqueado"].includes(normalized.status?.trim().toLowerCase() ?? "")) {
+    throw new Error("Usuário não está ativo. Contate o administrador.");
+  }
+  return normalized;
+};
+
 export const meRequest = async (token: string) => {
   const response = await fetch(`${getAuthUrl()}/auth/me`, {
     method: "GET",
@@ -73,7 +86,7 @@ export const meRequest = async (token: string) => {
     throw new Error("Falha ao carregar usuário autenticado.");
   }
 
-  return (await response.json()) as AuthUser;
+  return normalizeAuthUser(await response.json());
 };
 
 const authAdminRequest = async <T>(path: string, token: string, method = "GET", body?: unknown) => {

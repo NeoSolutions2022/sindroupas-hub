@@ -262,6 +262,20 @@ class ServiceTests(unittest.TestCase):
                 self.assertEqual(image.width, 1080)
                 self.assertGreaterEqual(image.height, 1080)
 
+    def test_real_auth_envelope_loads_newsletter_without_session_override(self):
+        with patch.dict(os.environ, {"AUTH_URL": "https://auth.test"}), patch.object(gateway.requests, "get") as get, TestClient(app) as client:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = {"user": {"id": "admin-qa", "role": "admin", "status": "active"}}
+            result = client.get("/newsletter", headers={"Authorization": "Bearer qa-token"})
+            self.assertEqual(result.status_code, 200)
+            self.assertIn("settings", result.json())
+            self.assertIn("editions", result.json())
+            get.return_value.json.return_value = {"user": {"id": "user-qa", "is_active": True, "profile_code": "financeiro"}}
+            self.assertEqual(client.get("/newsletter", headers={"Authorization": "Bearer qa-token"}).status_code, 403)
+            self.assertEqual(client.get("/agent/history", headers={"Authorization": "Bearer qa-token"}).status_code, 200)
+            get.return_value.json.return_value = {"user": {"id": "admin-qa", "role": "admin", "status": "inactive"}}
+            self.assertEqual(client.get("/newsletter", headers={"Authorization": "Bearer qa-token"}).status_code, 401)
+
     def test_image_route_requires_admin(self):
         with patch("main.newsletter.process_job"), TestClient(app) as client:
             self.assertEqual(client.get("/newsletter/images/asset").status_code, 401)

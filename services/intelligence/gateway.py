@@ -11,16 +11,28 @@ def env(name):
     return value
 
 
+def normalize_user(payload):
+    user = payload.get("user") if isinstance(payload, dict) and "user" in payload else payload
+    if not isinstance(user, dict) or not isinstance(user.get("id"), (str, int)) or isinstance(user.get("id"), bool) or not str(user["id"]).strip():
+        raise HTTPException(503, "Resposta inválida do serviço de autenticação. Não foi possível identificar o usuário.")
+    status = str(user.get("status") or "").strip().lower()
+    if user.get("is_active") is False or status in ("inactive", "inativo", "disabled", "blocked", "bloqueado"):
+        raise HTTPException(401, "Usuário não está ativo. Contate o administrador.")
+    if status not in ("active", "ativo") and not (not status and user.get("is_active") is True):
+        raise HTTPException(503, "Resposta inválida do serviço de autenticação: estado do usuário não confirmado.")
+    return user
+
+
 def session(authorization: str = Header(default="")):
     if not authorization.startswith("Bearer ") or len(authorization) > 16000:
         raise HTTPException(401, "Entre novamente para usar o assistente.")
     try:
         r = requests.get(f"{env('AUTH_URL').rstrip('/')}/auth/me", headers={"Authorization": authorization}, timeout=15)
-        if r.status_code != 200:
+        if r.status_code in (401, 403):
             raise HTTPException(401, "Sessão inválida ou expirada.")
-        user = r.json()
-        if not isinstance(user, dict) or not user.get("id") or str(user.get("status", "")).lower() in ("inactive", "inativo", "disabled"):
-            raise HTTPException(401, "Usuário não está ativo.")
+        if r.status_code != 200:
+            raise HTTPException(503, "Não foi possível validar sua sessão no serviço de autenticação.")
+        user = normalize_user(r.json())
         return {"id": str(user["id"]), "admin": str(user.get("role", "")).lower() == "admin", "authorization": authorization}
     except (requests.RequestException, ValueError):
         raise HTTPException(503, "Não foi possível validar sua sessão.")

@@ -1,5 +1,10 @@
 import { getIntelligenceApiUrl } from "@/lib/env";
 
+export class IntelligenceApiError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); this.name = "IntelligenceApiError"; }
+}
+export const isIntelligenceAccessError = (error: unknown) => error instanceof IntelligenceApiError && [401, 403].includes(error.status);
+
 export async function intelligenceRequest<T>(path: string, token: string, method = "GET", body?: unknown): Promise<T> {
   const base = getIntelligenceApiUrl();
   if (!base) throw new Error("O serviço de inteligência ainda não foi configurado neste ambiente.");
@@ -9,7 +14,7 @@ export async function intelligenceRequest<T>(path: string, token: string, method
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `Não foi possível concluir a operação (HTTP ${response.status}).`);
+  if (!response.ok) throw new IntelligenceApiError(typeof payload.detail === "string" ? payload.detail : `Não foi possível concluir a operação (HTTP ${response.status}).`, response.status);
   return payload as T;
 }
 

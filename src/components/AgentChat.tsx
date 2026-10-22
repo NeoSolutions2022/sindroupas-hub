@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthContext";
 import { getIntelligenceApiUrl } from "@/lib/env";
-import { AgentHistory, AgentProposal, intelligenceRequest } from "@/lib/api/intelligence";
+import { AgentHistory, AgentProposal, intelligenceRequest, isIntelligenceAccessError } from "@/lib/api/intelligence";
 
 const statusLabel: Record<string, string> = {
   pending: "Aguardando sua confirmação • válida por 30 minutos", executed: "Alteração concluída",
@@ -26,7 +26,11 @@ export function AgentChat() {
   const lock = useRef(false);
   const retry = useRef<{ id: string; text: string } | null>(null);
   const queryKey = ["agent-history", token];
-  const history = useQuery({ queryKey, enabled: open && !!token && !!getIntelligenceApiUrl(), queryFn: () => intelligenceRequest<AgentHistory>("/agent/history", token!), refetchInterval: open ? 30000 : false });
+  const history = useQuery({ queryKey, enabled: open && !!token && !!getIntelligenceApiUrl(), queryFn: () => intelligenceRequest<AgentHistory>("/agent/history", token!),
+    retry: (count, err) => !isIntelligenceAccessError(err) && count < 2,
+    refetchInterval: (query) => open && !isIntelligenceAccessError(query.state.error) ? 30000 : false,
+    refetchOnWindowFocus: (query) => !isIntelligenceAccessError(query.state.error),
+    refetchOnReconnect: (query) => !isIntelligenceAccessError(query.state.error) });
   useEffect(() => { setOpen(false); setText(""); setError(""); retry.current = null; }, [token]);
   if (!token || !getIntelligenceApiUrl() || !location.pathname.startsWith("/dashboard")) return null;
 
