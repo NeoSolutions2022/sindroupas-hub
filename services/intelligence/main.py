@@ -86,7 +86,7 @@ def chat_history(user=Depends(session)):
         for row in reversed(rows):
             result = json.loads(row["result"] or "{}")
             proposals = c.execute("SELECT * FROM proposals WHERE request_id=? AND user_id=? ORDER BY created_at", (row["id"], user["id"])).fetchall()
-            items.append({"request_id": row["id"], "message": row["message"], "answer": result.get("answer", "Em processamento…"),
+            items.append({"request_id": row["id"], "message": row["message"], "answer": result.get("answer", "Em processamento…"), "actions": result.get("actions", []),
                           "proposals": [{"id": p["id"], "status": p["status"], "result": json.loads(p["result"] or "null"), **json.loads(p["payload"])} for p in proposals]})
     return {"items": items, "quota": quota(user["id"])}
 
@@ -146,6 +146,12 @@ def generate(user=Depends(session)):
 def send(newsletter_id: str, user=Depends(session)):
     admin(user)
     return newsletter.send(newsletter_id)
+
+
+@app.post("/newsletter/{newsletter_id}/images")
+def generate_edition_images(newsletter_id: str, user=Depends(session)):
+    admin(user)
+    return newsletter.generate_images(newsletter_id)
 
 
 @app.post("/newsletter/{newsletter_id}/retry")

@@ -196,6 +196,41 @@ def generate(retry_id=None):
         return dict(c.execute("SELECT * FROM newsletters WHERE id=?", (newsletter_id,)).fetchone())
 
 
+def generate_images(newsletter_id):
+    # Reutiliza somente a edição persistida. Não pesquisa, não chama OpenAI nem envia WhatsApp.
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT * FROM newsletters WHERE id=?", (newsletter_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Edição não encontrada.")
+        if row["status"] != "ready":
+            raise HTTPException(409, "Aguarde a edição ficar pronta para gerar as imagens.")
+        existing = c.execute("SELECT id,position,caption FROM image_assets WHERE newsletter_id=? ORDER BY position", (newsletter_id,)).fetchall()
+        if existing:
+            return {"status": "ready", "image_assets": [dict(asset) for asset in existing]}
+        articles = json.loads(row["articles"] or "[]")
+        if not articles or len(articles) > 10 or not row["reading"]:
+            raise HTTPException(409, "Edição sem notícias ou síntese estruturadas. O texto original foi preservado.")
+        # Não incorporar um CTA atual diferente daquele que consta na edição original.
+        config = {}
+        content_lines = (row["content"] or "").splitlines()
+        if len(content_lines) >= 2 and content_lines[-2].startswith("📞 ") and public_url(content_lines[-1]):
+            config = {"cta_label": content_lines[-2][2:].strip(), "cta_url": content_lines[-1]}
+        try:
+            cards = render_cards(articles, row["reading"], date.fromisoformat(row["period_start"]), date.fromisoformat(row["period_end"]), config)
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(422, "Não foi possível montar os cards desta edição. O texto e os envios foram preservados.")
+        assets = []
+        for card in cards:
+            asset = {"id": uid(), "position": card["position"], "caption": card["caption"]}
+            c.execute("INSERT INTO image_assets(id,newsletter_id,position,content,content_type,caption,created_at) VALUES(?,?,?,?,?,?,?)",
+                      (asset["id"], newsletter_id, asset["position"], card["content"], "image/png", asset["caption"], now().isoformat()))
+            assets.append(asset)
+        c.execute("UPDATE newsletters SET images_enabled=true WHERE id=?", (newsletter_id,))
+        c.commit()
+    return {"status": "ready", "image_assets": assets}
+
+
 def send(newsletter_id, config=None):
     config = config or settings()
     number = destination(config)

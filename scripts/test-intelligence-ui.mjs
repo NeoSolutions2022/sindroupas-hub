@@ -11,8 +11,14 @@ try {
   let generated = 0;
   let decisions = 0;
   let items = [];
-  const editions = [];
+  const editions = [{ id: "edition-existing", week: "2026-43", status: "ready", period_start: "2026-10-15", period_end: "2026-10-22", content: "Texto preservado", articles: [], deliveries: [], image_assets: [] }];
+  let imageGenerations = 0;
   await page.addInitScript(({ baseUrl }) => {
+    window.SpeechRecognition = class {
+      start() { this.onresult?.({ results: [[{ transcript: "Prepare a mensalidade da empresa Alfa" }]] }); this.onend?.(); }
+      stop() { this.onend?.(); }
+      abort() {}
+    };
     localStorage.setItem("sindroupas_auth_token", `test.${btoa(JSON.stringify({ role: "admin" }))}.test`);
     window.__ENV__ = { VITE_AUTH_URL: `${baseUrl}/mock/auth`, VITE_HASURA_URL: `${baseUrl}/mock/graphql`, VITE_HASURA_ADMIN_SECRET: "test", VITE_INTELLIGENCE_API_URL: `${baseUrl}/mock/intelligence` };
   }, { baseUrl });
@@ -30,6 +36,11 @@ try {
     }
     if (path === "/mock/intelligence/newsletter/groups") return route.fulfill({ json: [{ id: "120363123456789@g.us", name: "Diretoria SindRoupas" }] });
     if (path === "/mock/intelligence/newsletter/generate") { generated += 1; return route.fulfill({ json: { accepted: true } }); }
+    if (path === "/mock/intelligence/newsletter/edition-existing/images") {
+      imageGenerations += 1;
+      editions[0].image_assets = [{ id: "card-1", position: 0, caption: "Card salvo" }];
+      return route.fulfill({ json: { status: "ready", image_assets: editions[0].image_assets } });
+    }
     if (path === "/mock/intelligence/agent/history") return route.fulfill({ json: { items, quota: { used: items.length, limit: 3, remaining: 3-items.length, day: "2026-10-22" } } });
     if (path === "/mock/intelligence/agent/chat") {
       const body = request.postDataJSON();
@@ -58,6 +69,13 @@ try {
   assert.equal(settings.number, "120363123456789@g.us");
   assert.equal(settings.source_links.length, 2);
   assert.equal(settings.images_enabled, true);
+  await page.getByRole("button", { name: "Gerar imagens desta edição" }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("Nenhuma mensagem será enviada");
+  assert.equal(imageGenerations, 0);
+  await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Card 1", exact: true })).toBeVisible();
+  assert.equal(imageGenerations, 1);
+  assert.equal(editions[0].content, "Texto preservado");
   await page.getByRole("button", { name: "Gerar edição da semana" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("120363123456789@g.us");
   assert.equal(generated, 0, "Não gerar antes da confirmação");
@@ -66,6 +84,9 @@ try {
   await page.getByRole("button", { name: "Assistente IA", exact: true }).click();
   const chat = page.getByRole("region", { name: "Assistente IA" });
   await expect(chat.getByText("3 de 3 solicitações disponíveis hoje")).toBeVisible();
+  await chat.getByRole("button", { name: "Ditar mensagem" }).click();
+  await expect(chat.getByLabel("Mensagem para o assistente")).toHaveValue("Prepare a mensalidade da empresa Alfa");
+  assert.equal(items.length, 0, "A voz só preenche o texto, não envia nem cria boletos");
   await chat.getByLabel("Mensagem para o assistente").fill("Corrija o e-mail financeiro da empresa Alfa");
   await chat.getByRole("button", { name: "Enviar solicitação" }).click();
   await expect(chat.getByText("Antes: antigo@example.com")).toBeVisible();

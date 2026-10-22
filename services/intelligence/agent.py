@@ -12,8 +12,22 @@ from gateway import hasura, output_text, response
 from store import db, now, quota, uid
 
 
+def private_field(name):
+    lower = name.lower()
+    return any(part in lower for part in ("password", "secret", "token", "api_key", "credential", "senha")) or lower.startswith(("admin_users", "app_users", "app_profiles", "pgmigrations", "sindroupas_intelligence_"))
+
+
 def load_schema(user):
-    return build_client_schema(hasura(user, get_introspection_query(descriptions=False)))
+    schema = build_client_schema(hasura(user, get_introspection_query(descriptions=False)))
+    # Também remove relações/campos sensíveis do schema apresentado ao modelo.
+    for type_ in schema.type_map.values():
+        # Tipos privados permanecem internamente válidos, mas sem roots/relações acessíveis.
+        if hasattr(type_, "fields") and not private_field(type_.name):
+            for name, field in list(type_.fields.items()):
+                target = get_named_type(field.type).name
+                if private_field(name) or private_field(target):
+                    del type_.fields[name]
+    return schema
 
 
 def scalar_fields(type_):
@@ -33,6 +47,8 @@ def query_data(user, schema, query, variables):
 
     class Limits(Visitor):
         def enter_field(self, node, *_args):
+            if private_field(node.name.value):
+                raise ValueError("Credenciais e controles de acesso não podem ser consultados pelo assistente.")
             if node.name.value.startswith("__"):
                 raise ValueError("Use o schema fornecido; introspecção não é necessária nesta consulta.")
             if node.name.value in limited:
@@ -69,10 +85,12 @@ def record_snapshot(user, schema, entity, id_, fields):
 def prepare_proposal(user, schema, request_id, entity, action, id_, values, summary):
     if not entity.isidentifier() or action not in ("create", "update"):
         raise ValueError("Entidade ou ação inválida.")
-    if entity.startswith("sindroupas_intelligence_"):
+    if private_field(entity):
         raise ValueError("Os controles internos de cota, aprovação e newsletter são gerenciados pelo serviço, não pelo agente.")
     if not isinstance(values, dict) or not values or len(json.dumps(values)) > 16000:
         raise ValueError("Informe os campos e novos valores da alteração.")
+    if any(private_field(key) for key in values):
+        raise ValueError("Credenciais e controles de acesso não podem ser alterados pelo assistente.")
     if "id" in values:
         raise ValueError("Não é permitido definir ou trocar a chave primária pelo assistente.")
     if entity == "financeiro_boletos" and (action == "create" or not set(values).issubset({"competencia_inicial", "competencia_final"})):
@@ -109,10 +127,36 @@ def tools():
                 "parameters": {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}}
     string = {"type": "string"}
     return [
+        tool("abrir_formulario_boleto", "Prepara um atalho para abrir o formulário EXISTENTE de boleto; NÃO emite nem grava nada. Consulte antes a empresa por razão, fantasia ou CNPJ e use seu ID exato. Para ambiguidades pergunte. Campos não informados devem ser vazios. O usuário revisará e confirmará no formulário.",
+             {"empresa_id": string, "tipo": {"type": "string", "enum": ["mensalidade", "avulso"]}, "periodicidade": {"type": "string", "enum": ["Mensal", "Trimestral", ""]}, "competencia": string, "vencimento": string, "valor_avulso": string, "motivo": string}),
         tool("consultar_dados", "Consulta GraphQL somente leitura, com filtros e até 100 registros por página. Use exclusivamente dados autorizados no schema.", {"query": string, "variables_json": string}),
         tool("propor_alteracao", "Prepara UMA criação ou edição por ID, SEM executar. O usuário precisa confirmar no botão do chat. Não exclui registros.",
              {"entity": string, "action": {"type": "string", "enum": ["create", "update"]}, "id": string, "values_json": string, "summary": string}),
     ]
+
+
+def boleto_form_action(user, schema, args):
+    import re
+    from decimal import Decimal
+    if args.get("tipo") not in ("mensalidade", "avulso") or args.get("periodicidade", "") not in ("", "Mensal", "Trimestral"):
+        raise ValueError("Tipo ou periodicidade inválidos.")
+    competencia, vencimento = args.get("competencia", ""), args.get("vencimento", "")
+    if competencia and not re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", competencia):
+        raise ValueError("Competência deve ser AAAA-MM.")
+    if vencimento:
+        datetime.strptime(vencimento, "%Y-%m-%d")
+    valor_avulso = ""
+    if args["tipo"] == "avulso" and args.get("valor_avulso"):
+        value = str(args["valor_avulso"]).strip()
+        if not re.fullmatch(r"\d{1,8}(?:[.,]\d{1,2})?", value) or Decimal(value.replace(",", ".")) <= 0:
+            raise ValueError("Valor avulso inválido: use reais sem separador de milhar, por exemplo 100,00.")
+        valor_avulso = format(Decimal(value.replace(",", ".")), ".2f").replace(".", ",")
+    empresa = record_snapshot(user, schema, "empresas", args.get("empresa_id", ""), ["id", "razao_social", "nome_fantasia"])
+    if not empresa:
+        raise ValueError("Empresa não encontrada. Consulte um ID exato antes de abrir o formulário.")
+    return {"kind": "boleto_form", "id": uid(), "empresa_id": str(empresa["id"]), "empresa_nome": empresa.get("nome_fantasia") or empresa.get("razao_social") or "Empresa",
+            "tipo": args["tipo"], "periodicidade": args.get("periodicidade", ""), "competencia": competencia, "vencimento": vencimento,
+            "valor_avulso": valor_avulso, "motivo": str(args.get("motivo", ""))[:500]}
 
 
 def ask(user, request_id, message):
@@ -130,11 +174,12 @@ def ask(user, request_id, message):
         if used >= 3:
             c.rollback()
             raise HTTPException(429, "Você atingiu as três solicitações de hoje. Confirmações pendentes continuam disponíveis.")
+        # Falha de configuração/autorização anterior ao modelo não consome a cota.
+        schema = load_schema(user)
         c.execute("INSERT INTO requests VALUES(?,?,?,?,?,?,?)", (request_id, user["id"], now().date().isoformat(), message, "running", None, now().isoformat()))
         c.commit()
-    proposals = []
+    proposals, actions = [], []
     try:
-        schema = load_schema(user)
         description = []
         for name, field in schema.query_type.fields.items():
             if name.startswith("__"):
@@ -155,6 +200,8 @@ def ask(user, request_id, message):
             "Localize IDs exatos antes de propor edições. Se houver ambiguidade, pergunte. Para criar use id vazio. "
             "Datas ISO, email_financeiro para cobrança e email para contato geral. Não leia campos sensíveis sem necessidade. "
             "Ferramentas de alteração aceitam o nome da entidade, não o nome da mutation. "
+            "Para criar boletos, use abrir_formulario_boleto após identificar a empresa. Nunca emita por mutation. "
+            "O atalho abre o formulário e exige revisão e confirmação final do usuário. Não diga que já emitiu. "
             "Schema de consultas autorizado (tipos de filtro são os padrões Hasura _eq,_ilike,_and,_or):\n" + "\n".join(description)[:55000]
         )
         items = [*history, {"role": "user", "content": message}]
@@ -171,6 +218,10 @@ def ask(user, request_id, message):
                     args = json.loads(call["arguments"])
                     if call["name"] == "consultar_dados":
                         result = query_data(user, schema, args["query"], json.loads(args["variables_json"]))
+                    elif call["name"] == "abrir_formulario_boleto" and len(actions) < 3:
+                        action = boleto_form_action(user, schema, args)
+                        actions.append(action)
+                        result = {"form_ready": True, "action": action, "notice": "Nenhum boleto emitido. Usuário deve abrir o formulário e revisar."}
                     elif call["name"] == "propor_alteracao" and len(proposals) < 5:
                         proposal = prepare_proposal(user, schema, request_id, args["entity"], args["action"], args["id"], json.loads(args["values_json"]), args["summary"])
                         proposals.append(proposal)
@@ -181,9 +232,9 @@ def ask(user, request_id, message):
                     result = {"error": str(getattr(exc, "detail", exc))[:1500]}
                 items.append({"type": "function_call_output", "call_id": call["call_id"], "output": json.dumps(result, ensure_ascii=False, default=str)})
         answer = answer or "Consulte as propostas abaixo. Nenhuma alteração foi executada. Refine a solicitação se precisar de mais consultas."
-        result = {"answer": answer, "proposals": proposals, "quota": quota(user["id"])}
+        result = {"answer": answer, "proposals": proposals, "actions": actions, "quota": quota(user["id"])}
     except Exception as exc:
-        result = {"answer": str(getattr(exc, "detail", "Não foi possível concluir a solicitação.")), "proposals": proposals, "quota": quota(user["id"])}
+        result = {"answer": str(getattr(exc, "detail", "Não foi possível concluir a solicitação.")), "proposals": proposals, "actions": actions, "quota": quota(user["id"])}
     with db() as c:
         c.execute("UPDATE requests SET status='done',result=? WHERE id=?", (json.dumps(result, ensure_ascii=False), request_id))
     return result

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { VoiceMessageInput } from "@/components/VoiceMessageInput";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ const show = (value: unknown) => value == null ? "Não preenchido" : typeof valu
 export function AgentChat() {
   const { token } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const client = useQueryClient();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -73,6 +75,7 @@ export function AgentChat() {
           {(history.data?.items ?? []).map((item) => <div key={item.request_id} className="space-y-2">
             <p className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2">{item.message}</p>
             <p className="whitespace-pre-wrap">{item.answer}</p>
+            {(item.actions ?? []).filter((action) => action.kind === "boleto_form").map((action) => <div key={action.id} className="space-y-2 rounded-lg border p-3"><p className="font-medium">Preparar boleto: {action.empresa_nome}</p><p className="text-xs text-muted-foreground">{action.tipo} • {action.periodicidade || "Revisar período"}{action.competencia ? ` • ${action.competencia}` : ""}. Nenhum boleto foi emitido. Confira empresa, vínculo, valor, competência e vencimento no formulário.</p><Button size="sm" disabled={busy} onClick={() => { navigate("/dashboard/financeiro", { state: { agentBoletoDraft: { ...action, navigationId: crypto.randomUUID() } } }); setOpen(false); }}>Abrir formulário para revisar</Button></div>)}
             {item.proposals.map((proposal) => <div key={proposal.id} className="space-y-2 rounded-lg border p-3">
               <p className="font-medium">{proposal.action === "create" ? "Criar" : "Editar"}: {proposal.entity}</p><p>{proposal.summary}</p>
               {proposal.before?.id != null && <p className="break-all text-xs text-muted-foreground">Registro: {show(proposal.before.id)}</p>}
@@ -85,7 +88,7 @@ export function AgentChat() {
           {busy && <p role="status">Processando… Aguarde antes de enviar outra solicitação.</p>}
           {(error || history.error) && <p role="alert" className="text-destructive">{error || (history.error as Error).message}</p>}
         </div>
-        <div className="space-y-2 border-t p-3"><Textarea aria-label="Mensagem para o assistente" placeholder="Ex.: encontre a empresa pelo CNPJ e corrija o e-mail financeiro…" maxLength={5000} value={text} onChange={(event) => setText(event.target.value)} disabled={busy} /><Button className="w-full" disabled={busy || !text.trim() || !history.data || history.data.quota.remaining === 0} onClick={() => void send()}>Enviar solicitação</Button><p className="text-xs text-muted-foreground">Confirmações não consomem a cota. Renovação à meia-noite de Fortaleza.</p></div>
+        <div className="space-y-2 border-t p-3"><VoiceMessageInput disabled={busy} onTranscript={(transcript) => setText((previous) => `${previous.trim()} ${transcript}`.trim().slice(0, 5000))} /><Textarea aria-label="Mensagem para o assistente" placeholder="Ex.: prepare a mensalidade da empresa Alfa para eu revisar…" maxLength={5000} value={text} onChange={(event) => setText(event.target.value)} disabled={busy} /><Button className="w-full" disabled={busy || !text.trim() || !history.data || history.data.quota.remaining === 0} onClick={() => void send()}>Enviar solicitação</Button><p className="text-xs text-muted-foreground">Confirmações não consomem a cota. Renovação à meia-noite de Fortaleza.</p></div>
       </section>}
   </div>;
 }

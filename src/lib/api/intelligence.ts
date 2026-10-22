@@ -29,8 +29,13 @@ export interface AgentProposal {
   result?: { error?: string };
 }
 export interface AgentHistory {
-  items: { request_id: string; message: string; answer: string; proposals: AgentProposal[] }[];
+  items: { request_id: string; message: string; answer: string; proposals: AgentProposal[]; actions?: BoletoFormAction[] }[];
   quota: { used: number; remaining: number; limit: number; day: string };
+}
+export interface BoletoFormAction {
+  kind: "boleto_form"; id: string; empresa_id: string; empresa_nome: string;
+  tipo: "mensalidade" | "avulso"; periodicidade: "Mensal" | "Trimestral" | "";
+  competencia: string; vencimento: string; valor_avulso: string; motivo: string;
 }
 export interface NewsletterSettings {
   enabled: boolean;

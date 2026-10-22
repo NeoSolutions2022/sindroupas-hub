@@ -11,7 +11,7 @@ import psycopg
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from graphql import build_schema
+from graphql import build_schema, introspection_from_schema, validate_schema
 
 import agent
 import gateway
@@ -281,6 +281,91 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(client.get("/newsletter/images/asset").status_code, 401)
             app.dependency_overrides[gateway.session] = lambda: {**USER, "admin": False}
             self.assertEqual(client.get("/newsletter/images/asset").status_code, 403)
+
+    def test_images_for_existing_text_are_idempotent_and_never_send(self):
+        articles = [{"title": "Notícia já salva", "summary": "Resumo preservado", "url": "https://example.com/noticia", "published_at": "2026-10-21"}]
+        with store.db() as c:
+            c.execute("INSERT INTO newsletters(id,week,status,period_start,period_end,content,articles,reading,created_at) VALUES(?,?,?,?,?,?,?,?,?)", ("image-test", "2026-43", "ready", "2026-10-15", "2026-10-22", "Texto original", json.dumps(articles), "Síntese original", store.now().isoformat()))
+        with patch.object(newsletter, "response") as model, patch.object(newsletter, "evolution") as evolution:
+            first = newsletter.generate_images("image-test")
+            second = newsletter.generate_images("image-test")
+            self.assertEqual(first, second)
+            self.assertEqual(len(first["image_assets"]), 2)
+            model.assert_not_called()
+            evolution.assert_not_called()
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT content FROM newsletters WHERE id='image-test'").fetchone()[0], "Texto original")
+            self.assertEqual(c.execute("SELECT count(*) FROM deliveries").fetchone()[0], 0)
+        with patch("main.newsletter.process_job"), TestClient(app) as client:
+            self.assertEqual(client.post("/newsletter/image-test/images").status_code, 401)
+            app.dependency_overrides[gateway.session] = lambda: {**USER, "admin": False}
+            self.assertEqual(client.post("/newsletter/image-test/images").status_code, 403)
+            app.dependency_overrides[gateway.session] = lambda: USER
+            self.assertEqual(client.post("/newsletter/image-test/images").status_code, 200)
+
+    def test_images_missing_edition_and_render_failure_preserve_text(self):
+        with self.assertRaises(HTTPException) as error:
+            newsletter.generate_images("missing")
+        self.assertEqual(error.exception.status_code, 404)
+        with store.db() as c:
+            c.execute("INSERT INTO newsletters(id,week,status,period_start,period_end,content,articles,reading,created_at) VALUES(?,?,?,?,?,?,?,?,?)", ("render-test", "2026-43", "ready", "2026-10-15", "2026-10-22", "Original", '[{}]', "Síntese", store.now().isoformat()))
+        with self.assertRaises(HTTPException):
+            newsletter.generate_images("render-test")
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT status,content FROM newsletters WHERE id='render-test'").fetchone()["status"], "ready")
+            self.assertEqual(c.execute("SELECT count(*) FROM image_assets").fetchone()[0], 0)
+
+    def test_hasura_access_failure_does_not_consume_quota(self):
+        with patch.object(agent, "load_schema", side_effect=HTTPException(503, "Configure JWT")), patch.object(agent, "response") as response:
+            with self.assertRaises(HTTPException):
+                agent.ask(USER, "request-hasura-denied", "Consulte boletos")
+            response.assert_not_called()
+        self.assertEqual(store.quota(USER["id"])["used"], 0)
+
+    def test_server_secret_only_for_validated_admin_not_regular_user(self):
+        with patch.dict(os.environ, {"HASURA_URL": "https://hasura.test", "HASURA_ADMIN_SECRET": "server-test-secret"}), patch.object(gateway.requests, "post") as post:
+            post.return_value.ok = True
+            post.return_value.json.return_value = {"data": {"ok": True}}
+            gateway.hasura(USER, "query { __typename }")
+            self.assertEqual(post.call_args.kwargs["headers"], {"x-hasura-admin-secret": "server-test-secret"})
+            gateway.hasura({**USER, "admin": False}, "query { __typename }")
+            self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": USER["authorization"]})
+
+    def test_sensitive_agent_fields_denied(self):
+        for name in ("password_hash", "app_users", "admin_users", "api_key", "sindroupas_intelligence_requests"):
+            self.assertTrue(agent.private_field(name))
+        with patch.object(agent, "hasura") as hasura:
+            with self.assertRaises(ValueError):
+                agent.query_data(USER, SCHEMA, "query { app_users { id } }", {})
+            hasura.assert_not_called()
+        private_schema = build_schema("""
+            type empresas { id: ID!, password_hash: String, owner: app_users }
+            type app_users { id: ID!, password_hash: String }
+            input app_users_bool_exp { _and: [app_users_bool_exp!], password_hash: String }
+            type Query { empresas: [empresas!]!, app_users(where: app_users_bool_exp): [app_users!]! }
+        """)
+        with patch.object(agent, "hasura", return_value=introspection_from_schema(private_schema)):
+            filtered = agent.load_schema(USER)
+            self.assertEqual(validate_schema(filtered), [])
+            self.assertNotIn("app_users", filtered.query_type.fields)
+            self.assertNotIn("owner", filtered.get_type("empresas").fields)
+            self.assertNotIn("password_hash", filtered.get_type("empresas").fields)
+
+    def test_boleto_form_tool_only_prepares_navigation(self):
+        args = {"empresa_id": "empresa-1", "tipo": "mensalidade", "periodicidade": "Mensal", "competencia": "2026-10", "vencimento": "2026-10-30", "valor_avulso": "", "motivo": ""}
+        with patch.object(agent, "record_snapshot", return_value={"id": "empresa-1", "razao_social": "Empresa Alfa", "nome_fantasia": "Alfa"}), patch.object(agent, "hasura") as hasura:
+            action = agent.boleto_form_action(USER, SCHEMA, args)
+            self.assertEqual(action["kind"], "boleto_form")
+            self.assertEqual(action["empresa_id"], "empresa-1")
+            self.assertEqual(action["periodicidade"], "Mensal")
+            hasura.assert_not_called()
+            self.assertEqual(agent.boleto_form_action(USER, SCHEMA, {**args, "tipo": "avulso", "valor_avulso": "100.50"})["valor_avulso"], "100,50")
+            with self.assertRaises(ValueError):
+                agent.boleto_form_action(USER, SCHEMA, {**args, "tipo": "avulso", "valor_avulso": "1.000,00"})
+            with self.assertRaises(ValueError):
+                agent.boleto_form_action(USER, SCHEMA, {**args, "competencia": "outubro"})
+        with patch.object(agent, "record_snapshot", return_value=None), self.assertRaises(ValueError):
+            agent.boleto_form_action(USER, SCHEMA, args)
 
 
 if __name__ == "__main__":

@@ -44,12 +44,18 @@ def admin(user):
 
 
 def hasura(user, query, variables=None):
-    # Não usar segredo administrativo. O Hasura revalida a sessão e seu papel em cada chamada.
+    # Compatibilidade autorizada: segredo só no servidor e somente após /auth/me confirmar admin.
+    headers = {"Authorization": user["authorization"]}
+    server_secret = os.environ.get("HASURA_ADMIN_SECRET", "").strip()
+    if user.get("admin") is True and server_secret:
+        headers = {"x-hasura-admin-secret": server_secret}
     try:
         r = requests.post(env("HASURA_URL"), json={"query": query, "variables": variables or {}},
-                          headers={"Authorization": user["authorization"]}, timeout=25)
+                          headers=headers, timeout=25)
         body = r.json()
         if not r.ok or body.get("errors"):
+            if any(error.get("extensions", {}).get("code") in ("access-denied", "invalid-jwt", "jwt-invalid-claims", "jwt-missing-role-claims") for error in body.get("errors", []) if isinstance(error, dict)):
+                raise HTTPException(503, "O Hasura ainda não aceita a sessão do assistente. O administrador precisa configurar JWT e permissões; nenhuma alteração foi executada.")
             raise HTTPException(422, "Consulta não autorizada ou inválida no Hasura: " + str(body.get("errors", r.status_code))[:1200])
         return body["data"]
     except (requests.RequestException, ValueError, KeyError):

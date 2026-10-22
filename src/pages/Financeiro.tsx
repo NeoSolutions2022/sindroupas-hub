@@ -47,7 +47,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileDown, Eye, Calculator, Plus, Edit, Trash2, Building2, CalendarIcon, MessageCircle, Mail, AlertTriangle } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import type { BoletoFormAction } from "@/lib/api/intelligence";
 import { useToast } from "@/hooks/use-toast";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { BoletoRegistro, HistoricoContribuicao } from "@/lib/financeiro-data";
@@ -634,6 +635,8 @@ const DatePickerField = ({
 
 const Financeiro = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const agentDraftConsumed = useRef("");
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2056,6 +2059,40 @@ const Financeiro = () => {
       });
     }
   };
+
+  useEffect(() => {
+    const suggestion = (location.state as { agentBoletoDraft?: BoletoFormAction & { navigationId: string } } | null)?.agentBoletoDraft;
+    if (!suggestion?.navigationId || agentDraftConsumed.current === suggestion.navigationId || isLoading) return;
+    agentDraftConsumed.current = suggestion.navigationId;
+    if (wizardOpen || isEmittingBoletos) {
+      toast({ title: "Há um formulário em andamento", description: "Conclua ou feche o formulário atual e abra novamente a sugestão pelo chat." });
+      return;
+    }
+    const empresa = mockEmpresas.find((item) => item.id === suggestion.empresa_id);
+    if (!empresa || !["mensalidade", "avulso"].includes(suggestion.tipo)) {
+      toast({ title: "Não foi possível preparar o boleto", description: "A empresa não está disponível. Confira o cadastro antes de emitir.", variant: "destructive" });
+      return;
+    }
+    resetWizard();
+    handleSelectEmpresa(empresa);
+    const month = /^20\d{2}-(0[1-9]|1[0-2])$/.test(suggestion.competencia) ? suggestion.competencia : "";
+    if (month) {
+      setMensalidadeAnoReferencia(month.slice(0, 4));
+      setMensalidadeMesNumero(Number(month.slice(5)) as MesNumero);
+      setMensalidadeTrimestreNumero((Math.floor((Number(month.slice(5)) - 1) / 3) + 1) as TrimestreNumero);
+    }
+    if (["Mensal", "Trimestral"].includes(suggestion.periodicidade)) setMensalidadePeriodicidade(suggestion.periodicidade as "Mensal" | "Trimestral");
+    setBoletoForm((previous) => ({ ...previous, tipo: suggestion.tipo,
+      dataVencimento: /^\d{4}-\d{2}-\d{2}$/.test(suggestion.vencimento) ? suggestion.vencimento : "",
+      valorAvulso: suggestion.tipo === "avulso" ? suggestion.valor_avulso : "", motivoCobranca: suggestion.motivo }));
+    if (suggestion.tipo === "mensalidade" && month) aplicarPeriodoMensalidade(month.slice(0, 4), (Math.floor((Number(month.slice(5)) - 1) / 3) + 1) as TrimestreNumero,
+      suggestion.periodicidade === "Mensal" ? "Mensal" : "Trimestral", Number(month.slice(5)) as MesNumero);
+    setWizardStep(1);
+    setWizardOpen(true);
+    toast({ title: "Sugestão do assistente — revise antes de emitir", description: "Nenhum boleto emitido. Confira empresa, vínculo, valor, período e vencimento nas etapas do formulário." });
+    // Só consumir na navegação recebida ou ao terminar o carregamento das empresas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, isLoading, mockEmpresas]);
 
   const empresasFiltradas = boletoForm.tipo === "contribuicao" ? filterEmpresasContribuicao(mockEmpresas, empresaSearch) : mockEmpresas.filter((emp) => {
     const term = empresaSearch.toLowerCase();
