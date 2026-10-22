@@ -48,6 +48,7 @@ type BoletoDetalheRow = {
     nome_fantasia?: string | null;
     cnpj?: string | null;
     email?: string | null;
+    email_financeiro?: string | null;
     whatsapp?: string | null;
   } | null;
 };
@@ -98,6 +99,7 @@ const FINANCEIRO_DETALHE_QUERY = `
         nome_fantasia
         cnpj
         email
+        email_financeiro
         whatsapp
       }
     }
@@ -211,7 +213,8 @@ const FinanceiroDetalhe = () => {
                         <DetailField label="Nome fantasia" value={boleto.empresa?.nome_fantasia} />
                         <DetailField label="CNPJ" value={formatCnpj(boleto.empresa?.cnpj)} />
                         <DetailField label="ID da empresa" value={boleto.empresa?.id} />
-                        <DetailField label="E-mail" value={boleto.empresa?.email} />
+                        <DetailField label="E-mail geral" value={boleto.empresa?.email} />
+                        <DetailField label="E-mail financeiro" value={boleto.empresa?.email_financeiro} />
                         <DetailField label="WhatsApp" value={boleto.empresa?.whatsapp} />
                       </CardContent>
                     </Card>

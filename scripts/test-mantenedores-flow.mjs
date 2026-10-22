@@ -13,7 +13,7 @@ try {
   const empresas = [
     { id: "m1", razao_social: "Mantenedora Alfa", nome_fantasia: "Alfa", valor_mensalidade_vinculo: 500, desconto_mensalidade_percentual: 0 },
     { id: "m2", razao_social: "Mantenedora Beta", nome_fantasia: "Beta", valor_mensalidade_vinculo: 750, desconto_mensalidade_percentual: 10 },
-  ].map((empresa) => ({ ...empresa, tipo_vinculo: "Mantenedor", associada: false, data_associacao: null, faixa_id: null, cnpj: "12345678000190", email: "teste@example.com", whatsapp: "85999999999", responsaveis: [], colaboradores: [] }));
+  ].map((empresa) => ({ ...empresa, tipo_vinculo: "Mantenedor", associada: false, data_associacao: null, faixa_id: null, cnpj: "12345678000190", email: "geral@example.com", email_financeiro: "financeiro@example.com", whatsapp: "85999999999", responsaveis: [], colaboradores: [] }));
   await page.addInitScript(({ baseUrl }) => {
     localStorage.setItem("sindroupas_auth_token", `test.${btoa(JSON.stringify({ role: "admin" }))}.test`);
     window.__ENV__ = {
@@ -62,6 +62,7 @@ try {
     { empresa_id: "m2", valor: 675, competencia_inicial: "2026-10-01", competencia_final: "2026-10-01" },
   ]);
   assert.deepEqual(errors, []);
+  assert.deepEqual(emitidos.map((boleto) => boleto.customer.email), ["financeiro@example.com", "financeiro@example.com"]);
   console.log("Mantenedores: seleção, periodicidade, revisão e emissão simulada passaram.");
 } finally {
   await browser.close();

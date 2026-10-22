@@ -170,6 +170,7 @@ type CadastroPublicoForm = {
   razaoSocial: string;
   nomeFantasia: string;
   email: string;
+  emailFinanceiro: string;
   whatsapp: string;
   cep: string;
   logradouro: string;
@@ -195,6 +196,7 @@ const initialForm: CadastroPublicoForm = {
   razaoSocial: "",
   nomeFantasia: "",
   email: "",
+  emailFinanceiro: "",
   whatsapp: "",
   cep: "",
   logradouro: "",
@@ -461,6 +463,7 @@ const CadastroAssociadoPublico = () => {
             responsavel_data_nascimento: form.responsavelDataNascimento || null,
             observacoes: form.observacoes.trim() || null,
             payload: {
+              emailFinanceiro: form.emailFinanceiro.trim().toLowerCase(),
               responsaveis: [
                 {
                   nome: form.responsavelNome.trim(),
@@ -598,8 +601,11 @@ const CadastroAssociadoPublico = () => {
                   <Input id="nomeFantasia" value={form.nomeFantasia} onChange={(event) => updateForm("nomeFantasia", event.target.value)} placeholder="Nome fantasia" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="email">E-mail da empresa</Label>
+                  <Label htmlFor="email">E-mail geral da empresa</Label>
                   <Input id="email" type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} placeholder="contato@empresa.com" />
+                  <Label htmlFor="emailFinanceiro" className="block pt-2">E-mail financeiro</Label>
+                  <Input id="emailFinanceiro" type="email" value={form.emailFinanceiro} onChange={(event) => updateForm("emailFinanceiro", event.target.value)} placeholder="financeiro@empresa.com" />
+                  <p className="text-xs text-muted-foreground">Informe o destinatário dos boletos, se diferente do contato geral.</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="whatsapp">WhatsApp da empresa</Label>

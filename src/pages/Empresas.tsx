@@ -139,6 +139,7 @@ type Empresa = {
   nomeFantasia: string;
   cnpj: string;
   email?: string;
+  emailFinanceiro?: string;
   whatsapp?: string;
   endereco?: string;
   cep?: string;
@@ -208,6 +209,7 @@ const getEmpresaVinculo = (empresa: Empresa): VinculoFiltro => {
 };
 
 type SolicitacaoAssociacaoPayload = {
+  emailFinanceiro?: string;
   responsaveis?: Responsavel[];
   colaboradores?: Colaborador[];
   relacionamentos?: RelacionamentoEmpresa[];
@@ -344,6 +346,7 @@ type EmpresaRow = {
   nome_fantasia?: string | null;
   cnpj?: string | null;
   email?: string | null;
+  email_financeiro?: string | null;
   whatsapp?: string | null;
   endereco?: string | null;
   associada?: boolean | null;
@@ -574,6 +577,7 @@ const EMPRESAS_QUERY = `
       nome_fantasia
       cnpj
       email
+      email_financeiro
       whatsapp
       endereco
       associada
@@ -796,6 +800,7 @@ const Empresas = () => {
         nomeFantasia,
         cnpj: empresa.cnpj ?? "",
         email: empresa.email ?? undefined,
+        emailFinanceiro: empresa.email_financeiro ?? undefined,
         whatsapp: empresa.whatsapp ?? undefined,
         endereco: empresa.endereco ?? undefined,
         ...enderecoParts,
@@ -883,6 +888,7 @@ const Empresas = () => {
         desconto_mensalidade_percentual: payload.values.descontoMensalidadePercentual ?? 0,
         faixa_id: payload.values.faixaId ?? null,
         email: payload.values.email ?? null,
+        email_financeiro: payload.values.emailFinanceiro === undefined ? undefined : payload.values.emailFinanceiro.trim().toLowerCase() || null,
         whatsapp: payload.values.whatsapp ?? null,
         endereco: enderecoConsolidado || payload.values.endereco || null,
         data_fundacao: nullableDate(payload.values.dataFundacao),
@@ -1021,6 +1027,7 @@ const Empresas = () => {
       const endereco = buildEmpresaEndereco(values) || values.endereco || null;
       const payload: SolicitacaoAssociacaoPayload = {
         ...(solicitacao.payload ?? {}),
+        emailFinanceiro: values.emailFinanceiro?.trim().toLowerCase() || "",
         responsaveis,
         colaboradores: values.colaboradores ?? [],
         relacionamentos: values.relacionamentos ?? [],
@@ -1105,6 +1112,7 @@ const Empresas = () => {
         desconto_mensalidade_percentual: 0,
         faixa_id: getSolicitacaoFaixaId(solicitacao) || null,
         email: solicitacao.email || solicitacao.responsavel_email || null,
+        email_financeiro: payload.emailFinanceiro?.trim().toLowerCase() || undefined,
         whatsapp: solicitacao.whatsapp || solicitacao.responsavel_whatsapp || null,
         endereco: solicitacao.endereco || null,
         data_fundacao: solicitacao.data_fundacao || null,
@@ -1368,7 +1376,7 @@ const Empresas = () => {
       const matchesCnae = !filters.cnae || empresa.atividadesEconomicas.some((atividade) => normalizeSearchText(`${atividade.codigo} ${atividade.descricao}`).includes(normalizeSearchText(filters.cnae)));
       const hasRepresentative = empresa.responsaveis.some((item) => Boolean(item.nome?.trim()));
       const hasPhone = Boolean(empresa.whatsapp?.trim() || empresa.responsaveis.some((item) => item.whatsapp?.trim()) || empresa.colaboradores.some((item) => item.whatsapp?.trim()));
-      const hasEmail = Boolean(empresa.email?.trim() || empresa.responsaveis.some((item) => item.email?.trim()) || empresa.colaboradores.some((item) => item.email?.trim()));
+      const hasEmail = Boolean(empresa.email?.trim() || empresa.emailFinanceiro?.trim() || empresa.responsaveis.some((item) => item.email?.trim()) || empresa.colaboradores.some((item) => item.email?.trim()));
       const matchesPresence = (filter: PresencaFiltro, exists: boolean) => filter === "Todos" || (filter === "Com" ? exists : !exists);
       const matchesContacts = matchesPresence(filters.representante, hasRepresentative) && matchesPresence(filters.telefone, hasPhone) && matchesPresence(filters.email, hasEmail);
 
@@ -1517,6 +1525,7 @@ const Empresas = () => {
       nomeFantasia: solicitacao.nome_fantasia ?? "",
       cnpj: solicitacao.cnpj,
       email: solicitacao.email ?? "",
+      emailFinanceiro: payload.emailFinanceiro ?? "",
       whatsapp: solicitacao.whatsapp ?? "",
       endereco: solicitacao.endereco ?? undefined,
       ...enderecoParts,
@@ -1976,6 +1985,11 @@ const Empresas = () => {
   };
 
   const handleSave = () => {
+    const emailFinanceiro = formData.emailFinanceiro?.trim();
+    if (emailFinanceiro && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailFinanceiro)) {
+      toast({ title: "E-mail financeiro inválido", description: "Revise o endereço financeiro antes de salvar.", variant: "destructive" });
+      return;
+    }
     const requiredChecks = [
       { key: "razaoSocial", label: "Razão Social", value: formData.razaoSocial },
       { key: "cnpj", label: "CNPJ", value: formData.cnpj },
@@ -2952,7 +2966,7 @@ const Empresas = () => {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="email">E-mail</Label>
+                      <Label htmlFor="email">E-mail geral</Label>
                       <Input
                         id="email"
                         type="email"
@@ -2961,6 +2975,16 @@ const Empresas = () => {
                         onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
                         disabled={isViewMode}
                       />
+                      <Label htmlFor="emailFinanceiro" className="block pt-2">E-mail financeiro</Label>
+                      <Input
+                        id="emailFinanceiro"
+                        type="email"
+                        placeholder="financeiro@empresa.com"
+                        value={formData.emailFinanceiro || ""}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, emailFinanceiro: e.target.value }))}
+                        disabled={isViewMode}
+                      />
+                      <p className="text-xs text-muted-foreground">Preferencial para emissão e envio de boletos. Se estiver vazio, permanece o contato de cobrança atual.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="whatsapp">WhatsApp (geral)</Label>
@@ -3809,6 +3833,7 @@ const Empresas = () => {
                             ["Razão Social", selectedSolicitacao.razao_social],
                             ["Nome Fantasia", selectedSolicitacao.nome_fantasia],
                             ["E-mail", selectedSolicitacao.email],
+                            ["E-mail financeiro", selectedSolicitacao.payload?.emailFinanceiro],
                             ["WhatsApp", selectedSolicitacao.whatsapp],
                             ["Endereço", selectedSolicitacao.endereco],
                             ["Porte", selectedSolicitacao.porte],

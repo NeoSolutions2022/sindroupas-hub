@@ -19,6 +19,8 @@ import Financeiro from "./pages/Financeiro";
 import FinanceiroContribuicao from "./pages/FinanceiroContribuicao";
 import FinanceiroDetalhe from "./pages/FinanceiroDetalhe";
 import NotFound from "./pages/NotFound";
+import Newsletter from "./pages/Newsletter";
+import { AgentChat } from "./components/AgentChat";
 import AdminAppUsers from "./pages/AdminAppUsers";
 
 const queryClient = new QueryClient();
@@ -32,6 +34,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
+          <AgentChat />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/login" element={<Login />} />
@@ -112,6 +115,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route path="/dashboard/newsletter" element={<ProtectedRoute><Newsletter /></ProtectedRoute>} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

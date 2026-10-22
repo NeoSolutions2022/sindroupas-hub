@@ -6,6 +6,7 @@ import { DashboardNavbar } from "@/components/DashboardNavbar";
 import { EmpresaContribuicaoLabel, EmpresaContribuicaoSelect } from "@/components/EmpresaContribuicaoSelect";
 import { filterEmpresasContribuicao } from "@/lib/contribuicaoEmpresaSearch";
 import { calcularValoresMensalidade } from "@/lib/mensalidadeValores";
+import { chooseBoletoContact } from "@/lib/boleto-contact";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -83,6 +84,7 @@ type EmpresaLookupRow = {
   qtd_funcionarios?: number | null;
   cnpj?: string | null;
   email?: string | null;
+  email_financeiro?: string | null;
   whatsapp?: string | null;
   responsaveis?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null; contato_principal?: boolean | null }[];
   colaboradores?: { id: string; nome?: string | null; whatsapp?: string | null; email?: string | null }[];
@@ -202,6 +204,7 @@ const FINANCEIRO_QUERY = `
       qtd_funcionarios
       cnpj
       email
+      email_financeiro
       whatsapp
       responsaveis {
         id
@@ -242,6 +245,7 @@ const EMPRESAS_POR_FAIXA_QUERY = `
       cnpj
       qtd_funcionarios
       email
+      email_financeiro
       whatsapp
       responsaveis {
         id
@@ -432,12 +436,6 @@ const INITIAL_TRIMESTRE_AUTOMATICO_PROGRESS: TrimestreAutomaticoEmissionProgress
   currentEmpresa: "",
   currentCompetencia: "",
   errors: [],
-};
-
-type ContactCandidate = {
-  nome?: string | null;
-  email?: string | null;
-  whatsapp?: string | null;
 };
 
 const normalizeBoletoStatus = (status?: string | null): "Pago" | "Aguardando" | "Cancelado" | "Inadimplente" => {
@@ -632,42 +630,6 @@ const DatePickerField = ({
       </Popover>
     </div>
   );
-};
-
-const chooseBoletoContact = (
-  empresa: Pick<EmpresaLookupRow, "razao_social" | "email" | "whatsapp" | "responsaveis" | "colaboradores">,
-) => {
-  const responsaveis = empresa.responsaveis ?? [];
-  const responsavelPrincipal = responsaveis.find((responsavel) => responsavel.contato_principal);
-  const candidates: ContactCandidate[] = [
-    ...(responsavelPrincipal ? [responsavelPrincipal] : []),
-    ...(empresa.colaboradores ?? []),
-    ...(!responsavelPrincipal ? responsaveis : responsaveis.filter((responsavel) => responsavel.id !== responsavelPrincipal.id)),
-    {
-      nome: empresa.razao_social,
-      email: empresa.email,
-      whatsapp: empresa.whatsapp,
-    },
-  ];
-
-  const cleaned = candidates.map((candidate) => ({
-    nome: candidate.nome?.trim() || undefined,
-    email: candidate.email?.trim() || undefined,
-    whatsapp: candidate.whatsapp?.trim() || undefined,
-  }));
-
-  const withBoth = cleaned.find((candidate) => candidate.email && candidate.whatsapp);
-  if (withBoth) return withBoth;
-
-  const firstEmail = cleaned.find((candidate) => candidate.email)?.email;
-  const firstWhatsapp = cleaned.find((candidate) => candidate.whatsapp)?.whatsapp;
-  const firstNome = cleaned.find((candidate) => candidate.nome)?.nome ?? empresa.razao_social;
-
-  return {
-    nome: firstNome,
-    email: firstEmail,
-    whatsapp: firstWhatsapp,
-  };
 };
 
 const Financeiro = () => {
@@ -2442,7 +2404,7 @@ const Financeiro = () => {
         hasuraRequest({
           query: `
             mutation UpdateEmpresaEmail($id: uuid!, $email: String!) {
-              update_empresas_by_pk(pk_columns: { id: $id }, _set: { email: $email }) { id }
+              update_empresas_by_pk(pk_columns: { id: $id }, _set: { email_financeiro: $email }) { id }
             }
           `,
           variables: { id: empresaId, email },
@@ -5096,7 +5058,7 @@ const Financeiro = () => {
                       : `${emailFallbackEmpresaIds.length} empresa(s) selecionada(s) não possuem e-mail cadastrado.`}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="email-fallback">E-mail da empresa</Label>
+                    <Label htmlFor="email-fallback">E-mail financeiro da empresa</Label>
                     <Input
                       id="email-fallback"
                       type="email"
@@ -5106,7 +5068,7 @@ const Financeiro = () => {
                       disabled={isResolvingEmailFallback}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Ao salvar, este e-mail será cadastrado na empresa antes da emissão.
+                      Ao salvar, este e-mail será cadastrado como financeiro, preservando o e-mail geral.
                     </p>
                   </div>
                 </div>

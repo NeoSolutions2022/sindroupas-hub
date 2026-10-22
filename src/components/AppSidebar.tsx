@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, DollarSign, MessageSquare, ClipboardList, UserCog } from "lucide-react";
+import { LayoutDashboard, Users, DollarSign, MessageSquare, ClipboardList, UserCog, Newspaper } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
@@ -19,6 +19,7 @@ const baseItems = [
   { title: "Empresas", url: "/dashboard/empresas", icon: Users },
   { title: "Financeiro", url: "/dashboard/financeiro", icon: DollarSign },
   { title: "Comunicação", url: "/dashboard/comunicacao", icon: MessageSquare },
+  { title: "Newsletter", url: "/dashboard/newsletter", icon: Newspaper },
   { title: "Atividades", url: "/dashboard/atividades", icon: ClipboardList },
 ];
 

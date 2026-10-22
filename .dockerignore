@@ -8,3 +8,10 @@ coverage
 dist
 .idea
 .vscode
+.venv
+.venv-intelligence
+**/__pycache__
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+services/intelligence/.env
