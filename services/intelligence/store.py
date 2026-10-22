@@ -1,11 +1,12 @@
 import json
 import os
-import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import psycopg
+from psycopg.rows import dict_row
 
 TZ = ZoneInfo("America/Fortaleza")
 
@@ -18,50 +19,61 @@ def uid():
     return str(uuid.uuid4())
 
 
+class Record(dict):
+    def __getitem__(self, key):
+        return super().__getitem__(list(self.keys())[key] if isinstance(key, int) else key)
+
+
+class Result:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        return Record(row) if row is not None else None
+
+    def fetchall(self):
+        return [Record(row) for row in self.cursor.fetchall()]
+
+
+class Connection:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, sql, params=None):
+        if sql.strip() == "BEGIN IMMEDIATE":
+            self.connection.execute("BEGIN")
+            # Seções críticas curtas: cota, claim da proposta e deduplicação da edição/envio.
+            return Result(self.connection.execute("SELECT pg_advisory_xact_lock(60161022)"))
+        return Result(self.connection.execute(sql.replace("?", "%s"), params))
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+
 @contextmanager
 def db():
-    path = os.environ.get("DATA_PATH", "/data/intelligence.sqlite")
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=15, isolation_level=None)
-    conn.row_factory = sqlite3.Row
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise RuntimeError("Configure DATABASE_URL com o PostgreSQL da fonte do Hasura.")
+    conn = psycopg.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=10,
+                           options="-c search_path=sindroupas_intelligence,pg_catalog -c statement_timeout=30000")
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        yield conn
+        yield Connection(conn)
     finally:
         conn.close()
 
 
 def init():
     with db() as c:
-        c.executescript("""
-        CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS requests (
-          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, day TEXT NOT NULL, message TEXT NOT NULL,
-          status TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS requests_quota ON requests(user_id,day);
-        CREATE TABLE IF NOT EXISTS proposals (
-          id TEXT PRIMARY KEY, request_id TEXT NOT NULL REFERENCES requests(id), user_id TEXT NOT NULL,
-          status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS newsletters (
-          id TEXT PRIMARY KEY, week TEXT UNIQUE NOT NULL, status TEXT NOT NULL, period_start TEXT NOT NULL,
-          period_end TEXT NOT NULL, content TEXT, articles TEXT, error TEXT, created_at TEXT NOT NULL,
-          completed_at TEXT, media TEXT
-        );
-        CREATE TABLE IF NOT EXISTS deliveries (
-          id TEXT PRIMARY KEY, newsletter_id TEXT NOT NULL REFERENCES newsletters(id), number TEXT NOT NULL,
-          status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL,
-          UNIQUE(newsletter_id,number)
-        );
-        """)
-        if "media" not in {column[1] for column in c.execute("PRAGMA table_info(newsletters)")}:
-            c.execute("ALTER TABLE newsletters ADD COLUMN media TEXT")
-        c.execute("INSERT OR IGNORE INTO settings VALUES (1,?)", (json.dumps({
-            "enabled": False, "time": "09:00", "number": "", "cta_label": "Fale com o SindRoupas",
-            "cta_url": "", "notes": "", "photo_url": "", "photo_caption": "",
-        }),))
+        missing = c.execute("SELECT name FROM unnest(ARRAY['settings','requests','proposals','newsletters','deliveries','image_assets','generation_jobs']) AS name WHERE to_regclass('sindroupas_intelligence.' || name) IS NULL").fetchall()
+        if missing:
+            raise RuntimeError("Aplique docs/sql/2026-10-22-intelligence-postgres.sql no banco do Hasura antes de iniciar o serviço.")
+        if not c.execute("SELECT id FROM settings WHERE id=1").fetchone():
+            raise RuntimeError("Configuração inicial ausente. Reaplique o SQL da inteligência.")
 
 
 def settings():

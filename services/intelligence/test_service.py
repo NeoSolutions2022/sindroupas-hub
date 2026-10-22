@@ -1,10 +1,13 @@
 import json
+import io
 import os
-import tempfile
+from pathlib import Path
+from urllib.parse import urlparse
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
+import psycopg
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -14,6 +17,8 @@ import agent
 import gateway
 import newsletter
 import store
+from newsletter_images import render_cards
+from PIL import Image
 from main import app
 
 SCHEMA = build_schema("""
@@ -33,15 +38,21 @@ USER = {"id": "user-1", "admin": True, "authorization": "Bearer test"}
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
-        self.environment = patch.dict(os.environ, {"DATA_PATH": os.path.join(self.folder.name, "test.sqlite"), "OPENAI_API_KEY": "test", "OPENAI_MODEL": "test", "NEWSLETTER_MODEL": "test", "EVOLUTION_API_URL": "https://test.local", "EVOLUTION_INSTANCE": "test", "EVOLUTION_API_KEY": "test"})
+        test_url = os.environ.get("TEST_DATABASE_URL", "postgresql://test_intelligence@127.0.0.1:55439/intelligence_test")
+        parsed = urlparse(test_url)
+        if parsed.hostname not in ("localhost", "127.0.0.1") or parsed.path != "/intelligence_test":
+            raise RuntimeError("Testes exigem PostgreSQL LOCAL no banco intelligence_test, nunca produção.")
+        self.environment = patch.dict(os.environ, {"DATABASE_URL": test_url, "OPENAI_API_KEY": "test", "OPENAI_MODEL": "test", "NEWSLETTER_MODEL": "test", "EVOLUTION_API_URL": "https://test.local", "EVOLUTION_INSTANCE": "test", "EVOLUTION_API_KEY": "test"})
         self.environment.start()
+        with psycopg.connect(test_url, autocommit=True) as connection:
+            connection.execute((Path(__file__).parents[2]/"docs/sql/2026-10-22-intelligence-postgres.sql").read_text(encoding="utf-8"))
+            connection.execute("TRUNCATE sindroupas_intelligence.requests, sindroupas_intelligence.proposals, sindroupas_intelligence.newsletters, sindroupas_intelligence.deliveries, sindroupas_intelligence.image_assets, sindroupas_intelligence.generation_jobs")
+            connection.execute("UPDATE sindroupas_intelligence.settings SET value=? WHERE id=1".replace("?", "%s"), (json.dumps({"enabled": False, "time": "09:00", "number": "", "images_enabled": False}),))
         store.init()
 
     def tearDown(self):
         app.dependency_overrides.clear()
         self.environment.stop()
-        self.folder.cleanup()
 
     def add_request(self, id_="request-00000000001", user=USER):
         with store.db() as c:
@@ -215,6 +226,47 @@ class ServiceTests(unittest.TestCase):
             app.dependency_overrides[gateway.session] = lambda: {**USER, "admin": False}
             self.assertEqual(client.get("/newsletter").status_code, 403)
             self.assertEqual(client.get("/agent/history").status_code, 200)
+
+    def test_default_models(self):
+        with patch.dict(os.environ, {"OPENAI_MODEL": "", "NEWSLETTER_MODEL": ""}):
+            self.assertEqual(gateway.env("OPENAI_MODEL"), "gpt-6.1-sol")
+            self.assertEqual(gateway.env("NEWSLETTER_MODEL"), "gpt-6.1-sol")
+
+    def test_queue_deduplicates_and_records_failure(self):
+        first = newsletter.enqueue(USER["id"])
+        self.assertEqual(newsletter.enqueue(USER["id"])["job_id"], first["job_id"])
+        with patch.object(newsletter, "response", side_effect=RuntimeError("modelo indisponível")) as response:
+            newsletter.process_job()
+            newsletter.process_job()
+            self.assertEqual(response.call_count, 1)
+        with store.db() as c:
+            row = c.execute("SELECT * FROM generation_jobs WHERE id=?", (first["job_id"],)).fetchone()
+            self.assertEqual(row["status"], "failed")
+            self.assertIsNotNone(row["newsletter_id"])
+
+    def test_queue_waits_for_key(self):
+        job = newsletter.enqueue(USER["id"])
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}), patch.object(newsletter, "response") as response:
+            newsletter.process_job()
+            response.assert_not_called()
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT status FROM generation_jobs WHERE id=?", (job["job_id"],)).fetchone()[0], "blocked")
+
+    def test_png_cards_keep_source_and_summary(self):
+        articles = [{"title": "Indústria de confecção no Ceará", "summary": "Indicadores e perspectivas para o setor.", "url": "https://example.com/materia", "published_at": "2026-10-21"}]
+        cards = render_cards(articles, "Síntese da semana.", date(2026, 10, 15), date(2026, 10, 22), {"cta_label": "Fale com o sindicato", "cta_url": "https://example.com/contato"})
+        self.assertEqual(len(cards), 2)
+        for card in cards:
+            with Image.open(io.BytesIO(card["content"])) as image:
+                self.assertEqual(image.format, "PNG")
+                self.assertEqual(image.width, 1080)
+                self.assertGreaterEqual(image.height, 1080)
+
+    def test_image_route_requires_admin(self):
+        with patch("main.newsletter.process_job"), TestClient(app) as client:
+            self.assertEqual(client.get("/newsletter/images/asset").status_code, 401)
+            app.dependency_overrides[gateway.session] = lambda: {**USER, "admin": False}
+            self.assertEqual(client.get("/newsletter/images/asset").status_code, 403)
 
 
 if __name__ == "__main__":

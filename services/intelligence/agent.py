@@ -69,6 +69,8 @@ def record_snapshot(user, schema, entity, id_, fields):
 def prepare_proposal(user, schema, request_id, entity, action, id_, values, summary):
     if not entity.isidentifier() or action not in ("create", "update"):
         raise ValueError("Entidade ou ação inválida.")
+    if entity.startswith("sindroupas_intelligence_"):
+        raise ValueError("Os controles internos de cota, aprovação e newsletter são gerenciados pelo serviço, não pelo agente.")
     if not isinstance(values, dict) or not values or len(json.dumps(values)) > 16000:
         raise ValueError("Informe os campos e novos valores da alteração.")
     if "id" in values:

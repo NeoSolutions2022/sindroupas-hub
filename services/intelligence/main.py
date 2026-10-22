@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -18,19 +18,21 @@ async def scheduler():
     while True:
         config = settings()
         current = now()
-        if newsletter.schedule_due(config, current):
-            try:
-                await asyncio.to_thread(newsletter.generate)
-            except Exception:
-                pass  # Erros editoriais/de envio ficam registrados na edição, sem derrubar o worker.
+        try:
+            if newsletter.schedule_due(config, current):
+                await asyncio.to_thread(newsletter.enqueue, "scheduler")
+            await asyncio.to_thread(newsletter.process_job)
+        except Exception:
+            pass  # A fila e as edições persistem no PostgreSQL para inspeção.
         await asyncio.sleep(30)
 
 
 @asynccontextmanager
 async def lifespan(_app):
     init()
-    # Uma instância por volume. Não repetir operações interrompidas com resultado desconhecido.
+    # Uma réplica e um worker. Não repetir operações com resultado desconhecido.
     with db() as c:
+        c.execute("UPDATE generation_jobs SET status='failed',error='Serviço reiniciado durante a geração; revise a edição antes de tentar novamente.' WHERE status='running'")
         c.execute("UPDATE proposals SET status='uncertain',result=? WHERE status='executing'", (json.dumps({"error": "Serviço reiniciado durante a execução. Confira o registro antes de tentar outra alteração."}),))
         c.execute("UPDATE newsletters SET status='failed',error='Geração interrompida por reinício. É possível tentar novamente.' WHERE status='generating'")
         c.execute("UPDATE deliveries SET status='uncertain',error='Envio interrompido. Confira o WhatsApp antes de qualquer reenvio.' WHERE status='sending'")
@@ -68,6 +70,7 @@ class NewsletterSettings(BaseModel):
     photo_url: str = Field(default="", max_length=1500)
     photo_urls: list[str] = Field(default_factory=list, max_length=5)
     photo_caption: str = Field(default="", max_length=1000)
+    images_enabled: bool = False
 
 
 @app.get("/health")
@@ -104,7 +107,9 @@ def decide(proposal_id: str, body: Decision, user=Depends(session)):
 @app.get("/newsletter")
 def newsletter_state(user=Depends(session)):
     admin(user)
-    return {"settings": settings(), "editions": newsletter.history()}
+    with db() as c:
+        jobs = [dict(row) for row in c.execute("SELECT * FROM generation_jobs ORDER BY created_at DESC LIMIT 10").fetchall()]
+    return {"settings": settings(), "editions": newsletter.history(), "jobs": jobs, "model": env("NEWSLETTER_MODEL")}
 
 
 @app.put("/newsletter/settings")
@@ -132,12 +137,9 @@ def save_settings(body: NewsletterSettings, user=Depends(session)):
 
 
 @app.post("/newsletter/generate")
-def generate(tasks: BackgroundTasks, user=Depends(session)):
+def generate(user=Depends(session)):
     admin(user)
-    env("OPENAI_API_KEY")
-    env("NEWSLETTER_MODEL")
-    tasks.add_task(newsletter.generate)
-    return {"accepted": True}
+    return newsletter.enqueue(user["id"])
 
 
 @app.post("/newsletter/{newsletter_id}/send")
@@ -147,7 +149,7 @@ def send(newsletter_id: str, user=Depends(session)):
 
 
 @app.post("/newsletter/{newsletter_id}/retry")
-def retry(newsletter_id: str, tasks: BackgroundTasks, user=Depends(session)):
+def retry(newsletter_id: str, user=Depends(session)):
     admin(user)
     env("OPENAI_API_KEY")
     env("NEWSLETTER_MODEL")
@@ -156,8 +158,17 @@ def retry(newsletter_id: str, tasks: BackgroundTasks, user=Depends(session)):
         row = c.execute("SELECT status,week FROM newsletters WHERE id=?", (newsletter_id,)).fetchone()
         if not row or row["week"] != week or row["status"] != "failed":
             raise HTTPException(409, "Só é possível repetir a geração de uma edição falhada da semana atual.")
-    tasks.add_task(newsletter.generate, newsletter_id)
-    return {"accepted": True}
+    return newsletter.enqueue(user["id"], newsletter_id)
+
+
+@app.get("/newsletter/images/{asset_id}")
+def newsletter_image(asset_id: str, user=Depends(session)):
+    admin(user)
+    with db() as c:
+        row = c.execute("SELECT content,content_type FROM image_assets WHERE id=?", (asset_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Imagem não encontrada.")
+    return Response(content=bytes(row["content"]), media_type=row["content_type"], headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/newsletter/groups")

@@ -39,6 +39,7 @@ export interface NewsletterSettings {
   photo_url: string;
   photo_urls: string[];
   photo_caption: string;
+  images_enabled: boolean;
 }
 export interface NewsletterEdition {
   id: string;
@@ -50,6 +51,19 @@ export interface NewsletterEdition {
   error: string | null;
   articles: { title: string; url: string; published_at: string }[];
   media?: { url: string; caption: string }[];
+  image_assets?: { id: string; position: number; caption: string }[];
+  images_enabled?: boolean;
   deliveries: { id: string; status: string; number: string; error: string | null }[];
 }
-export interface NewsletterState { settings: NewsletterSettings; editions: NewsletterEdition[] }
+export interface NewsletterState {
+  settings: NewsletterSettings;
+  editions: NewsletterEdition[];
+  model?: string;
+  jobs?: { id: string; status: string; error: string | null; created_at: string }[];
+}
+
+export async function intelligenceImage(id: string, token: string): Promise<Blob> {
+  const response = await fetch(`${getIntelligenceApiUrl()}/newsletter/images/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error("Não foi possível carregar o card. Verifique sua sessão.");
+  return response.blob();
+}

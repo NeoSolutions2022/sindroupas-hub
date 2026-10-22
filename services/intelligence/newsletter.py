@@ -1,4 +1,5 @@
 import json
+import base64
 import re
 from datetime import date, timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -8,6 +9,7 @@ from fastapi import HTTPException
 
 from gateway import env, output_text, response
 from store import db, now, settings, uid
+from newsletter_images import render_cards
 
 EDITORIAL = """Você é um analista de inteligência de mercado e curador de notícias especializado em moda, Ceará e Nordeste.
 Produza uma newsletter semanal para WhatsApp sobre moda, indústria têxtil, confecção, varejo e consumo.
@@ -93,6 +95,7 @@ def history():
     with db() as c:
         rows = c.execute("SELECT * FROM newsletters ORDER BY created_at DESC LIMIT 100").fetchall()
         return [{**dict(row), "articles": json.loads(row["articles"] or "[]"), "media": json.loads(row["media"] or "[]"),
+                 "image_assets": [dict(asset) for asset in c.execute("SELECT id,position,caption FROM image_assets WHERE newsletter_id=? ORDER BY position", (row["id"],)).fetchall()],
                  "deliveries": [dict(delivery) for delivery in c.execute("SELECT * FROM deliveries WHERE newsletter_id=?", (row["id"],)).fetchall()]} for row in rows]
 
 
@@ -174,9 +177,15 @@ def generate(retry_id=None):
         data = json.loads(output_text(result))
         articles = verify(data, result, start, today, previous)
         content = render(articles, data["reading"], start, today, config)
+        cards = render_cards(articles, data["reading"], start, today, config) if config.get("images_enabled", False) else []
         with db() as c:
-            c.execute("UPDATE newsletters SET status='ready',content=?,articles=?,completed_at=? WHERE id=?",
-                      (content, json.dumps(articles, ensure_ascii=False), now().isoformat(), newsletter_id))
+            c.execute("BEGIN IMMEDIATE")
+            for card in cards:
+                c.execute("INSERT INTO image_assets(id,newsletter_id,position,content,content_type,caption,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT (newsletter_id,position) DO UPDATE SET content=excluded.content,caption=excluded.caption",
+                          (uid(), newsletter_id, card["position"], card["content"], "image/png", card["caption"], now().isoformat()))
+            c.execute("UPDATE newsletters SET status='ready',content=?,articles=?,completed_at=?,reading=?,images_enabled=? WHERE id=?",
+                      (content, json.dumps(articles, ensure_ascii=False), now().isoformat(), data["reading"], bool(cards), newsletter_id))
+            c.commit()
         if destination(config):
             send(newsletter_id, config)
     except Exception as exc:
@@ -209,6 +218,10 @@ def send(newsletter_id, config=None):
     status, error = "sent", None
     try:
         evolution("message/sendText", {"number": number, "text": row["content"]})
+        with db() as c:
+            assets = c.execute("SELECT content,caption FROM image_assets WHERE newsletter_id=? ORDER BY position", (newsletter_id,)).fetchall()
+        for asset in assets:
+            evolution("message/sendMedia", {"number": number, "mediatype": "image", "mimetype": "image/png", "media": base64.b64encode(bytes(asset["content"])).decode("ascii"), "caption": asset["caption"]})
         for photo in json.loads(row["media"] or "[]"):
             evolution("message/sendMedia", {"number": number, "mediatype": "image", "media": photo["url"], "caption": photo["caption"]})
     except Exception as exc:
@@ -217,3 +230,53 @@ def send(newsletter_id, config=None):
     with db() as c:
         c.execute("UPDATE deliveries SET status=?,error=? WHERE id=?", (status, error, delivery_id))
     return {"id": delivery_id, "status": status, "number": number, "error": error}
+
+
+def enqueue(user_id, retry_id=None):
+    current = now()
+    week = f"{current.isocalendar().year}-{current.isocalendar().week:02d}"
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        existing = c.execute("SELECT * FROM generation_jobs WHERE week=?", (week,)).fetchone()
+        if existing:
+            if retry_id and existing["status"] in ("failed", "done"):
+                c.execute("UPDATE generation_jobs SET status='pending',error=NULL,newsletter_id=?,completed_at=NULL WHERE id=?", (retry_id, existing["id"]))
+                c.commit()
+                return {"accepted": True, "job_id": existing["id"], "status": "pending"}
+            return {"accepted": True, "job_id": existing["id"], "status": existing["status"]}
+        job_id = uid()
+        c.execute("INSERT INTO generation_jobs(id,week,status,requested_by,newsletter_id,created_at) VALUES(?,?,?,?,?,?)", (job_id, week, "pending", user_id, retry_id, current.isoformat()))
+        c.commit()
+    return {"accepted": True, "job_id": job_id, "status": "pending"}
+
+
+def process_job():
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT * FROM generation_jobs WHERE status IN ('pending','blocked') ORDER BY created_at LIMIT 1").fetchone()
+        if not row:
+            return
+        try:
+            env("OPENAI_API_KEY")
+            env("NEWSLETTER_MODEL")
+        except HTTPException as exc:
+            c.execute("UPDATE generation_jobs SET status='blocked',error=? WHERE id=?", (str(exc.detail), row["id"]))
+            c.commit()
+            return
+        current = now()
+        week = f"{current.isocalendar().year}-{current.isocalendar().week:02d}"
+        if row["week"] != week:
+            c.execute("UPDATE generation_jobs SET status='failed',error='Pedido de semana anterior. Solicite uma nova edição com notícias atuais.' WHERE id=?", (row["id"],))
+            c.commit()
+            return
+        c.execute("UPDATE generation_jobs SET status='running',error=NULL WHERE id=?", (row["id"],))
+        c.commit()
+    try:
+        edition = generate(row["newsletter_id"])
+        status = "done" if edition["status"] == "ready" else "failed"
+        error = edition.get("error")
+        newsletter_id = edition["id"]
+    except Exception as exc:
+        status, error, newsletter_id = "failed", str(getattr(exc, "detail", exc))[:1500], None
+    with db() as c:
+        c.execute("UPDATE generation_jobs SET status=?,error=?,newsletter_id=?,completed_at=? WHERE id=?", (status, error, newsletter_id, now().isoformat(), row["id"]))

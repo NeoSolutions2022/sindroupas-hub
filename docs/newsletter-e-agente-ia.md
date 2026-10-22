@@ -8,18 +8,18 @@ O frontend continua com o Dockerfile atual. O serviço Python novo está em `ser
 
 1. Aplicar `docs/sql/2026-10-22-email-financeiro.sql` na fonte PostgreSQL do Hasura. Adiciona uma coluna, sem copiar ou alterar e-mails existentes. Recarregar schema e permissões. O frontend tolera a ausência temporária da coluna nas consultas, mas avisa para aplicar o SQL quando alguém tenta salvá-la.
 2. Criar serviço com contexto de build na raiz do repositório e Dockerfile `services/intelligence/Dockerfile`. Porta interna 8080, HTTPS, **uma réplica e um worker**.
-3. Montar volume **persistente** em `/data`, gravável pelo UID 10001. Histórico, quota e propostas ficam em SQLite nesse volume. Não usar armazenamento efêmero nem compartilhar o arquivo entre réplicas. Fazer backup do volume.
+3. Aplicar `docs/sql/2026-10-22-intelligence-postgres.sql` no banco já conectado ao Hasura. As sete tabelas ficam no schema isolado `sindroupas_intelligence`, sem modificar empresas ou boletos. O serviço exige essas estruturas e não executa migrações automaticamente. Não são necessárias permissões públicas nas tabelas nem volume SQLite. Incluir o schema nos backups existentes do PostgreSQL.
 4. Configurar as variáveis do serviço:
 
    | Variável | Valor |
    | --- | --- |
    | `OPENAI_API_KEY` | Chave do projeto OpenAI, somente no servidor |
-   | `OPENAI_MODEL` | Modelo com Responses API e function calling |
-   | `NEWSLETTER_MODEL` | Modelo com Responses API, `web_search` e Structured Outputs |
+   | `OPENAI_MODEL` | `gpt-6.1-sol` por padrão; exige Responses API e function calling |
+   | `NEWSLETTER_MODEL` | `gpt-6.1-sol` por padrão; exige `web_search` e Structured Outputs |
    | `AUTH_URL` | Mesma URL-base de autenticação do frontend; valida sessão em `GET /auth/me` |
    | `HASURA_URL` | Endpoint `/v1/graphql` com validação JWT configurada |
    | `CORS_ORIGINS` | Origem HTTPS do frontend; várias origens separadas por vírgula |
-   | `DATA_PATH` | `/data/intelligence.sqlite` |
+   | `DATABASE_URL` | Conexão PostgreSQL do mesmo banco conectado ao Hasura; somente servidor |
    | `EVOLUTION_API_URL` | Mesma URL-base da Evolution usada atualmente |
    | `EVOLUTION_INSTANCE` | A **mesma instância já cadastrada**, sem criar outra |
    | `EVOLUTION_API_KEY` | Chave dessa instância, somente no servidor |
@@ -27,7 +27,7 @@ O frontend continua com o Dockerfile atual. O serviço Python novo está em `ser
 5. Configurar no frontend `VITE_INTELLIGENCE_API_URL` com a URL HTTPS do serviço novo e republicar. O entrypoint já publica essa variável em `env.js`. Sem URL, o chat fica oculto e a página da newsletter informa que o serviço precisa ser conectado.
 6. Validar `/health`, autenticação e permissões com uma conta de teste antes de habilitar a agenda. O serviço precisa permanecer ligado às quartas-feiras.
 
-Não há modelo nem chave real fixados no código. Escolher modelos com as ferramentas indicadas. Configuração incompatível resulta em erro no histórico, sem enviar edição incompleta. Os testes usam APIs simuladas; não validam as credenciais ou permissões do ambiente de produção.
+O modelo padrão é `gpt-6.1-sol`, substituível pelas variáveis acima. Nenhuma chave real fica no código. Configuração incompatível resulta em erro no histórico, sem enviar edição incompleta. Os testes usam PostgreSQL local e APIs externas simuladas; não validam as credenciais ou permissões de produção. A chave OpenAI não deve ficar nas variáveis do frontend.
 
 ## E-mail financeiro
 
@@ -46,6 +46,9 @@ Página administrativa `/dashboard/newsletter`. Agenda inicialmente desativada. 
 - Pesquisa insuficiente ou falhada fica com erro e não envia. A interface permite tentar novamente uma edição falhada da semana atual. Links e datas ficam disponíveis para conferência; validação automatizada não substitui revisão editorial.
 - Formato WhatsApp RADAR MODA, síntese e CTA configurável. WhatsApp usa texto, sem alinhamento central de botão. O CTA fica em destaque no final; na plataforma, o link de contato é centralizado.
 - Histórico preserva texto, fontes e fotos da edição, mesmo após mudar a configuração.
+- Opção de versão em imagens: cards PNG renderizados com os mesmos títulos, resumos e links da edição verificada, além de um card de síntese e CTA. Não utiliza geração livre de texto em imagens por IA. Os arquivos ficam em `image_assets` no PostgreSQL e só são acessíveis pela rota autenticada administrativa; seguem junto ao texto pela mesma Evolution.
+- Geração usa uma fila persistente por semana. Cliques repetidos não duplicam tarefas. A interface mostra tarefas pendentes, em andamento, bloqueadas ou falhadas; a pesquisa não depende de manter a página aberta. Configuração ausente bloqueia a tarefa, sem perder o pedido. Reinício durante execução exige revisão antes de tentar novamente.
+- `docs/sql/2026-10-22-primeira-newsletter.sql` solicita a primeira edição de forma idempotente; não fabrica conteúdo e não envia sem destino cadastrado. A fila só é processada após publicar o serviço com uma chave válida.
 - **Sem destino, gera e guarda na plataforma. Com destino cadastrado, envia automaticamente quando pronta**, inclusive na geração manual, que pede confirmação antes de iniciar.
 - Grupos consultados por `group/fetchAllGroups/{instance}`, com JID `@g.us`. Números individuais normalizados para `55+DDD+número`.
 - Usa `message/sendText/{instance}` e `message/sendMedia/{instance}` na mesma Evolution já usada. Fotos seguem o texto; erro parcial pode significar texto recebido sem todas as fotos.
@@ -63,9 +66,9 @@ Chat flutuante nas páginas autenticadas quando o serviço estiver conectado.
 - UI mostra entidade, ID, resumo, valores anteriores e novos. O botão **Confirmar criação/edição** executa a proposta guardada no servidor. Somente o mesmo usuário confirma, em até 30 minutos.
 - Na confirmação, revalida sessão/schema e compara os dados. A mutation condiciona a gravação aos valores anteriores para impedir sobrescrita concorrente. Confirmações repetidas não repetem a operação. Resultados incertos exigem conferência antes de nova alteração.
 - Emissão, cancelamento, valores e status de boletos devem usar as telas/APIs de domínio existentes; a ferramenta genérica só altera competências em `financeiro_boletos`.
-- Histórico por usuário. OpenAI recebe os dados necessários às consultas solicitadas. Usa `store:false` na Responses API; histórico próprio permanece no volume do serviço. Chave OpenAI não vai ao navegador.
+- Histórico por usuário. OpenAI recebe os dados necessários às consultas solicitadas. Usa `store:false` na Responses API; histórico próprio permanece no PostgreSQL conectado ao Hasura. Chave OpenAI não vai ao navegador.
 
-SQLite é inicializado/migrado pelo código apenas no volume do serviço novo. **Não cria tabelas nem altera dados do Hasura automaticamente.** A única mudança no schema principal nesta entrega é o SQL separado de e-mail financeiro.
+As estruturas novas são criadas exclusivamente pelo SQL revisável. O serviço grava apenas seu schema isolado para configurações, histórico, cotas e fila. Alterações de negócio pelo agente continuam passando pelo JWT do usuário, permissões Hasura e confirmação explícita. O agente não pode editar suas próprias tabelas de cotas ou aprovações. Caso exista uma instalação SQLite anterior, preservar o arquivo e planejar importação separada antes da troca; não há importação nem exclusão automática.
 
 ## Testes locais
 
@@ -77,8 +80,9 @@ node scripts/test-boleto-financial-email.mjs
 node scripts/test-mantenedores-flow.mjs
 node scripts/test-intelligence-ui.mjs
 
-# Em ambiente virtual Python isolado:
+# Em ambiente virtual Python isolado e com PostgreSQL LOCAL dedicado:
 pip install -r services/intelligence/requirements-test.txt
+$env:TEST_DATABASE_URL = 'postgresql://test_intelligence@127.0.0.1:55439/intelligence_test'
 cd services/intelligence
 python -m unittest -v test_service
 ```

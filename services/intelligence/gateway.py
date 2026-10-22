@@ -5,7 +5,7 @@ from fastapi import Header, HTTPException
 
 
 def env(name):
-    value = os.environ.get(name, "").strip()
+    value = os.environ.get(name, "").strip() or ("gpt-6.1-sol" if name in ("OPENAI_MODEL", "NEWSLETTER_MODEL") else "")
     if not value:
         raise HTTPException(503, f"Serviço ainda não configurado: {name}.")
     return value

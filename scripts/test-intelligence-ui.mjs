@@ -7,7 +7,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  let settings = { enabled: false, time: "09:00", destination_type: "number", number: "", cta_label: "Fale com o sindicato", cta_url: "", source_links: [], notes: "", photo_url: "", photo_urls: [], photo_caption: "" };
+  let settings = { enabled: false, time: "09:00", destination_type: "number", number: "", cta_label: "Fale com o sindicato", cta_url: "", source_links: [], notes: "", photo_url: "", photo_urls: [], photo_caption: "", images_enabled: false };
   let generated = 0;
   let decisions = 0;
   let items = [];
@@ -51,10 +51,12 @@ try {
   await page.getByRole("button", { name: "Carregar grupos da Evolution" }).click();
   await page.getByLabel("Selecionar grupo Evolution").selectOption("120363123456789@g.us");
   await page.getByLabel("Link de contato do CTA").fill("https://wa.me/5585999999999");
+  await page.getByLabel("Gerar versão em imagens para WhatsApp").check();
   await page.getByRole("button", { name: "Salvar configuração" }).click();
   await expect(page.getByRole("button", { name: "Salvar configuração" })).toBeEnabled();
   assert.equal(settings.number, "120363123456789@g.us");
   assert.equal(settings.source_links.length, 2);
+  assert.equal(settings.images_enabled, true);
   await page.getByRole("button", { name: "Gerar edição da semana" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("120363123456789@g.us");
   assert.equal(generated, 0, "Não gerar antes da confirmação");
