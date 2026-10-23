@@ -65,17 +65,17 @@ class ServiceTests(unittest.TestCase):
         with patch.object(agent, "hasura", return_value={"record": {"id": "company-1", "email": "old@example.com"}}):
             return agent.prepare_proposal(USER, SCHEMA, request_id, "empresas", action, "company-1" if action == "update" else "", {"email": "new@example.com"}, "Corrigir e-mail")
 
-    def test_quota_three_and_replay(self):
+    def test_quota_eight_and_replay(self):
         answer = {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Olá"}]}]}
         with patch.object(agent, "load_schema", return_value=SCHEMA), patch.object(agent, "response", return_value=answer) as response:
-            for i in range(3):
+            for i in range(8):
                 agent.ask(USER, f"request-0000000000{i}", "Olá")
             agent.ask(USER, "request-00000000000", "Olá")
-            self.assertEqual(response.call_count, 3)
+            self.assertEqual(response.call_count, 8)
             with self.assertRaises(HTTPException) as error:
-                agent.ask(USER, "request-00000000004", "Outro pedido")
+                agent.ask(USER, "request-00000000008", "Outro pedido")
             self.assertEqual(error.exception.status_code, 429)
-            self.assertEqual(store.quota(USER["id"])["used"], 3)
+            self.assertEqual(store.quota(USER["id"])["used"], 8)
 
     def test_concurrent_quota(self):
         answer = {"status": "completed", "output": []}
@@ -87,8 +87,39 @@ class ServiceTests(unittest.TestCase):
                 self.assertEqual(error.status_code, 429)
                 return False
         with patch.object(agent, "load_schema", return_value=SCHEMA), patch.object(agent, "response", return_value=answer):
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                self.assertEqual(sum(executor.map(run, range(6))), 3)
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                self.assertEqual(sum(executor.map(run, range(10))), 8)
+
+    def test_clear_history_preserves_quota_and_audit_and_rejects_pending(self):
+        proposal = self.proposal()
+        self.add_request("other-user-request", {**USER, "id": "other-user"})
+        app.dependency_overrides[gateway.session] = lambda: USER
+        client = TestClient(app)
+        self.assertEqual(len(client.get("/agent/history").json()["items"]), 1)
+        self.assertEqual(client.post("/agent/history/clear").status_code, 200)
+        history = client.get("/agent/history").json()
+        self.assertEqual(history["items"], [])
+        self.assertEqual(history["quota"], store.quota(USER["id"]))
+        self.assertEqual(history["quota"]["remaining"], 7)
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM requests").fetchone()[0], 2)
+            self.assertEqual(c.execute("SELECT status FROM proposals WHERE id=?", (proposal["id"],)).fetchone()[0], "rejected")
+            self.assertIsNone(c.execute("SELECT result FROM requests WHERE user_id='other-user'").fetchone()[0])
+        with patch.object(agent, "hasura") as hasura:
+            self.assertEqual(agent.decide(USER, proposal["id"], True)["status"], "rejected")
+            hasura.assert_not_called()
+        with patch.object(agent, "load_schema", return_value=SCHEMA), patch.object(agent, "response", return_value={"output": []}) as response:
+            agent.ask(USER, "request-after-clear", "Nova conversa")
+            self.assertEqual(response.call_args.args[0]["input"], [{"role": "user", "content": "Nova conversa"}])
+
+    def test_clear_history_blocks_running_and_requires_login(self):
+        client = TestClient(app)
+        self.assertEqual(client.post("/agent/history/clear").status_code, 401)
+        self.add_request()
+        with store.db() as c:
+            c.execute("UPDATE requests SET status='running'")
+        app.dependency_overrides[gateway.session] = lambda: USER
+        self.assertEqual(client.post("/agent/history/clear").status_code, 409)
 
     def test_proposal_is_not_a_write_and_has_own_id(self):
         proposal = self.proposal()
@@ -205,7 +236,7 @@ class ServiceTests(unittest.TestCase):
     def test_quota_renews_on_fortaleza_day(self):
         self.add_request()
         with patch.object(store, "now", return_value=store.now()+timedelta(days=1)):
-            self.assertEqual(store.quota(USER["id"])["remaining"], 3)
+            self.assertEqual(store.quota(USER["id"])["remaining"], 8)
 
     def test_creation_requires_confirmation_and_is_not_repeated(self):
         proposal = self.proposal("create")

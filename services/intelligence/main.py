@@ -88,7 +88,7 @@ def health():
 @app.get("/agent/history")
 def chat_history(user=Depends(session)):
     with db() as c:
-        rows = c.execute("SELECT * FROM requests WHERE user_id=? ORDER BY created_at DESC LIMIT 20", (user["id"],)).fetchall()
+        rows = c.execute("SELECT * FROM requests WHERE user_id=? AND COALESCE(result::jsonb->>'history_cleared','false') <> 'true' ORDER BY created_at DESC LIMIT 20", (user["id"],)).fetchall()
         items = []
         for row in reversed(rows):
             result = json.loads(row["result"] or "{}")
@@ -96,6 +96,20 @@ def chat_history(user=Depends(session)):
             items.append({"request_id": row["id"], "message": row["message"], "answer": result.get("answer", "Em processamento…"), "actions": result.get("actions", []),
                           "proposals": [{"id": p["id"], "status": p["status"], "result": json.loads(p["result"] or "null"), **json.loads(p["payload"])} for p in proposals]})
     return {"items": items, "quota": quota(user["id"])}
+
+
+@app.post("/agent/history/clear")
+def clear_chat_history(user=Depends(session)):
+    # Arquiva apenas a conversa desta sessão; preserva auditoria, cota e idempotência.
+    with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        if c.execute("SELECT id FROM requests WHERE user_id=? AND status='running' LIMIT 1", (user["id"],)).fetchone() or c.execute("SELECT id FROM proposals WHERE user_id=? AND status='executing' LIMIT 1", (user["id"],)).fetchone():
+            c.rollback()
+            raise HTTPException(409, "Aguarde a solicitação ou alteração em andamento antes de limpar o histórico.")
+        c.execute("UPDATE proposals SET status='rejected' WHERE user_id=? AND status='pending'", (user["id"],))
+        c.execute("UPDATE requests SET result=(COALESCE(result,'{}')::jsonb || '{\"history_cleared\":true}'::jsonb)::text WHERE user_id=?", (user["id"],))
+        c.commit()
+    return {"ok": True, "quota": quota(user["id"])}
 
 
 @app.post("/agent/chat")

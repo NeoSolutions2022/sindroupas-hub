@@ -12,6 +12,8 @@ try {
   let generated = 0;
   let decisions = 0;
   let items = [];
+  let used = 0;
+  let clears = 0;
   const editions = [{ id: "edition-existing", week: "2026-43", status: "ready", period_start: "2026-10-15", period_end: "2026-10-22", content: "Texto preservado", articles: [{ title: "Indústria cearense ganha novo impulso", url: "https://www.fiec.org.br/noticia", published_at: "2026-10-21" }, { title: "Inovação transforma o setor têxtil", url: "https://www.ibge.gov.br/noticia", published_at: "2026-10-20" }], deliveries: [], image_assets: [] }];
   let imageGenerations = 0;
   await page.addInitScript(({ baseUrl }) => {
@@ -45,10 +47,12 @@ try {
       return route.fulfill({ json: { status: "ready", image_assets: editions[0].image_assets } });
     }
     if (path.startsWith("/mock/intelligence/newsletter/images/")) return route.fulfill({ contentType: "image/png", body: await readFile(new URL(`../../outputs/radar-card-preview-${path.split("-").at(-1)}.png`, import.meta.url)) });
-    if (path === "/mock/intelligence/agent/history") return route.fulfill({ json: { items, quota: { used: items.length, limit: 3, remaining: 3-items.length, day: "2026-10-22" } } });
+    if (path === "/mock/intelligence/agent/history") return route.fulfill({ json: { items, quota: { used, limit: 8, remaining: 8-used, day: "2026-10-23" } } });
+    if (path === "/mock/intelligence/agent/history/clear") { clears += 1; items = []; return route.fulfill({ json: { ok: true } }); }
     if (path === "/mock/intelligence/agent/chat") {
       const body = request.postDataJSON();
-      items = [{ request_id: body.request_id, message: body.message, answer: "Encontrei a empresa. Revise e confirme a correção.", proposals: [{ id: "proposal-1", entity: "empresas", action: "update", status: "pending", values: { email_financeiro: "financeiro@example.com" }, before: { email_financeiro: "antigo@example.com" }, summary: "Corrigir somente o e-mail financeiro." }] }];
+      used += 1;
+      items = [{ request_id: body.request_id, message: body.message, answer: "**Encontrei a empresa.**\n\n- Revise a correção\n- Confirme abaixo\n\n| Campo | Valor |\n| --- | --- |\n| Empresa | Alfa |\n\n[Site](https://example.com)\n\n<script>alert('xss')</script>\n\n![imagem](https://example.com/tracking.png)\n\n[perigoso](javascript:alert(1))", proposals: [{ id: "proposal-1", entity: "empresas", action: "update", status: "pending", values: { email_financeiro: "financeiro@example.com" }, before: { email_financeiro: "antigo@example.com" }, summary: "Corrigir somente o e-mail financeiro." }] }];
       return route.fulfill({ json: { answer: items[0].answer } });
     }
     if (path === "/mock/intelligence/agent/proposals/proposal-1/decision") {
@@ -113,7 +117,7 @@ try {
   await expect.poll(() => generated).toBe(1);
   await page.getByRole("button", { name: "Assistente IA", exact: true }).click();
   const chat = page.getByRole("region", { name: "Assistente IA" });
-  await expect(chat.getByText("3 de 3 solicitações disponíveis hoje")).toBeVisible();
+  await expect(chat.getByText("8 de 8 solicitações disponíveis hoje")).toBeVisible();
   await chat.getByRole("button", { name: "Ditar mensagem" }).click();
   await expect(chat.getByLabel("Mensagem para o assistente")).toHaveValue("Prepare a mensalidade da empresa Alfa");
   assert.equal(items.length, 0, "A voz só preenche o texto, não envia nem cria boletos");
@@ -121,11 +125,28 @@ try {
   await chat.getByRole("button", { name: "Enviar solicitação" }).click();
   await expect(chat.getByText("Antes: antigo@example.com")).toBeVisible();
   await expect(chat.getByText("Depois: financeiro@example.com")).toBeVisible();
+  await expect(chat.getByTestId("agent-answer").locator("strong")).toHaveText("Encontrei a empresa.");
+  await expect(chat.getByTestId("agent-answer").getByRole("table")).toBeVisible();
+  await expect(chat.getByTestId("agent-answer").locator("script,img,a[href^='javascript:']")).toHaveCount(0);
+  await expect(chat.getByRole("link", { name: "Site", exact: true })).toHaveAttribute("rel", "noopener noreferrer");
   assert.equal(decisions, 0, "Não executar antes da confirmação");
   await chat.getByRole("button", { name: "Confirmar edição" }).click();
   await expect(chat.getByText("Alteração concluída", { exact: true })).toBeVisible();
-  await expect(chat.getByText("2 de 3 solicitações disponíveis hoje")).toBeVisible();
+  await expect(chat.getByText("7 de 8 solicitações disponíveis hoje")).toBeVisible();
   assert.equal(decisions, 1);
+  await chat.getByRole("button", { name: "Limpar histórico do chat" }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("Nenhum dado de empresa ou boleto será alterado");
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  assert.equal(clears, 0);
+  await chat.getByRole("button", { name: "Limpar histórico do chat" }).click();
+  await page.getByRole("button", { name: "Confirmar limpeza", exact: true }).click();
+  await expect(chat.getByTestId("agent-answer")).toHaveCount(0);
+  await expect(chat.getByText("7 de 8 solicitações disponíveis hoje")).toBeVisible();
+  assert.equal(clears, 1);
+  await page.reload();
+  await page.getByRole("button", { name: "Assistente IA", exact: true }).click();
+  await expect(chat.getByTestId("agent-answer")).toHaveCount(0);
+  await expect(chat.getByText("7 de 8 solicitações disponíveis hoje")).toBeVisible();
   let unauthorizedRequests = 0;
   await page.route("**/mock/intelligence/newsletter", async (route) => {
     unauthorizedRequests += 1;

@@ -9,6 +9,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 TZ = ZoneInfo("America/Fortaleza")
+AGENT_DAILY_LIMIT = 8
 
 
 def now():
@@ -84,4 +85,4 @@ def settings():
 def quota(user_id):
     with db() as c:
         used = c.execute("SELECT count(*) FROM requests WHERE user_id=? AND day=?", (user_id, now().date().isoformat())).fetchone()[0]
-    return {"used": used, "limit": 3, "remaining": max(0, 3-used), "day": now().date().isoformat()}
+    return {"used": used, "limit": AGENT_DAILY_LIMIT, "remaining": max(0, AGENT_DAILY_LIMIT-used), "day": now().date().isoformat()}
