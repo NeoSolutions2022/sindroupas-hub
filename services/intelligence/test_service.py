@@ -1,4 +1,5 @@
 import json
+import base64
 import io
 import os
 from pathlib import Path
@@ -255,12 +256,13 @@ class ServiceTests(unittest.TestCase):
     def test_png_cards_keep_source_and_summary(self):
         articles = [{"title": "Indústria de confecção no Ceará", "summary": "Indicadores e perspectivas para o setor.", "url": "https://example.com/materia", "published_at": "2026-10-21"}]
         cards = render_cards(articles, "Síntese da semana.", date(2026, 10, 15), date(2026, 10, 22), {"cta_label": "Fale com o sindicato", "cta_url": "https://example.com/contato"})
-        self.assertEqual(len(cards), 2)
+        self.assertEqual(len(cards), 3)
+        self.assertIn(articles[0]["url"], cards[1]["caption"])
         for card in cards:
             with Image.open(io.BytesIO(card["content"])) as image:
                 self.assertEqual(image.format, "PNG")
                 self.assertEqual(image.width, 1080)
-                self.assertGreaterEqual(image.height, 1080)
+                self.assertEqual(image.height, 1350)
 
     def test_real_auth_envelope_loads_newsletter_without_session_override(self):
         with patch.dict(os.environ, {"AUTH_URL": "https://auth.test"}), patch.object(gateway.requests, "get") as get, TestClient(app) as client:
@@ -290,7 +292,7 @@ class ServiceTests(unittest.TestCase):
             first = newsletter.generate_images("image-test")
             second = newsletter.generate_images("image-test")
             self.assertEqual(first, second)
-            self.assertEqual(len(first["image_assets"]), 2)
+            self.assertEqual(len(first["image_assets"]), 3)
             model.assert_not_called()
             evolution.assert_not_called()
         with store.db() as c:
@@ -314,6 +316,79 @@ class ServiceTests(unittest.TestCase):
         with store.db() as c:
             self.assertEqual(c.execute("SELECT status,content FROM newsletters WHERE id='render-test'").fetchone()["status"], "ready")
             self.assertEqual(c.execute("SELECT count(*) FROM image_assets").fetchone()[0], 0)
+
+    def test_image_queue_deduplicates_both_modes_and_does_not_send(self):
+        articles = [{"title": "Indústria no Ceará", "summary": "Resumo", "url": "https://example.com/noticia", "published_at": "2026-10-21"}]
+        with store.db() as c:
+            c.execute("INSERT INTO newsletters(id,week,status,period_start,period_end,content,articles,reading,created_at) VALUES(?,?,?,?,?,?,?,?,?)", ("queue-images", "2026-40", "ready", "2026-10-01", "2026-10-08", "Original", json.dumps(articles), "Síntese", store.now().isoformat()))
+        first = newsletter.enqueue_images("queue-images", USER["id"], "free", True)
+        second = newsletter.enqueue_images("queue-images", USER["id"], "ai", True)
+        self.assertEqual(first["job_id"], second["job_id"])
+        with patch("newsletter_images.requests.post") as api, patch.object(newsletter, "evolution") as send:
+            newsletter.process_job()
+            api.assert_not_called()
+            send.assert_not_called()
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT status FROM generation_jobs WHERE id=?", (first["job_id"],)).fetchone()[0], "done")
+            self.assertEqual(c.execute("SELECT count(*) FROM image_assets").fetchone()[0], 3)
+            self.assertEqual(c.execute("SELECT content FROM newsletters WHERE id='queue-images'").fetchone()[0], "Original")
+
+    def test_ai_failure_preserves_previous_cards_and_never_retries(self):
+        articles = [{"title": "Indústria", "summary": "Resumo", "url": "https://example.com/noticia", "published_at": "2026-10-21"}]
+        with store.db() as c:
+            c.execute("INSERT INTO newsletters(id,week,status,period_start,period_end,content,articles,reading,created_at) VALUES(?,?,?,?,?,?,?,?,?)", ("ai-images", "2026-40", "ready", "2026-10-01", "2026-10-08", "Original", json.dumps(articles), "Síntese", store.now().isoformat()))
+        original = newsletter.generate_images("ai-images")
+        job = newsletter.enqueue_images("ai-images", USER["id"], "ai", True)
+        with patch("newsletter_images.ai_illustration", side_effect=ValueError("Sem crédito")) as api:
+            newsletter.process_job()
+            newsletter.process_job()
+            self.assertEqual(api.call_count, 1)
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT status FROM generation_jobs WHERE id=?", (job["job_id"],)).fetchone()[0], "failed")
+            self.assertEqual(c.execute("SELECT content,status FROM newsletters WHERE id='ai-images'").fetchone()["content"], "Original")
+        self.assertEqual(newsletter.generate_images("ai-images")["image_assets"], original["image_assets"])
+
+    def test_ai_renderer_adds_typography_and_preserves_sources(self):
+        articles = [{"title": "Indústria no Ceará", "summary": "Resumo", "url": "https://example.com/noticia", "published_at": "2026-10-21"}]
+        with patch("newsletter_images.ai_illustration", return_value=Image.new("RGB", (1024, 1536), "#dce2cf")) as api:
+            cards = render_cards(articles, "Síntese", date(2026, 10, 15), date(2026, 10, 22), {"image_mode": "ai"})
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(len(cards), 3)
+        self.assertIn("Ilustração por IA", cards[1]["caption"])
+        self.assertIn(articles[0]["url"], cards[1]["caption"])
+
+    def test_image_api_contract_and_no_automatic_paid_retry(self):
+        from newsletter_images import ai_illustration, ART_DIRECTION
+        output = io.BytesIO()
+        Image.new("RGB", (64, 64), "#dce2cf").save(output, format="PNG")
+        with patch("newsletter_images.requests.post") as post:
+            post.return_value.ok = True
+            post.return_value.json.return_value = {"data": [{"b64_json": base64.b64encode(output.getvalue()).decode()}]}
+            image = ai_illustration({"title": "Indústria no Ceará", "summary": "Resumo"})
+            self.assertEqual(image.size, (64, 64))
+            self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/images/generations")
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual(payload["n"], 1)
+            self.assertEqual(payload["size"], "1024x1536")
+            self.assertIn(ART_DIRECTION, payload["prompt"])
+            self.assertNotIn("test", payload["prompt"])
+            post.return_value.ok = False
+            post.return_value.status_code = 429
+            with self.assertRaisesRegex(ValueError, "429"):
+                ai_illustration({"title": "Indústria"})
+            self.assertEqual(post.call_count, 2, "Uma chamada por tentativa, sem retry oculto")
+
+    def test_blocked_ai_job_can_be_replaced_with_free_option(self):
+        with store.db() as c:
+            c.execute("INSERT INTO newsletters(id,week,status,period_start,period_end,created_at) VALUES(?,?,?,?,?,?)", ("blocked-images", "2026-40", "ready", "2026-10-01", "2026-10-08", store.now().isoformat()))
+        first = newsletter.enqueue_images("blocked-images", USER["id"], "ai", True)
+        with store.db() as c:
+            c.execute("UPDATE generation_jobs SET status='blocked' WHERE id=?", (first["job_id"],))
+        second = newsletter.enqueue_images("blocked-images", USER["id"], "free", True)
+        self.assertNotEqual(first["job_id"], second["job_id"])
+        with store.db() as c:
+            self.assertEqual(c.execute("SELECT status FROM generation_jobs WHERE id=?", (first["job_id"],)).fetchone()[0], "failed")
+            self.assertEqual(c.execute("SELECT status FROM generation_jobs WHERE id=?", (second["job_id"],)).fetchone()[0], "pending")
 
     def test_hasura_access_failure_does_not_consume_quota(self):
         with patch.object(agent, "load_schema", side_effect=HTTPException(503, "Configure JWT")), patch.object(agent, "response") as response:

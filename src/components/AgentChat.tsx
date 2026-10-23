@@ -67,11 +67,11 @@ export function AgentChat() {
     finally { await history.refetch(); lock.current = false; setBusy(false); }
   };
   return <div className="fixed bottom-5 right-5 z-50">
-    {!open ? <Button onClick={() => setOpen(true)} className="gap-2 rounded-full shadow-lg"><Bot className="h-5 w-5" />Assistente IA</Button> :
-      <section aria-label="Assistente IA" className="flex h-[min(720px,85dvh)] w-[min(440px,calc(100vw-40px))] flex-col rounded-xl border bg-background shadow-xl">
-        <div className="flex items-center justify-between border-b p-3"><div><h2 className="font-semibold">Assistente SindRoupas</h2><p className="text-xs text-muted-foreground">{history.data ? `${history.data.quota.remaining} de 3 solicitações disponíveis hoje` : "3 solicitações por dia por usuário"}</p></div><Button size="icon" variant="ghost" aria-label="Fechar assistente" onClick={() => setOpen(false)}><X className="h-4 w-4" /></Button></div>
-        <div className="flex-1 space-y-4 overflow-y-auto p-3 text-sm" aria-live="polite">
-          <p className="text-muted-foreground">Consulte dados e solicite cadastros ou correções. Criações e edições só são executadas quando você confirmar a proposta abaixo.</p>
+    {!open ? <Button onClick={() => setOpen(true)} className="gap-2 rounded-full bg-[#183e35] text-white shadow-lg hover:bg-[#285344]"><Bot className="h-5 w-5" />Assistente IA</Button> :
+      <section aria-label="Assistente IA" className="flex h-[min(720px,85dvh)] w-[min(440px,calc(100vw-40px))] flex-col overflow-hidden rounded-2xl border bg-background shadow-xl">
+        <div className="flex items-center justify-between border-b bg-[#eef2e6] p-4"><div><h2 className="font-semibold">Assistente SindRoupas</h2><p className="mt-1 text-xs text-muted-foreground">{history.data ? `${history.data.quota.remaining} de 3 solicitações disponíveis hoje` : "3 solicitações por dia por usuário"}</p></div><Button size="icon" variant="ghost" aria-label="Fechar assistente" onClick={() => setOpen(false)}><X className="h-4 w-4" /></Button></div>
+        <div className="flex-1 space-y-4 overflow-y-auto p-4 text-sm" aria-live="polite">
+          <div className="rounded-xl border bg-muted/30 p-3"><p className="font-medium">Como posso ajudar?</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Consulte dados, prepare boletos para revisão ou proponha correções. Nada é criado ou alterado sem sua confirmação.</p>{!history.data?.items.length && <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setText("Quero consultar os dados de uma empresa.")}>Consultar empresa</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => setText("Quero preparar um boleto para revisar antes de emitir.")}>Preparar boleto</Button></div>}</div>
           {(history.data?.items ?? []).map((item) => <div key={item.request_id} className="space-y-2">
             <p className="whitespace-pre-wrap rounded-lg bg-primary/10 p-2">{item.message}</p>
             <p className="whitespace-pre-wrap">{item.answer}</p>

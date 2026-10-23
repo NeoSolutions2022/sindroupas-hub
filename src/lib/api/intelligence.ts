@@ -50,6 +50,7 @@ export interface NewsletterSettings {
   photo_urls: string[];
   photo_caption: string;
   images_enabled: boolean;
+  image_mode?: "free" | "ai";
 }
 export interface NewsletterEdition {
   id: string;
@@ -69,7 +70,7 @@ export interface NewsletterState {
   settings: NewsletterSettings;
   editions: NewsletterEdition[];
   model?: string;
-  jobs?: { id: string; status: string; error: string | null; created_at: string }[];
+  jobs?: { id: string; status: string; error: string | null; created_at: string; week?: string; newsletter_id?: string | null }[];
 }
 
 export async function intelligenceImage(id: string, token: string): Promise<Blob> {

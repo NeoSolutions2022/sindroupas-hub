@@ -71,6 +71,12 @@ class NewsletterSettings(BaseModel):
     photo_urls: list[str] = Field(default_factory=list, max_length=5)
     photo_caption: str = Field(default="", max_length=1000)
     images_enabled: bool = False
+    image_mode: Literal["free", "ai"] = "free"
+
+
+class ImageGeneration(BaseModel):
+    mode: Literal["free", "ai"] = "free"
+    refresh: bool = False
 
 
 @app.get("/health")
@@ -149,9 +155,10 @@ def send(newsletter_id: str, user=Depends(session)):
 
 
 @app.post("/newsletter/{newsletter_id}/images")
-def generate_edition_images(newsletter_id: str, user=Depends(session)):
+def generate_edition_images(newsletter_id: str, body: ImageGeneration | None = None, user=Depends(session)):
     admin(user)
-    return newsletter.generate_images(newsletter_id)
+    options = body or ImageGeneration()
+    return newsletter.enqueue_images(newsletter_id, user["id"], options.mode, options.refresh)
 
 
 @app.post("/newsletter/{newsletter_id}/retry")

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium, expect } from "@playwright/test";
+import { readFile, mkdir } from "node:fs/promises";
 
 const baseUrl = process.env.TEST_BASE_URL || "http://127.0.0.1:4178";
 const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || (process.platform === "win32" ? "msedge" : undefined) });
@@ -11,7 +12,7 @@ try {
   let generated = 0;
   let decisions = 0;
   let items = [];
-  const editions = [{ id: "edition-existing", week: "2026-43", status: "ready", period_start: "2026-10-15", period_end: "2026-10-22", content: "Texto preservado", articles: [], deliveries: [], image_assets: [] }];
+  const editions = [{ id: "edition-existing", week: "2026-43", status: "ready", period_start: "2026-10-15", period_end: "2026-10-22", content: "Texto preservado", articles: [{ title: "Indústria cearense ganha novo impulso", url: "https://www.fiec.org.br/noticia", published_at: "2026-10-21" }, { title: "Inovação transforma o setor têxtil", url: "https://www.ibge.gov.br/noticia", published_at: "2026-10-20" }], deliveries: [], image_assets: [] }];
   let imageGenerations = 0;
   await page.addInitScript(({ baseUrl }) => {
     window.SpeechRecognition = class {
@@ -37,10 +38,13 @@ try {
     if (path === "/mock/intelligence/newsletter/groups") return route.fulfill({ json: [{ id: "120363123456789@g.us", name: "Diretoria SindRoupas" }] });
     if (path === "/mock/intelligence/newsletter/generate") { generated += 1; return route.fulfill({ json: { accepted: true } }); }
     if (path === "/mock/intelligence/newsletter/edition-existing/images") {
+      assert.ok(["free", "ai"].includes(request.postDataJSON().mode));
+      assert.equal(request.postDataJSON().refresh, true);
       imageGenerations += 1;
-      editions[0].image_assets = [{ id: "card-1", position: 0, caption: "Card salvo" }];
+      editions[0].image_assets = [0, 1, 2, 3].map((position) => ({ id: `card-${position+1}`, position, caption: `Card salvo ${position+1}` }));
       return route.fulfill({ json: { status: "ready", image_assets: editions[0].image_assets } });
     }
+    if (path.startsWith("/mock/intelligence/newsletter/images/")) return route.fulfill({ contentType: "image/png", body: await readFile(new URL(`../../outputs/radar-card-preview-${path.split("-").at(-1)}.png`, import.meta.url)) });
     if (path === "/mock/intelligence/agent/history") return route.fulfill({ json: { items, quota: { used: items.length, limit: 3, remaining: 3-items.length, day: "2026-10-22" } } });
     if (path === "/mock/intelligence/agent/chat") {
       const body = request.postDataJSON();
@@ -58,6 +62,8 @@ try {
   await page.goto(`${baseUrl}/dashboard/newsletter`);
   await expect(page.getByRole("heading", { name: "Radar Moda • Newsletter" })).toBeVisible();
   await expect(page.getByText("Administrador QA", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Links de fontes adicionais")).not.toBeVisible();
+  await page.getByRole("button", { name: "Configurações", exact: true }).click();
   await page.getByLabel("Links de fontes adicionais").fill("https://www.fiec.org.br\nhttps://www.ibge.gov.br");
   await page.getByRole("radio", { name: "Grupo", exact: true }).check();
   await page.getByRole("button", { name: "Carregar grupos da Evolution" }).click();
@@ -69,13 +75,35 @@ try {
   assert.equal(settings.number, "120363123456789@g.us");
   assert.equal(settings.source_links.length, 2);
   assert.equal(settings.images_enabled, true);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByLabel("Como preparar as imagens").selectOption("ai");
   await page.getByRole("button", { name: "Gerar imagens desta edição" }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("com custo na sua conta OpenAI");
   await expect(page.getByRole("alertdialog")).toContainText("Nenhuma mensagem será enviada");
   assert.equal(imageGenerations, 0);
   await page.getByRole("button", { name: "Confirmar", exact: true }).click();
   await expect(page.getByRole("button", { name: "Card 1", exact: true })).toBeVisible();
   assert.equal(imageGenerations, 1);
   assert.equal(editions[0].content, "Texto preservado");
+  const carousel = page.getByRole("region", { name: "Carrossel da newsletter" });
+  await expect(carousel.getByRole("button", { name: "Card anterior" })).toBeDisabled();
+  await carousel.getByRole("button", { name: "Próximo card" }).click();
+  await expect(carousel.getByText("2 de 4 · Arraste ou use as setas")).toBeVisible();
+  await page.getByLabel("Como preparar as imagens").selectOption("free");
+  await page.getByRole("button", { name: "Atualizar carrossel" }).click();
+  await expect(page.getByRole("alertdialog")).toContainText("montagem gratuita não chama");
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  assert.equal(imageGenerations, 1, "Cancelar não refaz o carrossel");
+  await expect(page.getByText("Carrossel na fila. Você pode acompanhar o andamento nesta página.", { exact: true })).not.toBeVisible({ timeout: 15000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await mkdir(new URL("../../outputs/", import.meta.url), { recursive: true });
+  await page.screenshot({ path: new URL("../../outputs/radar-moda-ui-desktop.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true, animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "Sem overflow horizontal em celular");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: new URL("../../outputs/radar-moda-ui-mobile.png", import.meta.url).pathname.replace(/^\/(\w:)/, "$1"), fullPage: true, animations: "disabled" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "Gerar edição da semana" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("120363123456789@g.us");
   assert.equal(generated, 0, "Não gerar antes da confirmação");

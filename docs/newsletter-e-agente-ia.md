@@ -48,7 +48,11 @@ Página administrativa `/dashboard/newsletter`. Agenda inicialmente desativada. 
 - Formato WhatsApp RADAR MODA, síntese e CTA configurável. WhatsApp usa texto, sem alinhamento central de botão. O CTA fica em destaque no final; na plataforma, o link de contato é centralizado.
 - Histórico preserva texto, fontes e fotos da edição, mesmo após mudar a configuração.
 - Edição pronta apenas em texto oferece **Gerar imagens desta edição**, com confirmação. Reutiliza notícias, síntese e CTA da própria edição; não pesquisa novamente nem envia WhatsApp. Operação transacional e idempotente: chamadas repetidas retornam os mesmos cards. Sem novas tabelas ou migração SQL.
-- Opção de versão em imagens: cards PNG renderizados com os mesmos títulos, resumos e links da edição verificada, além de um card de síntese e CTA. Não utiliza geração livre de texto em imagens por IA. Os arquivos ficam em `image_assets` no PostgreSQL e só são acessíveis pela rota autenticada administrativa; seguem junto ao texto pela mesma Evolution.
+- Página editorial com carrossel navegável por arraste, teclado, setas e indicadores, manchetes/fontes na lateral, compartilhamento e histórico compacto. Configurações ficam em uma janela lateral, fechada por padrão. Texto completo continua acessível sem ocupar o espaço das artes.
+- Duas opções de imagens: **IA** (uma ilustração por notícia; cobrança da conta OpenAI) e **montagem gratuita** (desenhos editoriais locais; nenhuma chamada à API de imagens). Instalações existentes permanecem no modo gratuito até escolha explícita. A cota de três mensagens do chat não limita a geração de artes. `NEWSLETTER_IMAGE_MODEL=gpt-image-2` é separado do modelo de texto `NEWSLETTER_MODEL`.
+- Carrossel PNG de 1080×1350: capa, um card por manchete e encerramento/contato. Tipografia renderizada em código para manter precisão. Resumos longos e URLs não ocupam a arte: texto completo e links seguem na edição e nas legendas. Ilustrações por IA são identificadas como tal, não representam fotos documentais nem podem inventar dados. Prompt de direção de arte em `newsletter_images.ART_DIRECTION`; prompt editorial em `newsletter.EDITORIAL`.
+- Em edição já pronta, **Gerar imagens / Atualizar carrossel** pede confirmação do modo e eventual custo. Substitui apenas as artes depois de renderizar tudo com sucesso, preservando texto, fontes e entregas. Não pesquisa novamente nem envia WhatsApp. As imagens são guardadas em `image_assets` e acessadas por rota administrativa autenticada.
+- Imagens de edições existentes usam a mesma fila persistente, com chave textual `images:<modo>:<edição>`. Nenhuma tabela, coluna ou migração nova. Pedidos simultâneos para a mesma edição são deduplicados entre os dois modos. Geração ocorre fora do lock global de cota/aprovações; publicação dos arquivos é atômica. O envio é bloqueado enquanto as artes estão pendentes. Falha preserva as imagens anteriores e não repete chamadas pagas automaticamente. Nova tentativa exige confirmação; conferir consumo se houver timeout.
 - Geração usa uma fila persistente por semana. Cliques repetidos não duplicam tarefas. A interface mostra tarefas pendentes, em andamento, bloqueadas ou falhadas; a pesquisa não depende de manter a página aberta. Configuração ausente bloqueia a tarefa, sem perder o pedido. Reinício durante execução exige revisão antes de tentar novamente.
 - `docs/sql/2026-10-22-primeira-newsletter.sql` solicita a primeira edição de forma idempotente; não fabrica conteúdo e não envia sem destino cadastrado. A fila só é processada após publicar o serviço com uma chave válida.
 - **Sem destino, gera e guarda na plataforma. Com destino cadastrado, envia automaticamente quando pronta**, inclusive na geração manual, que pede confirmação antes de iniciar.
@@ -83,6 +87,8 @@ npx tsc --noEmit -p tsconfig.app.json
 node scripts/test-boleto-financial-email.mjs
 # Com Vite na porta 4178 e Edge/Chromium disponível; APIs simuladas:
 node scripts/test-mantenedores-flow.mjs
+# Gerar amostras locais fictícias para o teste visual (sem API/banco):
+python scripts/render-newsletter-preview.py
 node scripts/test-intelligence-ui.mjs
 
 # Em ambiente virtual Python isolado e com PostgreSQL LOCAL dedicado:
@@ -92,4 +98,4 @@ cd services/intelligence
 python -m unittest -v test_service
 ```
 
-Referências: [function calling](https://developers.openai.com/api/docs/guides/function-calling) e [web search](https://developers.openai.com/api/docs/guides/tools-web-search).
+Referências: [function calling](https://developers.openai.com/api/docs/guides/function-calling), [web search](https://developers.openai.com/api/docs/guides/tools-web-search), [image generation](https://developers.openai.com/api/docs/guides/image-generation) e [image prompting](https://developers.openai.com/api/docs/guides/image-prompting).
