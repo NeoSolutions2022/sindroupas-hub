@@ -1,5 +1,7 @@
 # Radar Moda — direção visual
 
+> A direção atual dos **cards** está em [Editorial Pop Ceará](radar-moda-direcao-editorial-pop.md), com a paleta enviada pelo sindicato, chamadas contextualizadas e fotos opcionais das matérias. Este documento registra o modelo inicial da **tela**, que não foi redesenhada nesta alteração.
+
 Modelo criado com a ferramenta integrada ImageGen e reproduzido em React, sem usar uma imagem estática como interface. Arquivos de referência no diretório `outputs` do workspace: `radar-moda-modelo-ui.png`, `radar-moda-ui-desktop.png` e `radar-moda-ui-mobile.png`.
 
 ## Prompt do modelo de tela (ImageGen, ui-mockup)

@@ -72,6 +72,7 @@ class NewsletterSettings(BaseModel):
     photo_caption: str = Field(default="", max_length=1000)
     images_enabled: bool = False
     image_mode: Literal["free", "ai"] = "free"
+    source_photos_enabled: bool = False
 
 
 class ImageGeneration(BaseModel):

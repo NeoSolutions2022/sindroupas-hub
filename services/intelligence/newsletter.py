@@ -22,6 +22,13 @@ Não repita notícias, URLs ou assuntos sem fatos novos. Busque além dos primei
 Selecione de 6 a 10 notícias, priorizando relevância. Não invente notícias, dados, datas ou links. Se não encontrar seis verificáveis, retorne menos: o sistema bloqueará o envio.
 Cada item: título objetivo e uma ou duas frases contextualizadas explicando acontecimento e impacto, linguagem jornalística profissional e acessível.
 Direção editorial para o carrossel: manchetes específicas, fortes e curtas, preferencialmente de 6 a 12 palavras.
+Além do título jornalístico, escreva card_headline e card_context para cada notícia: a arte precisa fazer sentido isolada.
+card_headline: chamada editorial autossuficiente, de 6 a 14 palavras, identificando o assunto e o fato concreto.
+Não copie automaticamente o título da fonte, nem use chamadas vagas como 'ganha novo impulso', 'vem aí' ou 'entenda'.
+card_context: uma frase de 12 a 24 palavras explicando quem fez o quê, onde e por que importa; complemente a chamada sem repeti-la.
+Um leitor que veja só esse card deve entender a notícia sem abrir o link. Expanda siglas pouco conhecidas quando necessário.
+Só use fatos confirmados na matéria: nunca invente impacto, contexto, números ou consequências para tornar a chamada atraente.
+visual_theme: descreva em até 20 palavras os elementos visuais específicos da pauta, sem solicitar texto nem inventar fotos documentais.
 O resumo deve ter preferencialmente 20 a 35 palavras, sem repetir a manchete. Não elimine ressalvas essenciais para encurtar.
 Não escreva parágrafos longos, chamadas sensacionalistas, estatísticas inventadas, markdown ou citações dentro de title e summary.
 Coloque o link exclusivamente em url, sem URLs no título ou resumo. Preserve a precisão e a verificabilidade acima da concisão.
@@ -31,8 +38,8 @@ Retorne JSON no schema indicado; o sistema montará o formato RADAR MODA com emo
 """
 
 ARTICLE_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {
-    key: {"type": "string"} for key in ("emoji", "title", "summary", "url", "published_at", "region", "category", "story_key")
-}, "required": ["emoji", "title", "summary", "url", "published_at", "region", "category", "story_key"]}
+    key: {"type": "string"} for key in ("emoji", "title", "summary", "url", "published_at", "region", "category", "story_key", "card_headline", "card_context", "visual_theme")
+}, "required": ["emoji", "title", "summary", "url", "published_at", "region", "category", "story_key", "card_headline", "card_context", "visual_theme"]}
 NEWS_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {
     "articles": {"type": "array", "items": ARTICLE_SCHEMA}, "reading": {"type": "string"},
 }, "required": ["articles", "reading"]}
@@ -224,6 +231,7 @@ def generate_images(newsletter_id, mode="free", refresh=False):
             config = {"cta_label": content_lines[-2][2:].strip(), "cta_url": content_lines[-1]}
     # Não manter o lock global de cota/aprovações durante chamadas de imagem demoradas.
     config["image_mode"] = mode
+    config["source_photos_enabled"] = settings().get("source_photos_enabled", False)
     try:
         cards = render_cards(articles, row["reading"], date.fromisoformat(row["period_start"]), date.fromisoformat(row["period_end"]), config)
     except (ValueError, KeyError, TypeError) as exc:

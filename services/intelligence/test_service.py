@@ -352,9 +352,9 @@ class ServiceTests(unittest.TestCase):
         articles = [{"title": "Indústria no Ceará", "summary": "Resumo", "url": "https://example.com/noticia", "published_at": "2026-10-21"}]
         with patch("newsletter_images.ai_illustration", return_value=Image.new("RGB", (1024, 1536), "#dce2cf")) as api:
             cards = render_cards(articles, "Síntese", date(2026, 10, 15), date(2026, 10, 22), {"image_mode": "ai"})
-        self.assertEqual(api.call_count, 1)
+        self.assertEqual(api.call_count, 3)
         self.assertEqual(len(cards), 3)
-        self.assertIn("Ilustração por IA", cards[1]["caption"])
+        self.assertIn("Arte por IA", cards[1]["caption"])
         self.assertIn(articles[0]["url"], cards[1]["caption"])
 
     def test_image_api_contract_and_no_automatic_paid_retry(self):
@@ -365,11 +365,12 @@ class ServiceTests(unittest.TestCase):
             post.return_value.ok = True
             post.return_value.json.return_value = {"data": [{"b64_json": base64.b64encode(output.getvalue()).decode()}]}
             image = ai_illustration({"title": "Indústria no Ceará", "summary": "Resumo"})
-            self.assertEqual(image.size, (64, 64))
+            self.assertEqual(image.size, (1080, 1350))
             self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/images/generations")
             payload = post.call_args.kwargs["json"]
             self.assertEqual(payload["n"], 1)
-            self.assertEqual(payload["size"], "1024x1536")
+            self.assertEqual(payload["size"], "1024x1280")
+            self.assertEqual(payload["quality"], "high")
             self.assertIn(ART_DIRECTION, payload["prompt"])
             self.assertNotIn("test", payload["prompt"])
             post.return_value.ok = False

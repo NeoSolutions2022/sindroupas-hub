@@ -51,6 +51,7 @@ export interface NewsletterSettings {
   photo_caption: string;
   images_enabled: boolean;
   image_mode?: "free" | "ai";
+  source_photos_enabled?: boolean;
 }
 export interface NewsletterEdition {
   id: string;

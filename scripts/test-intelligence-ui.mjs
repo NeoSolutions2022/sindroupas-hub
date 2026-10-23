@@ -70,11 +70,13 @@ try {
   await page.getByLabel("Selecionar grupo Evolution").selectOption("120363123456789@g.us");
   await page.getByLabel("Link de contato do CTA").fill("https://wa.me/5585999999999");
   await page.getByLabel("Gerar versão em imagens para WhatsApp").check();
+  await page.getByLabel("Usar fotos das matérias — confirmo autorização de uso").check();
   await page.getByRole("button", { name: "Salvar configuração" }).click();
   await expect(page.getByRole("button", { name: "Salvar configuração" })).toBeEnabled();
   assert.equal(settings.number, "120363123456789@g.us");
   assert.equal(settings.source_links.length, 2);
   assert.equal(settings.images_enabled, true);
+  assert.equal(settings.source_photos_enabled, true);
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByLabel("Como preparar as imagens").selectOption("ai");
   await page.getByRole("button", { name: "Gerar imagens desta edição" }).click();
